@@ -113,6 +113,15 @@ Output
 
 -  If the :code:`--omit-error-rows` option is set, **only** rows that pass the selected checks are written to standard output. If not, **all** rows are written to standard output.
 -  If any checks are enabled, **error** rows along with line numbers and descriptions are written to standard error. If there are error rows, the exit code is 1.
+-  If the :code:`--line-map` option is set, a CSV file is written to the given path, mapping each row of standard output to the 1-based physical line numbers of the input file that produced it. Rows that span multiple physical lines – because of quoted line breaks or the :code:`--join-short-rows` fix – map to the full range of input lines. Error rows that are omitted from standard output are included with an empty :code:`output_line`, so the corresponding lines can be located in the input file:
+
+   .. code-block:: none
+
+      kind,output_line,input_line_start,input_line_end
+      header,1,1,1
+      data,2,2,3
+      data,3,4,5
+      error,,6,6
 
 .. _csvclean-usage:
 
@@ -158,6 +167,11 @@ Usage
                            none.
      --remove-empty-columns
                            Remove empty columns from standard output.
+     --line-map PATH       Write a CSV file to PATH mapping each output row to
+                           the 1-based physical line numbers of the input file
+                           that produced it, including rows that span multiple
+                           lines, rows merged by --join-short-rows, and error
+                           rows omitted from standard output.
 
 
 See also: :doc:`../common_arguments`.

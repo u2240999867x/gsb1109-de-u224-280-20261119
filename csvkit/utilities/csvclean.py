@@ -48,6 +48,11 @@ class CSVClean(CSVKitUtility):
         self.argparser.add_argument(
             '--remove-empty-columns', dest='remove_empty_columns', action='store_true',
             help='Remove empty columns from standard output.')
+        self.argparser.add_argument(
+            '--line-map', dest='line_map', metavar='PATH',
+            help='Write a CSV file to PATH mapping each output row to the 1-based physical line numbers of the '
+                 'input file that produced it, including rows that span multiple lines, rows merged by '
+                 '--join-short-rows, and error rows omitted from standard output.')
 
     def main(self):
         if self.additional_input_expected():
@@ -70,6 +75,10 @@ class CSVClean(CSVKitUtility):
             self.argparser.error('The --join-short-rows and --fill-short-rows options are mutually exclusive.')
 
         default = self.args.enable_all_checks
+
+        # skip_lines() consumes lines from the input file, so capture the offset to keep
+        # the line map relative to the original file.
+        line_offset = self.args.skip_lines if isinstance(self.args.skip_lines, int) else 0
 
         reader = agate.csv.reader(self.skip_lines(), **self.reader_kwargs)
 
@@ -103,8 +112,30 @@ class CSVClean(CSVKitUtility):
         if self.args.remove_empty_columns:
             rows = list(rows)
         output_writer.writerow(checker.output_column_names)
+        line_map_entries = []
+        if self.args.line_map and checker.header_line_start is not None:
+            line_map_entries.append(
+                ('header', 1, checker.header_line_start + line_offset, checker.header_line_end + line_offset)
+            )
+        output_line = 1
         for row in rows:
+            output_line += 1
             output_writer.writerow(row)
+            if self.args.line_map:
+                line_start, line_end = checker.row_line_spans[output_line - 2]
+                line_map_entries.append(('data', output_line, line_start + line_offset, line_end + line_offset))
+
+        if self.args.line_map:
+            for error in checker.errors:
+                if error.line_start is not None:
+                    line_map_entries.append(
+                        ('error', '', error.line_start + line_offset, error.line_end + line_offset)
+                    )
+            line_map_entries.sort(key=lambda entry: (entry[2], entry[3], entry[0]))
+            with open(self.args.line_map, 'w', newline='', encoding='utf-8') as line_map_file:
+                line_map_writer = agate.csv.writer(line_map_file, **self.writer_kwargs)
+                line_map_writer.writerow(['kind', 'output_line', 'input_line_start', 'input_line_end'])
+                line_map_writer.writerows(line_map_entries)
 
         if checker.errors:
             error_writer = agate.csv.writer(self.error_file, **self.writer_kwargs)

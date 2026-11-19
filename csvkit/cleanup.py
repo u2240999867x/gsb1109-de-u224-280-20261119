@@ -7,6 +7,8 @@ class Error:
     line_number: int
     row: int
     msg: str
+    line_start: int = None
+    line_end: int = None
 
 
 def join_rows(rows, separator):
@@ -69,12 +71,19 @@ class RowChecker:
             self.column_names = next(reader)
             if header_normalize_space:
                 self.column_names = [' '.join(column_name.split()) for column_name in self.column_names]
+            self.header_line_start = 1
+            self.header_line_end = self.reader.line_num
         except StopIteration:
             self.column_names = []
+            self.header_line_start = None
+            self.header_line_end = None
         """All column names from the input CSV."""
 
         self.output_column_names = self.column_names
         """The column names to write to standard output."""
+
+        self.row_line_spans = []
+        """The (start, end) physical line numbers, for each row yielded by checked_rows()."""
 
         self.errors = []
 
@@ -90,15 +99,26 @@ class RowChecker:
 
         # Empty columns can only be removed once every data row has been read, so buffer rows instead of yielding them.
         output_rows = [] if self.remove_empty_columns else None
+        output_spans = [] if self.remove_empty_columns else None
 
         # Row-level checks and fixes.
+        previous_line_num = self.reader.line_num
         for row in self.reader:
             line_number = self.reader.line_num - 1
+            line_start = previous_line_num + 1
+            line_end = self.reader.line_num
+            previous_line_num = line_end
             row_count += 1
 
             # Potential errors
 
-            length_error = Error(line_number, row, f'Expected {len_column_names} columns, found {len(row)} columns')
+            length_error = Error(
+                line_number,
+                row,
+                f'Expected {len_column_names} columns, found {len(row)} columns',
+                line_start,
+                line_end,
+            )
 
             # Fixes (replace `row`)
 
@@ -123,11 +143,15 @@ class RowChecker:
 
                             if len(fixed_row) == len_column_names:
                                 row = fixed_row
+                                line_start = joinable_row_errors[0].line_start
+                                line_end = joinable_row_errors[-1].line_end
 
-                                # Remove the errors that are now fixed.
+                                # Remove the errors that are now fixed. The current row's error
+                                # has not been appended to self.errors yet.
                                 if self.length_mismatch:
                                     for fixed in joinable_row_errors:
-                                        self.errors.remove(fixed)
+                                        if fixed in self.errors:
+                                            self.errors.remove(fixed)
 
                                 joinable_row_errors = []
                                 break
@@ -152,7 +176,9 @@ class RowChecker:
             if not self.omit_error_rows or len(row) == len_column_names:
                 if self.remove_empty_columns:
                     output_rows.append(row)
+                    output_spans.append((line_start, line_end))
                 else:
+                    self.row_line_spans.append((line_start, line_end))
                     yield row
 
         # File-level checks and fixes.
@@ -177,5 +203,6 @@ class RowChecker:
             empty = set(empty_columns)
             keep = [i for i in range(len_column_names) if i not in empty]
             self.output_column_names = [self.column_names[i] for i in keep]
-            for row in output_rows:
+            for row, span in zip(output_rows, output_spans):
+                self.row_line_spans.append(span)
                 yield [row[i] for i in keep if i < len(row)]

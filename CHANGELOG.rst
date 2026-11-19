@@ -4,6 +4,8 @@ Unreleased
 -  fix: :doc:`/scripts/csvgrep` treats an empty :code:`--regex` or :code:`--match` pattern as matching every value. Previously, with an empty pattern, :code:`--any-match` matched no rows, and :code:`--any-match --invert-match` matched every row.
 -  feat: :doc:`/scripts/csvcut` adds an :code:`--ignore-unknown-columns` option to skip identifiers in :code:`-c/--columns` that do not match a column in the input.
 -  feat: :doc:`/scripts/csvclean` adds a :code:`--remove-empty-columns` option to remove empty columns from standard output.
+-  feat: :doc:`/scripts/csvclean` adds a :code:`--line-map` option to write a CSV mapping each output row to the physical line numbers of the input file that produced it, including error rows omitted from standard output.
+-  fix: :doc:`/scripts/csvclean` no longer raises an error when combining :code:`--length-mismatch` with :code:`--join-short-rows`.
 -  feat: :doc:`/scripts/in2csv` guesses the ``ndjson`` format for files with :code:`.ndjson`, :code:`.jsonl` and :code:`.jl` extensions.
 -  fix: :code:`-C/--not-columns` now excludes the last column of an open-ended range (e.g. :code:`2-`).
 -  fix: :doc:`/scripts/in2csv` writes array-valued properties in GeoJSON as JSON (like object-valued properties), instead of as Python literals that JSON parsers can't read.

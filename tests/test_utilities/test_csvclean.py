@@ -1,5 +1,7 @@
 import io
+import os
 import sys
+import tempfile
 from unittest.mock import patch
 
 import agate
@@ -280,3 +282,85 @@ class TestCSVClean(CSVKitTestCase, EmptyFileTests):
             ['1', '2', '3'],
             ['4', '5', 'ʤ'],
         ])
+
+    def assertLineMap(self, args, line_map_rows):
+        output_file = io.StringIO()
+        error_file = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            line_map_path = os.path.join(tmpdir, 'line_map.csv')
+            utility = CSVClean(args + ['--line-map', line_map_path], output_file, error_file)
+
+            try:
+                utility.run()
+            except SystemExit:
+                pass
+
+            with open(line_map_path, newline='', encoding='utf-8') as f:
+                reader = agate.csv.reader(f)
+                for row in line_map_rows:
+                    self.assertEqual(next(reader), row)
+                self.assertRaises(StopIteration, next, reader)
+
+        output_file.close()
+        error_file.close()
+
+    def test_line_map(self):
+        self.assertLineMap(
+            [
+                '--length-mismatch', '--omit-error-rows', '--join-short-rows',
+                'examples/test_line_map.csv',
+            ],
+            [
+                ['kind', 'output_line', 'input_line_start', 'input_line_end'],
+                ['header', '1', '1', '1'],
+                # A quoted line break spans multiple physical lines.
+                ['data', '2', '2', '3'],
+                # Short rows merged by --join-short-rows.
+                ['data', '3', '4', '5'],
+                ['data', '4', '6', '6'],
+                # An error row omitted from standard output.
+                ['error', '', '7', '7'],
+            ],
+        )
+
+    def test_line_map_error_rows_in_output(self):
+        self.assertLineMap(
+            ['--length-mismatch', 'examples/test_line_map.csv'],
+            [
+                ['kind', 'output_line', 'input_line_start', 'input_line_end'],
+                ['header', '1', '1', '1'],
+                ['data', '2', '2', '3'],
+                ['data', '3', '4', '4'],
+                ['error', '', '4', '4'],
+                ['data', '4', '5', '5'],
+                ['error', '', '5', '5'],
+                ['data', '5', '6', '6'],
+                ['data', '6', '7', '7'],
+                ['error', '', '7', '7'],
+            ],
+        )
+
+    def test_line_map_skip_lines(self):
+        self.assertLineMap(
+            ['--length-mismatch', '--omit-error-rows', '--skip-lines', '3', 'examples/bad_skip_lines.csv'],
+            [
+                ['kind', 'output_line', 'input_line_start', 'input_line_end'],
+                ['header', '1', '4', '4'],
+                ['error', '', '5', '5'],
+                ['error', '', '6', '6'],
+                ['data', '2', '7', '7'],
+            ],
+        )
+
+    def test_line_map_remove_empty_columns(self):
+        self.assertLineMap(
+            ['--remove-empty-columns', 'examples/test_empty_columns.csv'],
+            [
+                ['kind', 'output_line', 'input_line_start', 'input_line_end'],
+                ['header', '1', '1', '1'],
+                ['data', '2', '2', '2'],
+                ['data', '3', '3', '3'],
+                ['data', '4', '4', '4'],
+            ],
+        )
