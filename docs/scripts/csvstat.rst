@@ -19,7 +19,7 @@ Prints descriptive statistics for all columns in a CSV file. Will intelligently 
                   [--stdev] [--len] [--max-precision] [--freq]
                   [--freq-count FREQ_COUNT] [--count]
                   [--decimal-format DECIMAL_FORMAT] [-G] [-y SNIFF_LIMIT] [-I]
-                  [FILE]
+                  [-s] [--chunk-size CHUNK_SIZE] [FILE]
 
    Print descriptive statistics for each column in a CSV file.
 
@@ -68,8 +68,29 @@ Prints descriptive statistics for all columns in a CSV file. Will intelligently 
      -I, --no-inference    Disable type inference (and --locale, --date-format,
                            --datetime-format, --no-leading-zeroes) when parsing
                            the input.
+     -s, --stream          Read the input one row at a time, instead of loading
+                           it into memory. Unique value counts are estimated;
+                           estimated counts are marked as such. Null and
+                           non-null counts are exact.
+     --chunk-size CHUNK_SIZE
+                           With --stream, read the input in chunks of this many
+                           rows. The estimates do not depend on the chunk size.
 
 See also: :doc:`../common_arguments`.
+
+By default, :doc:`csvstat` reads the entire input into memory. For large files, use
+:code:`--stream` to read the input one row at a time. In streaming mode:
+
+*  The row count, and the number of null and non-null values, are exact.
+*  The number of unique values is estimated, using HyperLogLog. The estimate has a relative
+   standard error of about 0.8%.
+*  Estimates are explicitly marked: in the plain text output with :code:`(estimated)`, in the
+   JSON output with an :code:`estimated` list, and in the CSV output with an :code:`estimated`
+   column.
+*  The estimate doesn't depend on how the input is split into chunks. Processing a file in one
+   pass, or merging estimates from separate chunks, produces the same result.
+*  Statistics that require all values, like the median, are computed from a bounded sample when a
+   column has many values. Use the default buffering mode, or a smaller input, for exact results.
 
 Examples
 ========
@@ -102,3 +123,23 @@ If a single stat *and* a single column are requested, only a value will be retur
 
    $ csvstat -c 4 --mean examples/realdata/FY09_EDU_Recipients_by_State.csv
    6,263.904
+
+To read a large file one row at a time, and estimate the number of unique values:
+
+.. code-block:: console
+
+   $ csvstat --stream -c county examples/realdata/ks_1033_data.csv
+     2. "county"
+
+	Type of data:          Text
+	Contains null values:  False
+	Non-null values:       1575
+	Unique values:         73 (estimated)
+	Longest value:         12 characters
+	Most common values:    WYANDOTTE (123x)
+	                       FINNEY (103x)
+	                       SHAWNEE (77x)
+	                       SEDGWICK (63x)
+	                       SALINE (59x)
+
+   Row count: 1575

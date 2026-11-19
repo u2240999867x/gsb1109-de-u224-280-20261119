@@ -180,3 +180,84 @@ class TestCSVStat(CSVKitTestCase, ColumnsTests, EmptyFileTests, NamesTests):
         ])
 
         self.assertEqual(output, '60\n')
+
+    def test_stream_unique_is_estimated(self):
+        output = self.get_output(['--stream', '-c', 'county', 'examples/realdata/ks_1033_data.csv'])
+
+        self.assertIn('Unique values:         73 (estimated)', output)
+        self.assertIn('Non-null values:       1575', output)
+
+    def test_stream_unique_only_is_estimated(self):
+        output = self.get_output(['--stream', '--unique', '-c', 'county', 'examples/realdata/ks_1033_data.csv'])
+
+        self.assertEqual(output, '73 (estimated)\n')
+
+    def test_stream_csv_marks_estimate(self):
+        output = self.get_output_as_io(['--stream', '--csv', '-c', 'county', 'examples/realdata/ks_1033_data.csv'])
+
+        reader = agate.csv.reader(output)
+        header = next(reader)
+        row = dict(zip(header, next(reader)))
+
+        self.assertEqual(row['unique'], '73')
+        self.assertEqual(row['estimated'], 'unique')
+        self.assertEqual(row['nonnulls'], '1575')
+
+    def test_stream_json_marks_estimate(self):
+        output = self.get_output_as_io(['--stream', '--json', '-c', 'county', 'examples/realdata/ks_1033_data.csv'])
+
+        data = json.load(output)
+
+        self.assertEqual(data[0]['unique'], 73)
+        self.assertEqual(data[0]['estimated'], ['unique'])
+        self.assertEqual(data[0]['nonnulls'], 1575)
+
+    def test_stream_nulls_are_exact(self):
+        output = self.get_output(['--stream', '-c', 'item_name', 'examples/realdata/ks_1033_data.csv'])
+
+        self.assertRegex(output, r'Non-null values:\s+1573')
+        self.assertIn('Contains null values:  True', output)
+
+    def test_stream_chunk_size_does_not_change_output(self):
+        without_chunks = self.get_output(['--stream', 'examples/realdata/ks_1033_data.csv'])
+
+        for chunk_size in ('1', '7', '1000'):
+            with self.subTest(chunk_size=chunk_size):
+                self.assertEqual(
+                    self.get_output(['--stream', '--chunk-size', chunk_size, 'examples/realdata/ks_1033_data.csv']),
+                    without_chunks,
+                )
+
+    def test_stream_matches_buffered_stats(self):
+        buffered = self.get_output_as_io(['--csv', 'examples/realdata/ks_1033_data.csv'])
+        streamed = self.get_output_as_io(['--stream', '--csv', 'examples/realdata/ks_1033_data.csv'])
+
+        buffered_reader = agate.csv.DictReader(buffered)
+        streamed_reader = agate.csv.DictReader(streamed)
+
+        for buffered_row, streamed_row in zip(buffered_reader, streamed_reader):
+            keys = ('type', 'nulls', 'nonnulls', 'min', 'max', 'sum', 'mean', 'median', 'stdev', 'len', 'maxprecision',
+                    'freq')
+
+            for key in keys:
+                self.assertEqual(streamed_row[key], buffered_row[key], f'{streamed_row["column_name"]}: {key}')
+
+            self.assertAlmostEqual(
+                int(streamed_row['unique']),
+                int(buffered_row['unique']),
+                delta=max(1, int(buffered_row['unique']) * 0.05),
+            )
+
+    def test_chunk_size_requires_stream(self):
+        self.assertError(
+            launch_new_instance,
+            ['--chunk-size', '2'],
+            '--chunk-size is only allowed with --stream.',
+        )
+
+    def test_chunk_size_must_be_positive(self):
+        self.assertError(
+            launch_new_instance,
+            ['--stream', '--chunk-size', '0'],
+            '--chunk-size must be a positive integer.',
+        )

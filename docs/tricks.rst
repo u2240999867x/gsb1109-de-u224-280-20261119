@@ -130,6 +130,8 @@ Slow performance
 
 csvkit's tools fall into two categories: Those that load an entire CSV into memory (e.g. :doc:`/scripts/csvstat`) and those that only read data one row at a time (e.g. :doc:`/scripts/csvcut`). Those that stream results will generally be very fast. See :doc:`contributing` for a full list. For those that buffer the entire file, the slowest part of that process is typically the "type inference" described in the previous section.
 
+If you only need approximate unique value counts, :doc:`/scripts/csvstat` can read a large file one row at a time with :code:`--stream`. See :doc:`/scripts/csvstat` for details.
+
 If a tool is too slow to be practical for your data try setting the :code:`--snifflimit` option or using the :code:`--no-inference`.
 
 Database errors

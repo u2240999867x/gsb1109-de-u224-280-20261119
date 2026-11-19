@@ -1,6 +1,7 @@
 Unreleased
 ----------
 
+-  feat: :doc:`/scripts/csvstat` adds a :code:`--stream` option to read the input one row at a time, instead of loading it into memory. Unique value counts are estimated, and estimates are marked as such. Null and non-null counts are exact. A :code:`--chunk-size` option sets the size of the chunks that are read. The estimates don't depend on the chunk size.
 -  fix: :doc:`/scripts/csvgrep` treats an empty :code:`--regex` or :code:`--match` pattern as matching every value. Previously, with an empty pattern, :code:`--any-match` matched no rows, and :code:`--any-match --invert-match` matched every row.
 -  feat: :doc:`/scripts/csvcut` adds an :code:`--ignore-unknown-columns` option to skip identifiers in :code:`-c/--columns` that do not match a column in the input.
 -  feat: :doc:`/scripts/csvclean` adds a :code:`--remove-empty-columns` option to remove empty columns from standard output.

@@ -72,6 +72,7 @@ Currently, the following tools stream:
 * :doc:`/scripts/csvcut`
 * :doc:`/scripts/csvformat` unless :code:`--quoting 2` is set
 * :doc:`/scripts/csvgrep`
+* :doc:`/scripts/csvstat` if :code:`--stream` is set
 * :doc:`/scripts/csvstack`
 * :doc:`/scripts/sql2csv`
 
