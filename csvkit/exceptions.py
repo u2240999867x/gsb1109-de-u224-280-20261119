@@ -36,6 +36,20 @@ class InvalidValueForTypeException(CustomException):
         super().__init__(msg)
 
 
+class InvalidValueForColumnTypeException(CustomException):
+    """
+    Exception raised when a value can not be converted to a declared column type.
+    """
+
+    def __init__(self, record, column_name, value, type_name):
+        self.record = record
+        self.column_name = column_name
+        self.value = value
+        self.type_name = type_name
+        msg = 'Unable to convert "%s" to %s in column "%s" at record %i.' % (value, type_name, column_name, record)
+        super().__init__(msg)
+
+
 class RequiredHeaderError(CustomException):
     """
     Exception raised when an operation requires a CSV file to have a header row.

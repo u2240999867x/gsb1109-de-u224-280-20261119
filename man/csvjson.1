@@ -45,7 +45,7 @@ usage: csvjson [\-h] [\-d DELIMITER] [\-t] [\-q QUOTECHAR] [\-u {0,1,2,3}] [\-b]
                [\-H] [\-K SKIP_LINES] [\-v] [\-l] [\-\-zero] [\-V] [\-i INDENT]
                [\-k KEY] [\-\-lat LAT] [\-\-lon LON] [\-\-type TYPE]
                [\-\-geometry GEOMETRY] [\-\-crs CRS] [\-\-no\-bbox] [\-\-stream]
-               [\-y SNIFF_LIMIT] [\-I]
+               [\-\-column\-types COLUMN:TYPE] [\-y SNIFF_LIMIT] [\-I]
                [FILE]
 
 Convert a CSV file into JSON (or GeoJSON).
@@ -78,6 +78,16 @@ optional arguments:
   \-\-no\-bbox             Disable the calculation of a bounding box.
   \-\-stream              Output JSON as a stream of newline\-separated objects,
                         rather than an as an array.
+  \-\-column\-types COLUMN:TYPE
+                        Declare the type of one or more columns, as
+                        comma\-separated COLUMN:TYPE pairs, for example
+                        \(dqid:text,amount:number\(dq. COLUMN is a column name or
+                        a 1\-based index subject to \-\-zero. TYPE is one of:
+                        boolean, date, datetime, number, text, timedelta.
+                        Declared columns are converted strictly to their
+                        type, in both array and \-\-stream output. Other
+                        columns are unaffected. This option can be specified
+                        multiple times.
   \-y SNIFF_LIMIT, \-\-snifflimit SNIFF_LIMIT
                         Limit CSV dialect sniffing to the specified number of
                         bytes. Specify \(dq0\(dq to disable sniffing entirely, or

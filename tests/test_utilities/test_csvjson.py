@@ -1,8 +1,11 @@
 import io
 import json
+import os
 import sys
+import tempfile
 from unittest.mock import patch
 
+from csvkit.exceptions import ColumnIdentifierError, InvalidValueForColumnTypeException
 from csvkit.utilities.csvjson import CSVJSON, launch_new_instance
 from tests.utils import CSVKitTestCase, EmptyFileTests
 
@@ -64,6 +67,177 @@ class TestCSVJSON(CSVKitTestCase, EmptyFileTests):
     def test_no_inference(self):
         js = json.loads(self.get_output(['--no-inference', 'examples/dummy.csv']))
         self.assertDictEqual(js[0], {'a': '1', 'c': '3', 'b': '2'})
+
+    def test_column_types_text(self):
+        js = json.loads(self.get_output(['--column-types', 'number:text,amount:number', 'examples/column_types.csv']))
+
+        self.assertDictEqual(js[0], {'number': '00042', 'amount': 10.5, 'description': 'first'})
+        self.assertDictEqual(js[1], {'number': '00043', 'amount': 1234.5, 'description': 'second'})
+
+    def test_column_types_other_columns_inferred(self):
+        js = json.loads(self.get_output(['--column-types', 'number:text', 'examples/column_types.csv']))
+
+        self.assertEqual(js[0]['number'], '00042')
+        self.assertEqual(js[0]['amount'], 10.5)
+
+    def test_column_types_by_index(self):
+        js = json.loads(self.get_output(['--column-types', '1:text', 'examples/column_types.csv']))
+
+        self.assertEqual(js[0]['number'], '00042')
+
+    def test_column_types_multiple_declarations(self):
+        js = json.loads(self.get_output([
+            '--column-types', 'number:text', '--column-types', 'amount:number', 'examples/column_types.csv',
+        ]))
+
+        self.assertDictEqual(js[0], {'number': '00042', 'amount': 10.5, 'description': 'first'})
+        self.assertEqual(js[1]['amount'], 1234.5)
+
+    def test_column_types_streaming_table(self):
+        output = self.get_output(
+            ['--stream', '--column-types', 'number:text,amount:number', 'examples/column_types.csv'])
+
+        self.assertEqual([json.loads(line) for line in output.splitlines()], [
+            {'number': '00042', 'amount': 10.5, 'description': 'first'},
+            {'number': '00043', 'amount': 1234.5, 'description': 'second'},
+            {'number': '00044', 'amount': 0.75, 'description': 'third'},
+        ])
+
+    def test_column_types_streaming(self):
+        output = self.get_output([
+            '--stream', '--no-inference', '--snifflimit', '0', '--column-types', 'number:text,amount:number',
+            'examples/column_types.csv',
+        ])
+
+        self.assertEqual(output.splitlines(), [
+            '{"number": "00042", "amount": 10.5, "description": "first"}',
+            '{"number": "00043", "amount": 1234.5, "description": "second"}',
+            '{"number": "00044", "amount": 0.75, "description": "third"}',
+        ])
+
+    def test_column_types_streaming_matches_table(self):
+        table = self.get_output(['--column-types', 'number:text,amount:number', 'examples/column_types.csv'])
+        stream = self.get_output([
+            '--stream', '--column-types', 'number:text,amount:number', 'examples/column_types.csv',
+        ])
+        fast_stream = self.get_output([
+            '--stream', '--no-inference', '--snifflimit', '0', '--column-types', 'number:text,amount:number',
+            'examples/column_types.csv',
+        ])
+
+        self.assertEqual([json.loads(line) for line in stream.splitlines()], json.loads(table))
+        self.assertEqual(json.loads('[' + ','.join(fast_stream.splitlines()) + ']'), json.loads(table))
+
+    def test_column_types_streaming_undeclared_columns_remain_text(self):
+        output = self.get_output([
+            '--stream', '--no-inference', '--snifflimit', '0', '--column-types', 'amount:number',
+            'examples/column_types.csv',
+        ])
+
+        self.assertEqual(json.loads(output.splitlines()[0]), {
+            'number': '00042',
+            'amount': 10.5,
+            'description': 'first',
+        })
+
+    def test_column_types_geojson(self):
+        geojson = json.loads(self.get_output([
+            '--lat', 'latitude', '--lon', 'longitude', '--column-types', 'address:text', 'examples/test_geo.csv',
+        ]))
+
+        self.assertEqual(geojson['features'][0]['properties']['address'], '200 West Erwin Street')
+
+    def test_column_types_geojson_streaming(self):
+        output = self.get_output([
+            '--lat', 'latitude', '--lon', 'longitude', '--stream', '--no-inference', '--snifflimit', '0',
+            '--column-types', 'last_seen_date:text', 'examples/test_geo.csv',
+        ])
+
+        self.assertEqual(json.loads(output.splitlines()[0])['properties']['last_seen_date'], '3/30/12')
+
+    def test_column_types_invalid_value(self):
+        with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False) as f:
+            f.write('number,amount\n00042,10.5\n00043,abc\n')
+            path = f.name
+
+        try:
+            output_file = io.StringIO()
+            utility = CSVJSON(['--column-types', 'amount:number', path], output_file)
+
+            with self.assertRaises(InvalidValueForColumnTypeException) as e:
+                utility.run()
+
+            self.assertEqual(e.exception.record, 3)
+            self.assertEqual(e.exception.column_name, 'amount')
+            self.assertEqual(e.exception.value, 'abc')
+            self.assertEqual(e.exception.type_name, 'number')
+            self.assertIn('"abc"', str(e.exception))
+            self.assertIn('"amount"', str(e.exception))
+            self.assertIn('3', str(e.exception))
+
+            output_file.close()
+        finally:
+            os.remove(path)
+
+    def test_column_types_invalid_value_streaming(self):
+        with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False) as f:
+            f.write('number,amount\n00042,10.5\n00043,abc\n')
+            path = f.name
+
+        try:
+            output_file = io.StringIO()
+            utility = CSVJSON(
+                ['--stream', '--no-inference', '--snifflimit', '0', '--column-types', 'amount:number', path],
+                output_file,
+            )
+
+            with self.assertRaises(InvalidValueForColumnTypeException) as e:
+                utility.run()
+
+            self.assertEqual(e.exception.record, 3)
+            self.assertEqual(e.exception.column_name, 'amount')
+
+            output_file.close()
+        finally:
+            os.remove(path)
+
+    def test_column_types_invalid_value_record_numbers(self):
+        with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False) as f:
+            f.write('number,amount\n00042,10.5\n00043,abc\n')
+            path = f.name
+
+        try:
+            for args in (
+                ['--column-types', 'amount:number'],
+                ['--stream', '--no-inference', '--snifflimit', '0', '--column-types', 'amount:number'],
+            ):
+                with self.subTest(args=args):
+                    output_file = io.StringIO()
+                    utility = CSVJSON(args + [path], output_file)
+
+                    with self.assertRaises(InvalidValueForColumnTypeException) as e:
+                        utility.run()
+
+                    self.assertEqual(e.exception.record, 3)
+
+                    output_file.close()
+        finally:
+            os.remove(path)
+
+    def test_column_types_conflicting_declarations(self):
+        output_file = io.StringIO()
+        utility = CSVJSON(['--column-types', 'amount:number,amount:text', 'examples/column_types.csv'], output_file)
+
+        with self.assertRaises(ColumnIdentifierError):
+            utility.run()
+
+        output_file.close()
+
+    def test_column_types_invalid_type(self):
+        with self.assertRaises(SystemExit) as e:
+            CSVJSON(['--column-types', 'amount:decimalish', 'examples/column_types.csv'], io.StringIO())
+
+        self.assertEqual(e.exception.code, 2)
 
     def test_indentation(self):
         output = self.get_output(['-i', '4', 'examples/dummy.csv'])

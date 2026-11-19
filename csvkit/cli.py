@@ -28,6 +28,116 @@ except ImportError:
 
 QUOTING_CHOICES = sorted(getattr(csv, name) for name in dir(csv) if name.startswith('QUOTE_'))
 
+#: Column types that can be declared with the ``--column-types`` option.
+COLUMN_TYPE_ALIASES = {
+    'boolean': 'boolean',
+    'bool': 'boolean',
+    'date': 'date',
+    'datetime': 'datetime',
+    'timestamp': 'datetime',
+    'number': 'number',
+    'numeric': 'number',
+    'integer': 'number',
+    'int': 'number',
+    'float': 'number',
+    'decimal': 'number',
+    'money': 'number',
+    'text': 'text',
+    'string': 'text',
+    'str': 'text',
+    'timedelta': 'timedelta',
+    'duration': 'timedelta',
+}
+
+
+def parse_column_type_declarations(value):
+    """
+    Parse a comma-separated list of ``COLUMN:TYPE`` declarations.
+
+    ``COLUMN`` may be a column name or a 1-based column index. ``TYPE`` is one of the keys of
+    :data:`COLUMN_TYPE_ALIASES`. ``=`` is accepted as a separator, in addition to ``:``.
+
+    This is an ``argparse`` type function, so it raises :class:`argparse.ArgumentTypeError` on invalid input.
+    """
+    declarations = []
+
+    for declaration in value.split(','):
+        declaration = declaration.strip()
+
+        if not declaration:
+            continue
+
+        column, separator, type_name = declaration.rpartition(':')
+        if not separator:
+            column, separator, type_name = declaration.rpartition('=')
+
+        if not separator or not column.strip() or not type_name.strip():
+            raise argparse.ArgumentTypeError(
+                f'invalid column type declaration "{declaration}". Use COLUMN:TYPE, '
+                f'for example "id:text" or "amount:number".'
+            )
+
+        normalized_type = COLUMN_TYPE_ALIASES.get(type_name.strip().lower())
+        if normalized_type is None:
+            raise argparse.ArgumentTypeError(
+                f'invalid type "{type_name.strip()}" in column type declaration "{declaration}". '
+                f'Choose from: {", ".join(sorted(set(COLUMN_TYPE_ALIASES.values())))}.'
+            )
+
+        declarations.append((column.strip(), normalized_type))
+
+    if not declarations:
+        raise argparse.ArgumentTypeError('column type declarations must not be empty.')
+
+    return declarations
+
+
+def resolve_column_type_declarations(declarations, column_names, column_offset=1):
+    """
+    Resolve ``(column, type)`` declarations against the header row.
+
+    Returns a dictionary mapping column indices to type names. A column declared twice with different types is an
+    error, because a column can only have one type within one conversion.
+    """
+    resolved = {}
+
+    for identifier, type_name in declarations:
+        index = match_column_identifier(column_names, identifier, column_offset)
+        name = column_names[index]
+
+        if index in resolved and resolved[index] != type_name:
+            raise ColumnIdentifierError(
+                f'Column "{name}" is declared as both {resolved[index]} and {type_name}.'
+            )
+
+        resolved[index] = type_name
+
+    return resolved
+
+
+class DeclaredTypeTester(agate.TypeTester):
+    """
+    An :class:`agate.TypeTester` that leaves declared columns as raw text and infers all other columns.
+
+    Declared columns are cast later, by the requesting tool, so that conversion errors can identify the input
+    record and field, and so that declared types are applied consistently in streaming and non-streaming output.
+    """
+    def __init__(self, declarations, column_offset=1, **kwargs):
+        self._declarations = declarations
+        self._column_offset = column_offset
+
+        super().__init__(**kwargs)
+
+    def run(self, rows, column_names):
+        if not column_names:
+            return super().run(rows, column_names)
+
+        resolved = resolve_column_type_declarations(self._declarations, column_names, self._column_offset)
+
+        self._force = {column_names[index]: agate.Text(cast_nulls=False) for index in resolved}
+
+        return super().run(rows, column_names)
+
 
 class LazyFile:
     """
@@ -347,13 +457,46 @@ class CSVKitUtility:
 
         sys.excepthook = handler
 
-    def get_column_types(self):
+    def _get_type_kwargs(self):
         if getattr(self.args, 'blanks', None):
             type_kwargs = {'null_values': []}
         else:
             type_kwargs = {'null_values': list(DEFAULT_NULL_VALUES)}
         for null_value in getattr(self.args, 'null_values', []):
             type_kwargs['null_values'].append(null_value)
+
+        return type_kwargs
+
+    def get_data_type(self, type_name):
+        """
+        Return the :class:`agate.data_types.DataType` for a declared column type.
+
+        The type uses the same options (null values, locale, date formats, leading zeroes) as type inference, so
+        that a declared column behaves consistently with an inferred column of the same type.
+        """
+        type_kwargs = self._get_type_kwargs()
+
+        if type_name == 'text':
+            return agate.Text(**type_kwargs)
+        if type_name == 'number':
+            return agate.Number(
+                locale=getattr(self.args, 'locale', 'en_US'),
+                no_leading_zeroes=getattr(self.args, 'no_leading_zeroes', None),
+                **type_kwargs,
+            )
+        if type_name == 'boolean':
+            return agate.Boolean(**type_kwargs)
+        if type_name == 'date':
+            return agate.Date(date_format=getattr(self.args, 'date_format', None), **type_kwargs)
+        if type_name == 'datetime':
+            return agate.DateTime(datetime_format=getattr(self.args, 'datetime_format', None), **type_kwargs)
+        if type_name == 'timedelta':
+            return agate.TimeDelta(**type_kwargs)
+
+        raise ValueError(f'Unsupported column type: {type_name}')
+
+    def get_column_types(self, declarations=()):
+        type_kwargs = self._get_type_kwargs()
 
         text_type = agate.Text(**type_kwargs)
 
@@ -383,6 +526,13 @@ class CSVKitUtility:
                     types.insert(-2, number_type)
                 else:
                     types.insert(1, number_type)
+
+        if declarations:
+            return DeclaredTypeTester(
+                declarations,
+                column_offset=self.get_column_offset(),
+                types=types,
+            )
 
         return agate.TypeTester(types=types)
 

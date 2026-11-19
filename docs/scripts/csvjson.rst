@@ -16,7 +16,7 @@ Converts a CSV file into JSON or GeoJSON (depending on flags):
                   [-H] [-K SKIP_LINES] [-v] [-l] [--zero] [-V] [-i INDENT]
                   [-k KEY] [--lat LAT] [--lon LON] [--type TYPE]
                   [--geometry GEOMETRY] [--crs CRS] [--no-bbox] [--stream]
-                  [-y SNIFF_LIMIT] [-I]
+                  [--column-types COLUMN:TYPE] [-y SNIFF_LIMIT] [-I]
                   [FILE]
 
    Convert a CSV file into JSON (or GeoJSON).
@@ -49,6 +49,16 @@ Converts a CSV file into JSON or GeoJSON (depending on flags):
      --no-bbox             Disable the calculation of a bounding box.
      --stream              Output JSON as a stream of newline-separated objects,
                            rather than an as an array.
+     --column-types COLUMN:TYPE
+                           Declare the type of one or more columns, as
+                           comma-separated COLUMN:TYPE pairs, for example
+                           "id:text,amount:number". COLUMN is a column name or
+                           a 1-based index subject to --zero. TYPE is one of:
+                           boolean, date, datetime, number, text, timedelta.
+                           Declared columns are converted strictly to their
+                           type, in both array and --stream output. Other
+                           columns are unaffected. This option can be specified
+                           multiple times.
      -y SNIFF_LIMIT, --snifflimit SNIFF_LIMIT
                            Limit CSV dialect sniffing to the specified number of
                            bytes. Specify "0" to disable sniffing entirely, or
@@ -138,3 +148,17 @@ Convert locations of public art into GeoJSON:
            }
        }
    }
+
+Preserve leading zeroes in a numeric-looking identifier, and convert an amount to a number:
+
+.. code-block:: console
+
+   $ csvjson --column-types "number:text,amount:number" examples/column_types.csv
+   [{"number": "00042", "amount": 10.5, "description": "first"}, {"number": "00043", "amount": 1234.5, "description": "second"}, {"number": "00044", "amount": 0.75, "description": "third"}]
+
+A declared type is strict, in both array and :code:`--stream` output. A value that can't be converted identifies the input record and field:
+
+.. code-block:: console
+
+   $ csvjson --column-types "amount:number" amounts.csv
+   InvalidValueForColumnTypeException: Unable to convert "n/a" to number in column "amount" at record 3.
