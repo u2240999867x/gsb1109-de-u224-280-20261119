@@ -7,9 +7,10 @@ import operator
 import uuid
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from functools import partial, reduce, wraps
 from random import Random
+from typing import Any
 from urllib.request import urlopen
 
 import tlz as toolz
@@ -1574,10 +1575,14 @@ class Bag(DaskMethodsMixin):
             dask dataframe to work.  For ease of use, some alternative inputs
             are also available. Instead of a ``DataFrame``, a ``dict`` of
             ``{name: dtype}`` or iterable of ``(name, dtype)`` can be provided.
-            If not provided or a list, a single element from the first
-            partition will be computed, triggering a potentially expensive call
-            to ``compute``. This may lead to unexpected results, so providing
-            ``meta`` is recommended. For more information, see
+            If not provided, the dtypes and column names are inferred from
+            every partition: each partition reports only its column dtypes
+            (never its rows), the summaries are merged on the client, empty
+            partitions and all-NA columns do not pin a dtype, and a
+            ``ValueError`` naming the conflicting partitions is raised when a
+            column is observed with incompatible dtypes. This triggers a
+            potentially expensive call to ``compute``, so providing ``meta``
+            is recommended. For more information, see
             ``dask.dataframe.utils.make_meta``.
         columns : sequence, optional
             Column names to use. If the passed data do not have names
@@ -1611,22 +1616,18 @@ class Bag(DaskMethodsMixin):
         import dask.dataframe as dd
 
         if meta is None:
-            head = self.take(1, warn=False)
-            if len(head) == 0:
-                raise ValueError(
-                    "`dask.bag.Bag.to_dataframe` failed to "
-                    "properly infer metadata, please pass in "
-                    "metadata via the `meta` keyword"
-                )
-            meta = pd.DataFrame(list(head), columns=columns)
-        elif columns is not None:
-            raise ValueError("Can't specify both `meta` and `columns`")
+            cols, dtypes = _infer_to_dataframe_meta(self, columns)
+            meta = pd.DataFrame(
+                {col: pd.Series([], dtype=dtypes[col]) for col in cols}
+            )
         else:
+            if columns is not None:
+                raise ValueError("Can't specify both `meta` and `columns`")
             meta = dd.utils.make_meta(meta, parent_meta=pd.DataFrame())
-        # Serializing the columns and dtypes is much smaller than serializing
-        # the empty frame
-        cols = list(meta.columns)
-        dtypes = meta.dtypes.to_dict()
+            # Serializing the columns and dtypes is much smaller than
+            # serializing the empty frame
+            cols = list(meta.columns)
+            dtypes = meta.dtypes.to_dict()
 
         dfs = self.map_partitions(to_dataframe, cols, dtypes)
         if optimize_graph:
@@ -2618,6 +2619,205 @@ def split(seq, n):
     L = [seq[int(part * i) : int(part * (i + 1))] for i in range(n - 1)]
     L.append(seq[int(part * (n - 1)) :])
     return L
+
+
+class _PartitionMeta:
+    """Lightweight, non-iterable summary of one bag partition.
+
+    Non-iterable on purpose so that :func:`finalize` does not concatenate the
+    per-partition summaries when the metadata bag is computed. Only column
+    names and dtypes are carried, never the rows themselves.
+    """
+
+    __slots__ = ("dtypes", "na_columns", "columns", "is_mapping")
+
+    def __init__(
+        self,
+        dtypes: dict[Any, Any],
+        na_columns: frozenset,
+        columns: tuple,
+        is_mapping: bool,
+    ):
+        self.dtypes = dtypes
+        self.na_columns = na_columns
+        self.columns = columns
+        self.is_mapping = is_mapping
+
+    def __repr__(self) -> str:
+        return (
+            f"_PartitionMeta(columns={self.columns!r}, "
+            f"dtypes={self.dtypes!r}, na_columns={set(self.na_columns)!r})"
+        )
+
+
+def _partition_to_meta(seq: Iterable) -> _PartitionMeta:
+    """Infer column dtypes of a single partition without keeping its rows.
+
+    Empty partitions and columns whose values are all ``NA`` are reported
+    separately (``na_columns``) instead of pinning a concrete dtype, so that
+    they never force the schema of the whole bag.
+    """
+    import pandas as pd
+
+    seq = reify(seq)
+    if not isinstance(seq, list):
+        seq = list(seq)
+    if not seq:
+        return _PartitionMeta({}, frozenset(), (), False)
+
+    is_mapping = isinstance(seq[0], Mapping)
+    frame = pd.DataFrame(seq)
+    na_columns = frozenset(col for col in frame.columns if frame[col].isna().all())
+    dtypes = {
+        col: frame[col].dtype for col in frame.columns if col not in na_columns
+    }
+    return _PartitionMeta(dtypes, na_columns, tuple(frame.columns), is_mapping)
+
+
+def _merge_dtype(left: Any, right: Any) -> Any:
+    """Return a dtype compatible with both observations, or ``None`` on conflict."""
+    import numpy as np
+    from pandas.api.types import is_dtype_equal
+
+    if is_dtype_equal(left, right):
+        return left
+
+    left_kind, right_kind = left.kind, right.kind
+    # Numeric dtypes (including nullable integer/float/boolean extension dtypes)
+    # unify through numpy promotion, e.g. int64 + float32 -> float64.
+    if left_kind in "biufc" and right_kind in "biufc":
+        return np.result_type(
+            getattr(left, "numpy_dtype", left), getattr(right, "numpy_dtype", right)
+        )
+    # Datetime/timedelta resolutions promote to the finer unit.
+    if left_kind in "Mm" and right_kind in "Mm" and left_kind == right_kind:
+        return np.result_type(left, right)
+    return None
+
+
+def _promote_dtype_for_na(dtype: Any) -> Any:
+    """Promote a dtype so that an all-NA observation can be cast into it.
+
+    Mirrors pandas' own behaviour when missing values meet a typed column:
+    plain integers become floating point and booleans become object, while
+    nullable extension dtypes already support ``NA`` and are left untouched.
+    """
+    import numpy as np
+
+    if hasattr(dtype, "numpy_dtype"):  # pandas extension dtype is nullable
+        return dtype
+    if dtype.kind in "iu":
+        return np.dtype("float64")
+    if dtype.kind == "b":
+        return np.dtype("object")
+    return dtype
+
+
+def _merge_partition_meta(
+    metas: list[_PartitionMeta],
+) -> tuple[list, dict[Any, Any]]:
+    """Merge per-partition summaries into a single ``(columns, dtypes)`` schema.
+
+    Raises ``ValueError`` naming the partitions involved when a column is
+    observed with dtypes that cannot be unified (e.g. numeric vs. object).
+    """
+    import numpy as np
+
+    columns: list = []
+    seen_columns: set = set()
+    na_columns: set = set()
+    nonempty_metas = [meta for meta in metas if meta.columns]
+    # column -> {observed dtype: [partition index, ...]} for conflict reporting
+    origins: dict = defaultdict(lambda: defaultdict(list))
+
+    # First collect every observation so a conflict message can name all of
+    # the partitions sharing each dtype rather than stopping at the first one.
+    for partition_index, meta in enumerate(metas):
+        for col in meta.columns:
+            if col not in seen_columns:
+                seen_columns.add(col)
+                columns.append(col)
+        na_columns.update(meta.na_columns)
+        for col, dtype in meta.dtypes.items():
+            origins[col][dtype].append(partition_index)
+
+    dtypes: dict = {}
+    for col in columns:
+        merged = None
+        for dtype in origins[col]:
+            merged = dtype if merged is None else _merge_dtype(merged, dtype)
+            if merged is None:
+                detail = ", ".join(
+                    f"partition(s) {', '.join(map(str, partitions))}: {dtype}"
+                    for dtype, partitions in origins[col].items()
+                )
+                raise ValueError(
+                    f"Cannot unify dtypes for column {col!r} across bag "
+                    f"partitions: {detail}. Pass an explicit `meta=` to "
+                    "force the output dtypes."
+                )
+        dtypes[col] = merged
+
+    # A column needs an NA-safe dtype when some partition only contains NA for
+    # it or does not contain the column at all (workers fill both with NaN).
+    for col in columns:
+        na_observed = col in na_columns or any(
+            col not in meta.columns for meta in nonempty_metas
+        )
+        dtype = dtypes.get(col)
+        if dtype is None:
+            dtypes[col] = np.dtype("float64")
+        elif na_observed:
+            dtypes[col] = _promote_dtype_for_na(dtype)
+
+    return columns, dtypes
+
+
+def _infer_to_dataframe_meta(
+    bag: Bag, columns: Sequence | None
+) -> tuple[list, dict[Any, Any]]:
+    """Infer ``(columns, dtypes)`` from every partition without collecting rows.
+
+    One tiny :class:`_PartitionMeta` per partition is computed in parallel and
+    merged on the client, so empty partitions and all-NA columns never pin a
+    dtype, and numeric/object conflicts are reported with their partition
+    indices. This is the metadata-inference compute documented on
+    :meth:`Bag.to_dataframe`; the data rows themselves stay on the workers.
+    """
+    import numpy as np
+
+    partition_metas = bag.map_partitions(_partition_to_meta).compute()
+    nonempty = [meta for meta in partition_metas if meta.columns]
+    if not nonempty:
+        raise ValueError(
+            "`dask.bag.Bag.to_dataframe` failed to "
+            "properly infer metadata, please pass in "
+            "metadata via the `meta` keyword"
+        )
+
+    inferred_columns, dtypes = _merge_partition_meta(partition_metas)
+
+    if columns is not None:
+        if any(meta.is_mapping for meta in nonempty):
+            # Dict records: reorder/select known names; unseen names become
+            # all-NA columns, matching a direct ``pd.DataFrame(..., columns=)``.
+            selected = {col: dtypes[col] for col in columns if col in dtypes}
+            for col in columns:
+                selected.setdefault(col, np.dtype("float64"))
+            dtypes = selected
+            inferred_columns = list(columns)
+        else:
+            # Positional records: names are assigned by position.
+            if len(columns) != len(inferred_columns):
+                raise ValueError(
+                    f"Got {len(columns)} column names but the bag records "
+                    f"have {len(inferred_columns)} fields."
+                )
+            rename = dict(zip(inferred_columns, columns, strict=True))
+            inferred_columns = list(columns)
+            dtypes = {rename[old]: dtype for old, dtype in dtypes.items()}
+
+    return inferred_columns, dtypes
 
 
 def to_dataframe(seq, columns, dtypes):

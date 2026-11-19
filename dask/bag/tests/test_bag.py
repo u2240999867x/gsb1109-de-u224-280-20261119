@@ -928,7 +928,7 @@ def test_to_dataframe():
     with pytest.raises(ValueError):
         b.to_dataframe(columns=["a", "b"], meta=sol)
 
-    # Inference fails if empty first partition
+    # Inference fails only when every partition is empty
     b2 = b.filter(lambda x: x["a"] > 200)
     with pytest.raises(ValueError):
         b2.to_dataframe()
@@ -947,6 +947,148 @@ def test_to_dataframe():
         df = b.map_partitions(f).to_dataframe(meta=sol)
         dd.utils.assert_eq(df, sol, check_index=False)
         check_parts(df, sol)
+
+
+def test_to_dataframe_infer_meta_across_partitions():
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("dask.dataframe")
+
+    # An empty first partition must not prevent inference; a later partition
+    # may also introduce columns that the earlier one does not have.
+    b = Bag(
+        {
+            ("t", 0): [],
+            ("t", 1): [{"a": 1}],
+            ("t", 2): [{"a": 2, "b": "x"}],
+        },
+        "t",
+        3,
+    )
+    df = b.to_dataframe()
+    assert list(df.columns) == ["a", "b"]
+    assert df.dtypes["a"] == "int64"
+    assert df.dtypes["b"] == object
+    result = df.compute()
+    assert result["a"].tolist() == [1, 2]
+    assert pd.isna(result["b"].iloc[0])
+    assert result["b"].iloc[1] == "x"
+
+
+def test_to_dataframe_infer_all_null_column():
+    pd = pytest.importorskip("pandas")
+    dd = pytest.importorskip("dask.dataframe")
+
+    # An all-NA column must not pin a concrete dtype. When it stays all-NA it
+    # is inferred as float64 (the dtype pandas uses for a missing column);
+    # when a typed value appears later the dtype follows the value.
+    b = Bag(
+        {
+            ("t", 0): [{"a": None}, {"a": None}],
+            ("t", 1): [{"a": None, "b": 1}],
+        },
+        "t",
+        2,
+    )
+    df = b.to_dataframe()
+    assert df.dtypes["a"] == "float64"
+    assert df.dtypes["b"] == "float64"
+    dd.utils.assert_eq(
+        df,
+        pd.DataFrame(
+            {"a": [None, None, None], "b": [None, None, 1.0]},
+            dtype="float64",
+        ),
+        check_index=False,
+    )
+
+    # A column missing entirely from a nonempty partition promotes an integer
+    # dtype to float so the worker-filled NaN values can be cast.
+    b = Bag(
+        {("t", 0): [{"a": 1, "b": 2}], ("t", 1): [{"b": 3}]},
+        "t",
+        2,
+    )
+    df = b.to_dataframe()
+    assert df.dtypes["a"] == "float64"
+    assert df.dtypes["b"] == "int64"
+    result = df.compute()
+    assert result["b"].tolist() == [2, 3]
+    assert result["a"].iloc[0] == 1.0
+    assert pd.isna(result["a"].iloc[1])
+
+
+def test_to_dataframe_infer_merges_numeric_dtypes():
+    pytest.importorskip("pandas")
+    pytest.importorskip("dask.dataframe")
+
+    b = Bag(
+        {("t", 0): [{"a": 1}], ("t", 1): [{"a": 2.5}]},
+        "t",
+        2,
+    )
+    df = b.to_dataframe()
+    assert df.dtypes["a"] == "float64"
+    assert df.compute()["a"].tolist() == [1.0, 2.5]
+
+
+def test_to_dataframe_infer_conflict_names_partitions():
+    pytest.importorskip("pandas")
+    pytest.importorskip("dask.dataframe")
+
+    b = Bag(
+        {
+            ("t", 0): [{"a": 1}],
+            ("t", 1): [{"a": "x"}],
+            ("t", 2): [{"a": 2}],
+        },
+        "t",
+        3,
+    )
+    with pytest.raises(ValueError) as exc:
+        b.to_dataframe()
+    message = str(exc.value)
+    assert "'a'" in message
+    assert "partition(s) 0, 2" in message
+    assert "partition(s) 1" in message
+
+
+def test_to_dataframe_infer_does_not_collect_rows():
+    pytest.importorskip("pandas")
+    pytest.importorskip("dask.dataframe")
+
+    # Metadata inference must summarize partitions on the workers rather than
+    # pulling record rows to the client through ``take``.
+    b = db.from_sequence(
+        [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}], npartitions=2
+    )
+    b.take = lambda *args, **kwargs: pytest.fail("rows must not be collected")
+    df = b.to_dataframe()
+    assert list(df.columns) == ["a", "b"]
+    assert df.npartitions == 2
+
+
+def test_to_dataframe_infer_positional_records_with_columns():
+    pd = pytest.importorskip("pandas")
+    dd = pytest.importorskip("dask.dataframe")
+
+    b = Bag(
+        {
+            ("t", 0): [(1, 2)],
+            ("t", 1): [],
+            ("t", 2): [(10, 20), (100, 200)],
+        },
+        "t",
+        3,
+    )
+    df = b.to_dataframe(columns=["a", "b"])
+    assert list(df.columns) == ["a", "b"]
+    dd.utils.assert_eq(
+        df,
+        pd.DataFrame(
+            {"a": [1, 10, 100], "b": [2, 20, 200]}, dtype="int64"
+        ),
+        check_index=False,
+    )
 
 
 ext_open = [("gz", GzipFile), ("bz2", BZ2File), ("", open)]
