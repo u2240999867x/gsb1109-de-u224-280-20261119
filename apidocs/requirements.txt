@@ -1,0 +1,17 @@
+sphinx ==8.1  # TODO workaround for bug in 8.2.0, update as soon as fixed
+sphinxcontrib-napoleon
+sphinx-argparse
+sphinx-autodoc-typehints
+docutils
+myst-parser
+configargparse
+platformdirs
+sphinxawesome-theme
+snakemake-interface-common
+snakemake-interface-executor-plugins
+snakemake-interface-storage-plugins
+snakemake-interface-logger-plugins
+snakemake-interface-software-deployment-plugins
+snakemake-software-deployment-plugin-conda
+snakemake-software-deployment-plugin-container
+snakemake-software-deployment-plugin-envmodules

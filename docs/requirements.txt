@@ -1,0 +1,17 @@
+sphinx >=3
+sphinxcontrib-napoleon
+sphinx-argparse
+sphinx-tabs
+docutils
+myst-parser
+configargparse
+platformdirs
+immutables
+sphinxawesome-theme
+snakemake-interface-common
+snakemake-interface-executor-plugins
+snakemake-interface-storage-plugins
+snakemake-interface-report-plugins
+snakemake-interface-logger-plugins
+humanfriendly
+sphinx-reredirects

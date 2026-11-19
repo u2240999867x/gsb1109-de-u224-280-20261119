@@ -1,0 +1,11 @@
+snakemake/_version.py export-subst
+snakemake/report/report.html linguist-vendored=true
+snakemake/gui.html linguist-vendored=true
+snakemake/report/table.html linguist-vendored=true
+tests/test_issue1046/expected-results/test_report.html linguist-vendored=true
+tests/test_report/report.html linguist-vendored=true
+tests/test_report/expected-results/report.html linguist-vendored=true
+tests/test_report/custom-stylesheet.css linguist-vendored=true
+# SCM syntax highlighting & preventing 3-way merges
+pixi.lock merge=binary linguist-language=YAML linguist-generated=true
+tests/**/*.html linguist-vendored=true
