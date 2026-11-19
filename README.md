@@ -448,6 +448,13 @@ f = d.flatten(separator="_")
 
 # Return a new flattened dict also flattening list/tuple values using [i] index notation.
 f = d.flatten(separator="_", indexes=True)
+
+# Return a new flattened dict using an escaping scheme that unflatten can reverse:
+# literal separator, escape and [i] characters are escaped, so keys that look
+# like keypaths are preserved (eg. {'task.id': 1, 'task': {'id': 2}}).
+# The default escape character is "\" and can be customized or disabled (escape=False).
+f = d.flatten(separator="_", indexes=True, reversible=True)
+f = d.flatten(separator="_", reversible=True, escape="!")
 ```
 
 #### `freeze`
@@ -611,7 +618,14 @@ d.traverse(f)
 ```python
 # Return a new unflattened dict using the given separator to split dict keys to nested keypaths.
 u = d.unflatten(separator="_")
+
+# Return a new unflattened dict restoring keys escaped by flatten(reversible=True).
+# Use the same separator and escape character used to flatten.
+u = d.unflatten(separator="_", reversible=True)
 ```
+
+If a dict key is `"0"` it is unflattened to an object key (`{"a": {"0": ...}}`),
+while `a[0]` is unflattened to a list item (`{"a": [...]}`).
 
 #### `unfreeze`
 

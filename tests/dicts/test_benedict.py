@@ -523,6 +523,30 @@ class benedict_test_case(unittest.TestCase):
         self.assertEqual(type(b), type(f))
         self.assertTrue(isinstance(f, benedict))
 
+    def test_flatten_reversible(self) -> None:
+        d = {
+            "task.id": "literal",
+            "task": {
+                "id": "nested",
+                "0": "object-key",
+                "tags": ["list-item"],
+            },
+        }
+        b = benedict(d, keypath_separator=None)
+        f = b.flatten(separator="_", indexes=True, reversible=True)
+        r = {
+            "task.id": "literal",
+            "task_id": "nested",
+            "task_0": "object-key",
+            "task_tags[0]": "list-item",
+        }
+        self.assertEqual(dict(f.items()), r)
+        self.assertIsInstance(f, benedict)
+        self.assertEqual(f.keypath_separator, b.keypath_separator)
+        u = f.unflatten(separator="_", reversible=True)
+        self.assertIsInstance(u, benedict)
+        self.assertEqual(u, d)
+
     def test_flatten_with_falsy_parent_keys(self) -> None:
         for key in (0, False, None):
             with self.subTest(key=key):

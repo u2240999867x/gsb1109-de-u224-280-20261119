@@ -149,3 +149,106 @@ class unflatten_test_case(unittest.TestCase):
             },
         }
         self.assertEqual(u, r)
+
+    def test_unflatten_reversible_restores_literal_keypath_key(self) -> None:
+        i = {
+            "task.id": "literal",
+            "task": {
+                "id": "nested",
+            },
+        }
+        for separator in ("_", "."):
+            with self.subTest(separator=separator):
+                f = _flatten(i, separator=separator, indexes=True, reversible=True)
+                u = _unflatten(f, separator=separator, reversible=True)
+                self.assertEqual(u, i)
+
+    def test_unflatten_reversible_restores_escaped_keys(self) -> None:
+        i = {
+            "a_b": 1,
+            "a": {
+                "b": 2,
+                "c[0]": 3,
+                "d\\e": 4,
+            },
+        }
+        f = _flatten(i, reversible=True)
+        self.assertEqual(
+            f,
+            {
+                "a\\_b": 1,
+                "a_b": 2,
+                "a_c\\[0\\]": 3,
+                "a_d\\\\e": 4,
+            },
+        )
+        self.assertEqual(_unflatten(f, reversible=True), i)
+
+    def test_unflatten_reversible_with_custom_escape(self) -> None:
+        i = {
+            "a_b": 1,
+            "a": {
+                "b": [2, 3],
+            },
+        }
+        f = _flatten(i, indexes=True, reversible=True, escape="!")
+        self.assertEqual(
+            f,
+            {
+                "a!_b": 1,
+                "a_b[0]": 2,
+                "a_b[1]": 3,
+            },
+        )
+        self.assertEqual(_unflatten(f, reversible=True, escape="!"), i)
+
+    def test_unflatten_reversible_without_escape_matches_default(self) -> None:
+        d = {"a_b": 1}
+        self.assertEqual(_unflatten(d, reversible=True, escape=False), {"a": {"b": 1}})
+
+    def test_unflatten_reversible_object_key_zero_vs_list_index_zero(self) -> None:
+        i = {
+            "a": {
+                "0": "object-value",
+            },
+            "b": ["list-value"],
+        }
+        f = _flatten(i, indexes=True, reversible=True)
+        self.assertEqual(
+            f,
+            {
+                "a_0": "object-value",
+                "b[0]": "list-value",
+            },
+        )
+        u = _unflatten(f, reversible=True)
+        self.assertEqual(u, i)
+        self.assertEqual(u["a"], {"0": "object-value"})
+        self.assertEqual(u["b"], ["list-value"])
+
+    def test_unflatten_reversible_keeps_empty_containers(self) -> None:
+        i = {
+            "a": {},
+            "b": [],
+            "c": {
+                "d": {},
+                "e": [],
+            },
+        }
+        f = _flatten(i, indexes=True, reversible=True)
+        self.assertEqual(
+            f,
+            {
+                "a": {},
+                "b": [],
+                "c_d": {},
+                "c_e": [],
+            },
+        )
+        self.assertEqual(_unflatten(f, reversible=True), i)
+
+    def test_unflatten_reversible_with_invalid_separator(self) -> None:
+        with self.assertRaises(ValueError):
+            _ = _unflatten({"a_b": 1}, separator="_", reversible=True, escape="_")
+        with self.assertRaises(ValueError):
+            _ = _unflatten({"a_b": 1}, separator="[", reversible=True)

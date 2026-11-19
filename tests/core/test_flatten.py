@@ -206,3 +206,124 @@ class flatten_test_case(unittest.TestCase):
         #     'd_e': 5,
         # }
         # self.assertEqual(o, r)
+
+    def test_flatten_reversible_with_literal_keypath_key(self) -> None:
+        i = {
+            "task.id": "literal",
+            "task": {
+                "id": "nested",
+            },
+        }
+        o = _flatten(i, separator=".", reversible=True)
+        r = {
+            "task\\.id": "literal",
+            "task.id": "nested",
+        }
+        self.assertEqual(o, r)
+        # the literal dotted key is not escaped when it is not the separator
+        self.assertEqual(
+            _flatten(i, separator="_", reversible=True),
+            {
+                "task.id": "literal",
+                "task_id": "nested",
+            },
+        )
+
+    def test_flatten_reversible_with_default_escape(self) -> None:
+        i = {
+            "a_b": 1,
+            "a": {
+                "b": 2,
+                "c[0]": 3,
+                "d\\e": 4,
+            },
+        }
+        o = _flatten(i, reversible=True)
+        r = {
+            "a\\_b": 1,
+            "a_b": 2,
+            "a_c\\[0\\]": 3,
+            "a_d\\\\e": 4,
+        }
+        self.assertEqual(o, r)
+
+    def test_flatten_reversible_with_custom_escape(self) -> None:
+        i = {
+            "a_b": 1,
+            "a": {
+                "b": 2,
+            },
+        }
+        o = _flatten(i, reversible=True, escape="!")
+        r = {
+            "a!_b": 1,
+            "a_b": 2,
+        }
+        self.assertEqual(o, r)
+
+    def test_flatten_reversible_with_escape_disabled(self) -> None:
+        i = {
+            "a_b": 1,
+            "a": {
+                "b": 2,
+            },
+        }
+        with self.assertRaises(KeyError):
+            _ = _flatten(i, reversible=True, escape=False)
+        self.assertEqual(_flatten({"a_b": 1}, escape=False), {"a_b": 1})
+
+    def test_flatten_reversible_with_invalid_escape(self) -> None:
+        with self.assertRaises(ValueError):
+            _ = _flatten({"a": 1}, reversible=True, escape="!!")
+
+    def test_flatten_reversible_with_invalid_separator(self) -> None:
+        with self.assertRaises(ValueError):
+            _ = _flatten({"a": 1}, separator="_", reversible=True, escape="_")
+        with self.assertRaises(ValueError):
+            _ = _flatten({"a": 1}, separator="[", reversible=True)
+
+    def test_flatten_reversible_keeps_object_key_zero_and_list_index_zero(self) -> None:
+        i = {
+            "a": {
+                "0": "object-value",
+            },
+            "b": ["list-value"],
+        }
+        o = _flatten(i, indexes=True, reversible=True)
+        r = {
+            "a_0": "object-value",
+            "b[0]": "list-value",
+        }
+        self.assertEqual(o, r)
+
+    def test_flatten_reversible_keeps_empty_containers(self) -> None:
+        i = {
+            "a": {},
+            "b": [],
+            "c": {
+                "d": {},
+                "e": [],
+            },
+        }
+        o = _flatten(i, indexes=True, reversible=True)
+        r = {
+            "a": {},
+            "b": [],
+            "c_d": {},
+            "c_e": [],
+        }
+        self.assertEqual(o, r)
+
+    def test_flatten_reversible_does_not_change_default_behavior(self) -> None:
+        i = {
+            "a": {
+                "b": {},
+            },
+            "c": 1,
+        }
+        self.assertEqual(_flatten(i), {"c": 1})
+
+    def test_flatten_reversible_with_empty_separator(self) -> None:
+        with self.assertRaises(ValueError):
+            _ = _flatten({"a": 1}, separator="", reversible=True)
+        self.assertEqual(_flatten({"a": {"b": 1}}, separator=""), {"b": 1})

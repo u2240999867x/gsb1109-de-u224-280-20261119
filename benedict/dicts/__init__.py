@@ -187,18 +187,28 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         """
         return _find(self, keys, default)  # type: ignore[misc]
 
-    def flatten(self, separator: str = "_", indexes: bool = False) -> Self:
+    def flatten(
+        self,
+        separator: str = "_",
+        indexes: bool = False,
+        reversible: bool = False,
+        escape: bool | str | None = None,
+    ) -> Self:
         """
         Return a new flattened dict using the given separator
         to join nested dict keys to flatten keypaths.
         If indexes is True, list/tuple values are also flattened using [i] notation.
+        If reversible is True, literal keys are escaped so that unflatten can
+        restore the original keys, including keys that look like keypaths.
+        If escape is specified, it is used as the escape character (or disabled
+        when False), otherwise it defaults to '\\' when reversible is True.
         """
         if separator == self._keypath_separator:
             raise ValueError(
                 f"Invalid flatten separator: {separator!r}, "
                 "flatten separator must be different from keypath separator."
             )
-        return cast("Self", _flatten(self, separator, indexes))
+        return cast("Self", _flatten(self, separator, indexes, reversible, escape))
 
     def get(self, key: _KPT, default: _V | None = None) -> Any:  # type: ignore[override]
         return self._cast(super().get(key, default))
@@ -360,12 +370,20 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         """
         _traverse(self, callback)
 
-    def unflatten(self, separator: str = "_") -> Self:
+    def unflatten(
+        self,
+        separator: str = "_",
+        reversible: bool = False,
+        escape: bool | str | None = None,
+    ) -> Self:
         """
         Return a new unflattened dict using the given separator
         to split dict keys to nested keypaths.
+        If reversible is True, escaped keys are restored to their literal values.
+        If escape is specified, it is used as the escape character (or disabled
+        when False), otherwise it defaults to '\\' when reversible is True.
         """
-        return cast("Self", _unflatten(self, separator))
+        return cast("Self", _unflatten(self, separator, reversible, escape))
 
     def unique(self) -> None:
         """
