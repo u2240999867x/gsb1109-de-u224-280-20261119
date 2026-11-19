@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+**New features**
+
+- [`datajudge.WithinRequirement.add_functional_dependency_constraint`][datajudge.requirements.WithinRequirement.add_functional_dependency_constraint]
+  now accepts a `null_value_policy` parameter. With the default `"separate"`,
+  value relations containing `NULL` are counted separately from conflicts;
+  `"conflict"` counts them as regular conflicts.
+
+**Other changes**
+
+- Functional dependency violations are now reported per key instead of per
+  row: each violating key is backed by two contradictory samples, repeated
+  identical key/value relations are counted once, and rows whose key contains
+  `NULL` are ignored.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

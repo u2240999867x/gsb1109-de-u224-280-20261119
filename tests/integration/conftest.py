@@ -903,6 +903,31 @@ def functional_dependency_table_multi_key(engine, metadata):
 
 
 @pytest.fixture(scope="module")
+def functional_dependency_repeated_table(engine, metadata):
+    table_name = "functional_dependency_repeated_table"
+
+    # branch 1 -> region is contradicted, with each relation repeated.
+    # branch 2 -> region is consistent despite many repetitions.
+    # branch 3 -> a single NULL region besides a regular region.
+    # branch NULL -> must be ignored entirely.
+    columns = [
+        sa.Column("branch", sa.Integer()),
+        sa.Column("region", sa.String(20)),
+    ]
+    data = [
+        *({"branch": 1, "region": "north"} for _ in range(3)),
+        *({"branch": 1, "region": "south"} for _ in range(2)),
+        *({"branch": 2, "region": "east"} for _ in range(4)),
+        {"branch": 3, "region": None},
+        {"branch": 3, "region": "west"},
+        {"branch": None, "region": "north"},
+        {"branch": None, "region": "south"},
+    ]
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
 def varchar_table1(engine, metadata):
     table_name = "varchar_table1"
     columns: list[sa.Column | str] = [

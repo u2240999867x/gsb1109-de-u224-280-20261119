@@ -1348,17 +1348,22 @@ def test_functional_dependency_within_multi_key(
             [output_processor_sort],
             textwrap.dedent(
                 """\
-                column(s) 'a', 'b', 'd' has violations of functional dependence (in total 10 rows):
-                (1, 1, 3)
-                (1, 1, 4)
-                (1, 2, 5)
-                (1, 2, 6)
-                (2, 1, 7)
-                (2, 1, 8)
-                (2, 2, 9)
-                (2, 2, 10)
-                (44, 44, 12)
-                (44, 44, 13)
+                (in total 5 key(s) and 10 distinct key/value relation(s); repeated identical relations are counted once). NULL policy: value relations containing NULL are counted separately from conflicts (0 such relation(s) found). Keys containing NULL are ignored.
+                key (a = 1, b = 1) has 2 distinct key/value relation(s); two contradictory examples are (3,) vs (4,):
+                  sample 1: a = 1 , b = 1 , d = 3
+                  sample 2: a = 1 , b = 1 , d = 4
+                key (a = 1, b = 2) has 2 distinct key/value relation(s); two contradictory examples are (5,) vs (6,):
+                  sample 1: a = 1 , b = 2 , d = 5
+                  sample 2: a = 1 , b = 2 , d = 6
+                key (a = 2, b = 1) has 2 distinct key/value relation(s); two contradictory examples are (7,) vs (8,):
+                  sample 1: a = 2 , b = 1 , d = 7
+                  sample 2: a = 2 , b = 1 , d = 8
+                key (a = 2, b = 2) has 2 distinct key/value relation(s); two contradictory examples are (9,) vs (10,):
+                  sample 1: a = 2 , b = 2 , d = 9
+                  sample 2: a = 2 , b = 2 , d = 10
+                key (a = 44, b = 44) has 2 distinct key/value relation(s); two contradictory examples are (12,) vs (13,):
+                  sample 1: a = 44 , b = 44 , d = 12
+                  sample 2: a = 44 , b = 44 , d = 13
                 """
             ).strip(),
         ),
@@ -1369,11 +1374,13 @@ def test_functional_dependency_within_multi_key(
             [output_processor_sort],
             textwrap.dedent(
                 """\
-                column(s) 'a', 'b', 'c', 'e' has violations of functional dependence (in total 4 rows):
-                (43, 43, 6, 6)
-                (43, 43, 6, 7)
-                (44, 44, None, None)
-                (44, 44, None, 99)
+                (in total 2 key(s) and 4 distinct key/value relation(s); repeated identical relations are counted once). NULL policy: value relations containing NULL are counted separately from conflicts (2 such relation(s) found). Keys containing NULL are ignored.
+                key (a = 43, b = 43) has 2 distinct key/value relation(s); two contradictory examples are (6, 6) vs (6, 7):
+                  sample 1: a = 43 , b = 43 , c = 6 , e = 6
+                  sample 2: a = 43 , b = 43 , c = 6 , e = 7
+                key (a = 44, b = 44) has 2 distinct key/value relation(s), of which 2 missing value relation(s); two contradictory examples are (None, None) vs (None, 99):
+                  sample 1: a = 44 , b = 44 , c = None , e = None
+                  sample 2: a = 44 , b = 44 , c = None , e = 99
                 """
             ).strip(),
         ),
@@ -1403,6 +1410,93 @@ def test_functional_dependency_within_multi_key_with_outputcheck(
     assert test_result.failure_message.endswith(failure_message_suffix), (
         test_result.failure_message
     )
+
+
+@pytest.mark.parametrize(
+    "null_value_policy, expected_fragments",
+    [
+        (
+            "separate",
+            [
+                "in total 2 key(s) and 4 distinct key/value relation(s)",
+                "1 such relation(s) found",
+                "key (branch = 1) has 2 distinct key/value relation(s); "
+                "two contradictory examples are ('north',) vs ('south',)",
+                "sample 1: branch = 1 , region = north",
+                "sample 2: branch = 1 , region = south",
+                "key (branch = 3) has 2 distinct key/value relation(s), "
+                "of which 1 missing value relation(s)",
+                "sample 1: branch = 3 , region = None",
+                "sample 2: branch = 3 , region = west",
+            ],
+        ),
+        (
+            "conflict",
+            [
+                "in total 2 key(s) and 4 distinct key/value relation(s)",
+                "NULL policy: value relations containing NULL are counted as conflicts",
+                "key (branch = 3) has 2 distinct key/value relation(s); "
+                "two contradictory examples are (None,) vs ('west',)",
+            ],
+        ),
+    ],
+)
+def test_functional_dependency_report_and_null_policy(
+    engine, functional_dependency_repeated_table, null_value_policy, expected_fragments
+):
+    req = requirements.WithinRequirement.from_table(
+        *functional_dependency_repeated_table
+    )
+    req.add_functional_dependency_constraint(
+        ["branch"],
+        ["region"],
+        null_value_policy=null_value_policy,
+        output_processors=[output_processor_sort],
+    )
+    test_result = req[0].test(engine)
+    assert negation(test_result.outcome)
+    message = test_result.failure_message
+    for fragment in expected_fragments:
+        assert fragment in message, message
+    # Repeated identical key/value relations are not repeated in the report.
+    assert message.count("branch = 1 , region = north") == 1
+    assert message.count("branch = 1 , region = south") == 1
+    # The consistent key and the key with a NULL key value are not reported.
+    assert "branch = 2" not in message
+    assert "branch = None" not in message
+
+
+def test_functional_dependency_consistent_key_succeeds(
+    engine, functional_dependency_repeated_table
+):
+    req = requirements.WithinRequirement.from_table(
+        *functional_dependency_repeated_table
+    )
+    req.add_functional_dependency_constraint(
+        ["branch"],
+        ["region"],
+        condition=Condition(raw_string="branch = 2"),
+    )
+    assert req[0].test(engine).outcome
+
+
+@pytest.mark.parametrize("null_value_policy", ["separate", "conflict"])
+def test_functional_dependency_valid_null_policy(
+    engine, functional_dependency_table, null_value_policy
+):
+    req = requirements.WithinRequirement.from_table(*functional_dependency_table)
+    req.add_functional_dependency_constraint(
+        ["a"], ["b"], null_value_policy=null_value_policy
+    )
+    assert req[0].test(engine).outcome
+
+
+def test_functional_dependency_invalid_null_policy(functional_dependency_table):
+    req = requirements.WithinRequirement.from_table(*functional_dependency_table)
+    with pytest.raises(ValueError, match="null_value_policy"):
+        req.add_functional_dependency_constraint(
+            ["a"], ["b"], null_value_policy="ignore"
+        )
 
 
 def _flatten_and_filter(data):

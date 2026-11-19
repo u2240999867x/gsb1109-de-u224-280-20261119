@@ -20,6 +20,7 @@ from ._engines import (
 )
 from .condition import Condition
 from .data_source import DataSource, TableDataSource
+from .utils import sort_tuple_none_aware
 
 
 def get_table_columns(
@@ -708,15 +709,74 @@ def get_numeric_gaps(
     )
 
 
+_FUNCTIONAL_DEPENDENCY_NULL_VALUE_POLICIES = ("separate", "conflict")
+
+
+@dataclass(frozen=True)
+class FunctionalDependencyViolation:
+    """A key that maps to more than one distinct value.
+
+    Every distinct key/value relation is represented only once, regardless of
+    how many rows realise it. ``conflicting_values`` and ``missing_values``
+    partition the distinct values according to the null value policy.
+    ``witness_values`` and ``witness_rows`` always hold the two contradictory
+    examples shown in reports.
+    """
+
+    key: tuple[Any, ...]
+    conflicting_values: tuple[tuple[Any, ...], ...]
+    missing_values: tuple[tuple[Any, ...], ...]
+    witness_values: tuple[tuple[Any, ...], tuple[Any, ...]]
+    witness_rows: tuple[tuple[Any, ...], tuple[Any, ...]]
+    n_distinct_values: int
+
+
 def get_functional_dependency_violations(
     engine: sa.engine.Engine,
     ref: DataReference,
     key_columns: list[str],
-) -> tuple[Any, list[sa.Select]]:
+    null_value_policy: str = "separate",
+) -> tuple[list[FunctionalDependencyViolation], list[sa.Select]]:
+    """Return one violation per key mapping to several distinct values.
+
+    Repeated identical key/value relations are collapsed before the check, so a
+    relation that occurs many times is still a single relation.
+
+    Keys containing a ``NULL`` in any key column are not considered because
+    they cannot be reliably identified as the same entity.
+
+    ``null_value_policy`` controls value tuples containing ``NULL``:
+
+    - ``"separate"`` (default): every key with more than one distinct value
+      relation is a violation, but relations containing ``NULL`` are tallied
+      and reported separately from ordinary conflicts.
+    - ``"conflict"``: ``NULL`` is treated like any other value and is included
+      in the regular conflict count.
+    """
+    if null_value_policy not in _FUNCTIONAL_DEPENDENCY_NULL_VALUE_POLICIES:
+        raise ValueError(
+            "null_value_policy must be one of "
+            f"{_FUNCTIONAL_DEPENDENCY_NULL_VALUE_POLICIES}, not {null_value_policy!r}."
+        )
+
+    columns = ref.columns
+    if columns is None:
+        raise ValueError(
+            "A functional dependency needs an explicit list of key and value "
+            f"columns, but {ref} does not define any."
+        )
+    if len(columns) <= len(key_columns):
+        # There is no value column, hence no functional dependency to violate.
+        return [], []
+
+    resolved_key_columns = (
+        lowercase_column_names(key_columns) if is_snowflake(engine) else key_columns
+    )
+
     selection = ref.get_selection(engine)
     uniques = selection.distinct().cte()
 
-    key_columns_sa = [uniques.c[key_column] for key_column in key_columns]
+    key_columns_sa = [uniques.c[key_column] for key_column in resolved_key_columns]
     violations_stmt = (
         sa.select(*key_columns_sa).group_by(*key_columns_sa).having(sa.func.count() > 1)
     ).cte()
@@ -724,7 +784,7 @@ def get_functional_dependency_violations(
     join_condition = sa.and_(
         *[
             uniques.c[key_column] == violations_stmt.c[key_column]
-            for key_column in key_columns
+            for key_column in resolved_key_columns
         ]
     )
 
@@ -734,7 +794,61 @@ def get_functional_dependency_violations(
 
     with engine.connect() as connection:
         result = connection.execute(violation_tuples).fetchall()
-    return result, [violation_tuples]
+
+    n_key_columns = len(key_columns)
+    rows_by_key: dict[tuple[Any, ...], dict[tuple[Any, ...], tuple[Any, ...]]] = {}
+    for result_row in result:
+        row = tuple(result_row)
+        key = row[:n_key_columns]
+        if any(value is None for value in key):
+            continue
+        value = row[n_key_columns:]
+        rows_by_key.setdefault(key, {}).setdefault(value, row)
+
+    violations: list[FunctionalDependencyViolation] = []
+    for key in sort_tuple_none_aware(list(rows_by_key)):
+        rows_by_value = rows_by_key[key]
+        values = list(sort_tuple_none_aware(list(rows_by_value)))
+        conflicting_values = [
+            value for value in values if all(elem is not None for elem in value)
+        ]
+        missing_values = [
+            value for value in values if any(elem is None for elem in value)
+        ]
+
+        if null_value_policy == "conflict":
+            # Missing values participate in the regular conflict count.
+            reported_conflicts = values
+            reported_missing: list[tuple[Any, ...]] = []
+        else:
+            reported_conflicts = conflicting_values
+            reported_missing = missing_values
+        if len(values) <= 1:
+            continue
+
+        # Prefer two non-missing values as witnesses; otherwise fall back to a
+        # regular value and a missing one so that both sides are represented.
+        witnesses = reported_conflicts[:2]
+        if len(witnesses) < 2:
+            witnesses = values[:2]
+        witness_values = (witnesses[0], witnesses[1])
+        witness_rows = (
+            rows_by_value[witness_values[0]],
+            rows_by_value[witness_values[1]],
+        )
+
+        violations.append(
+            FunctionalDependencyViolation(
+                key=key,
+                conflicting_values=tuple(reported_conflicts),
+                missing_values=tuple(reported_missing),
+                witness_values=witness_values,
+                witness_rows=witness_rows,
+                n_distinct_values=len(values),
+            )
+        )
+
+    return violations, [violation_tuples]
 
 
 def get_row_count(

@@ -122,27 +122,92 @@ class Uniqueness(Constraint):
 
 
 class FunctionalDependency(Constraint):
-    def __init__(self, ref: DataReference, key_columns: list[str], **kwargs):
+    _NULL_VALUE_POLICIES = ("separate", "conflict")
+
+    def __init__(
+        self,
+        ref: DataReference,
+        key_columns: list[str],
+        null_value_policy: str = "separate",
+        **kwargs,
+    ):
         super().__init__(ref, ref_value=object(), **kwargs)
+        if null_value_policy not in self._NULL_VALUE_POLICIES:
+            raise ValueError(
+                "null_value_policy must be one of "
+                f"{self._NULL_VALUE_POLICIES}, not {null_value_policy!r}."
+            )
         self.key_columns = key_columns
+        self.null_value_policy = null_value_policy
+
+    def _format_key(self, key) -> str:
+        return ", ".join(
+            f"{column} = {value}" for column, value in zip(self.key_columns, key)
+        )
 
     def test(self, engine: sa.engine.Engine) -> TestResult:
-        violations, _ = db_access.get_functional_dependency_violations(
-            engine, self._ref, self.key_columns
+        violations, selections = db_access.get_functional_dependency_violations(
+            engine,
+            self._ref,
+            self.key_columns,
+            null_value_policy=self.null_value_policy,
         )
+        self._factual_selections = selections
         if not violations:
             return TestResult.success()
 
-        assertion_text = (
-            f"{self._ref} has violations of functional dependence (in total {len(violations)} rows):\n"
-            + "\n".join(
-                [
-                    f"{violation}"
-                    for violation in self._apply_output_formatting(
-                        [tuple(elem) for elem in violations]
-                    )
-                ]
+        by_key = {violation.key: violation for violation in violations}
+        processed_keys = list(self._apply_output_formatting(list(by_key)))
+
+        n_keys = len(violations)
+        n_relations = sum(violation.n_distinct_values for violation in violations)
+        n_missing_relations = sum(
+            len(violation.missing_values) for violation in violations
+        )
+        if self.null_value_policy == "separate":
+            null_policy_text = (
+                "NULL policy: value relations containing NULL are counted "
+                "separately from conflicts "
+                f"({n_missing_relations} such relation(s) found)."
             )
+        else:
+            null_policy_text = (
+                "NULL policy: value relations containing NULL are counted as conflicts."
+            )
+
+        lines = []
+        for entry in processed_keys:
+            if not isinstance(entry, tuple):
+                # Output processors such as output_processor_limit may append an
+                # informational string instead of a violation.
+                lines.append(str(entry))
+                continue
+
+            violation = by_key[entry]
+            counts_text = (
+                f"{violation.n_distinct_values} distinct key/value relation(s)"
+            )
+            if self.null_value_policy == "separate" and violation.missing_values:
+                counts_text += (
+                    f", of which {len(violation.missing_values)} missing value "
+                    "relation(s)"
+                )
+            witness_1, witness_2 = violation.witness_values
+            row_1, row_2 = violation.witness_rows
+
+            lines.append(
+                f"key ({self._format_key(violation.key)}) has {counts_text}; "
+                f"two contradictory examples are "
+                f"{witness_1!r} vs {witness_2!r}:\n"
+                f"  sample 1: {_format_sample(row_1, self._ref)}\n"
+                f"  sample 2: {_format_sample(row_2, self._ref)}"
+            )
+
+        assertion_text = (
+            f"{self._ref} has violations of functional dependence "
+            f"(in total {n_keys} key(s) and {n_relations} distinct key/value "
+            f"relation(s); repeated identical relations are counted once). "
+            f"{null_policy_text} Keys containing NULL are ignored.\n" + "\n".join(lines)
         )
         return TestResult.failure(assertion_text)
 

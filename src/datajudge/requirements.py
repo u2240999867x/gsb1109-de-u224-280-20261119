@@ -962,6 +962,7 @@ class WithinRequirement(Requirement):
         key_columns: list[str],
         value_columns: list[str],
         condition: Condition | None = None,
+        null_value_policy: str = "separate",
         name: str | None = None,
         output_processors: OutputProcessor
         | list[OutputProcessor]
@@ -976,8 +977,23 @@ class WithinRequirement(Requirement):
         and all other columns are included ``value_columns``.
         This constraint allows for a more general definition of functional dependencies, where the ``key_columns`` are not necessarily a primary key.
 
-        An additional configuration option (for details see the analogous parameter in for ``Uniques``-constraints)
-        on how the output is sorted and how many counterexamples are shown is available as ``output_processors``.
+        Violations are reported per key. Each reported key is backed by two
+        contradictory examples, i.e. two distinct value combinations observed
+        for that key, instead of a list of repeated rows. Rows that realise the
+        same key/value relation repeatedly are counted only once, so the
+        relation count reflects distinct relations rather than row counts.
+
+        ``null_value_policy`` defines how value combinations containing ``NULL``
+        are treated:
+
+        - ``"separate"`` (default): every key with more than one distinct value
+          relation is a violation, but relations containing ``NULL`` are
+          counted and reported separately from ordinary conflicts.
+        - ``"conflict"``: ``NULL`` is treated like any other value and is
+          included in the regular conflict count.
+
+        Rows whose *key* contains ``NULL`` are never treated as violations,
+        because they cannot be reliably identified as the same entity.
 
         An additional configuration option (for details see the analogous parameter in for ``Uniques``-constraints)
         on how the output is sorted and how many counterexamples are shown is available as ``output_processors``.
@@ -990,6 +1006,7 @@ class WithinRequirement(Requirement):
             miscs_constraints.FunctionalDependency(
                 ref,
                 key_columns=key_columns,
+                null_value_policy=null_value_policy,
                 output_processors=output_processors,
                 name=name,
                 cache_size=cache_size,
