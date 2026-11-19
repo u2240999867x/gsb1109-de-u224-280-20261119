@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
-from codecs import iterdecode
+import codecs
 from collections import namedtuple
-from io import StringIO
+from io import BufferedIOBase, RawIOBase, StringIO
 
 import agate
+
+from csvkit.exceptions import FieldBoundaryError
 
 
 def fixed2csv(f, schema, output=None, skip_lines=0, **kwargs):
@@ -26,27 +28,24 @@ def fixed2csv(f, schema, output=None, skip_lines=0, **kwargs):
 
     :param skip_lines:
         The number of lines to skip from the top of the file.
+    :param positions:
+        Whether the schema's "start" and "length" values index "characters"
+        (the default) or "bytes". Byte positions require an "encoding" and a
+        binary input file, and a :class:`FieldBoundaryError` is raised if a
+        column boundary splits a multibyte character.
     """
     streaming = bool(output)
 
     if not streaming:
         output = StringIO()
 
-    try:
-        encoding = kwargs['encoding']
-    except KeyError:
-        encoding = None
-
-    if isinstance(skip_lines, int):
-        while skip_lines > 0:
-            f.readline()
-            skip_lines -= 1
-    else:
-        raise ValueError('skip_lines argument must be an int')
+    encoding = kwargs.get('encoding')
+    positions = kwargs.get('positions', 'characters')
 
     writer = agate.csv.writer(output)
 
-    reader = FixedWidthReader(f, schema, encoding=encoding)
+    reader = FixedWidthReader(
+        f, schema, encoding=encoding, positions=positions, skip_lines=skip_lines)
     writer.writerows(reader)
 
     if not streaming:
@@ -71,15 +70,38 @@ class FixedWidthReader:
     'column', 'start', and 'length'. (Other columns will be ignored.)  Values
     in the 'start' column are assumed to be "zero-based" unless the first value
     is "1" in which case all values are assumed to be "one-based."
+
+    When ``positions`` is "characters" (the default), the schema positions are
+    character offsets in the decoded text. When it is "bytes", they are byte
+    offsets in the raw input, which requires a binary file and an encoding.
     """
 
-    def __init__(self, f, schema, encoding=None):
-        if encoding is not None:
-            f = iterdecode(f, encoding)
+    def __init__(self, f, schema, encoding=None, positions='characters', skip_lines=0):
+        if not isinstance(skip_lines, int):
+            raise ValueError('skip_lines argument must be an int')
 
-        self.file = f
         self.parser = FixedWidthRowParser(schema)
+        self.positions = positions
+        self.encoding = encoding
         self.header = True
+        self.line_number = 0
+
+        if positions == 'bytes':
+            if encoding is None:
+                raise ValueError('an encoding is required when positions is "bytes"')
+            self.file = None
+            self.binary = _as_binary(f)
+            for _ in range(skip_lines):
+                self.binary.readline()
+        elif positions == 'characters':
+            self.binary = None
+            if encoding is not None:
+                f = codecs.iterdecode(f, encoding)
+            for _ in range(skip_lines):
+                f.readline()
+            self.file = f
+        else:
+            raise ValueError('positions must be "characters" or "bytes"')
 
     def __iter__(self):
         return self
@@ -89,7 +111,78 @@ class FixedWidthReader:
             self.header = False
             return self.parser.headers
 
+        if self.positions == 'bytes':
+            return self._next_byte_row()
+
         return self.parser.parse(next(self.file))
+
+    def _next_byte_row(self):
+        line = self.binary.readline()
+
+        if not line:
+            raise StopIteration
+
+        self.line_number += 1
+
+        line_ending = b''
+        for ending in (b'\r\n', b'\n', b'\r'):
+            if line.endswith(ending):
+                line_ending = ending
+                break
+
+        data = line[:len(line) - len(line_ending)] if line_ending else line
+
+        # A BOM is not part of the column data, so strip it before mapping the
+        # schema's byte positions onto the remaining payload.
+        codec = self.encoding
+        if codec.endswith('-sig') and data.startswith(codecs.BOM_UTF8):
+            data = data[len(codecs.BOM_UTF8):]
+            codec = codec[:-len('-sig')]
+
+        # Decode the whole line first, then map every character boundary to its
+        # byte offset. Validating field boundaries against this map catches a
+        # split at either edge of a column, including cases where the orphaned
+        # bytes would themselves decode to a different, valid character.
+        text = data.decode(codec)
+        boundaries = self._character_boundaries(text, codec)
+
+        values = []
+        line_length = len(data)
+        for field in self.parser.fields:
+            start = field.start
+            end = min(start + field.length, line_length)
+
+            if start > line_length:
+                values.append('')
+            elif start not in boundaries or end not in boundaries:
+                raise FieldBoundaryError(
+                    self.line_number, field, line, self.encoding)
+            else:
+                values.append(text[boundaries[start]:boundaries[end]].strip())
+
+        return values
+
+    def _character_boundaries(self, text, codec):
+        boundaries = {0: 0}
+        byte_offset = 0
+
+        for char_index, char in enumerate(text):
+            byte_offset += len(char.encode(codec))
+            boundaries[byte_offset] = char_index + 1
+
+        return boundaries
+
+
+def _as_binary(f):
+    buffer = getattr(f, 'buffer', None)
+
+    if buffer is not None:
+        return buffer
+
+    if isinstance(f, (RawIOBase, BufferedIOBase)):
+        return f
+
+    raise ValueError('a binary input file is required to read byte positions')
 
 
 FixedWidthField = namedtuple('FixedWidthField', ['name', 'start', 'length'])

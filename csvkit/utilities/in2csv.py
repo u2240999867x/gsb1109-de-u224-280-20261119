@@ -36,6 +36,11 @@ class In2CSV(CSVKitUtility):
             '-s', '--schema', dest='schema',
             help='Specify a CSV-formatted schema file for converting fixed-width files. See web documentation.')
         self.argparser.add_argument(
+            '--positions', dest='positions', choices=('characters', 'bytes'), default='characters',
+            help='Whether the "start" and "length" values in a fixed-width schema are character positions '
+                 '(the default) or byte positions. Byte positions require --encoding and are validated against '
+                 'multibyte characters, raising an error if a column boundary splits a character.')
+        self.argparser.add_argument(
             '-k', '--key', dest='key',
             help='Specify a top-level key to look within for a list of objects to be converted when processing JSON.')
         self.argparser.add_argument(
@@ -135,6 +140,11 @@ class In2CSV(CSVKitUtility):
 
         if filetype not in ('dbf', 'geojson', 'json', 'ndjson'):  # csv, fixed, xls, xlsx
             kwargs['skip_lines'] = self.args.skip_lines
+
+        if filetype == 'fixed':
+            kwargs['positions'] = self.args.positions
+            if self.args.positions == 'bytes':
+                kwargs['encoding'] = self.args.encoding
 
         if filetype != 'dbf':
             kwargs['column_types'] = self.get_column_types()

@@ -41,3 +41,21 @@ class RequiredHeaderError(CustomException):
     Exception raised when an operation requires a CSV file to have a header row.
     """
     pass
+
+
+class FieldBoundaryError(CustomException):
+    """
+    Exception raised when a fixed-width schema's byte positions split a
+    multibyte character in the input.
+    """
+
+    def __init__(self, line_number, field, line, encoding):
+        self.line_number = line_number
+        self.field = field
+        self.line = line
+        self.encoding = encoding
+        msg = (
+            'Column "%s" (start byte %i, length %i) splits a multibyte character on line %i '
+            'when positions are interpreted as %s bytes. Offending line: %r'
+        ) % (field.name, field.start, field.length, line_number, encoding, line)
+        super().__init__(msg)

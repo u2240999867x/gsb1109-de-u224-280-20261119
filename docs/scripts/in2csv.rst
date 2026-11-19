@@ -18,6 +18,8 @@ Converting fixed width requires that you provide a schema file with the "-s" opt
 
 The header line is required though the columns may be in any order:
 
+By default, the schema's "start" and "length" values are character positions in the decoded text. If the input file's fixed widths are defined in bytes instead (common for files encoded with multibyte encodings like Shift-JIS), pass :code:`--positions bytes` together with :code:`--encoding` (:code:`-e`). In this mode, each line is decoded and every column boundary is checked against the encoding's character boundaries, so a boundary that splits a multibyte character raises an error identifying the column and the offending line. Schemas written with character positions continue to work unchanged.
+
 .. code-block:: none
 
    usage: in2csv [-h] [-d DELIMITER] [-t] [-q QUOTECHAR] [-u {0,1,2,3}] [-b]
@@ -26,6 +28,7 @@ The header line is required though the columns may be in any order:
                  [--date-format DATE_FORMAT] [--datetime-format DATETIME_FORMAT]
                  [-H] [-K SKIP_LINES] [-v] [-l] [--zero] [-V]
                  [-f {csv,dbf,fixed,geojson,json,ndjson,xls,xlsx}] [-s SCHEMA]
+                 [--positions {characters,bytes}]
                  [-k KEY] [-n] [--sheet SHEET] [--write-sheets WRITE_SHEETS]
                  [--use-sheet-names] [--reset-dimensions]
                  [--encoding-xls ENCODING_XLS] [-y SNIFF_LIMIT] [-I]
@@ -45,6 +48,13 @@ The header line is required though the columns may be in any order:
      -s SCHEMA, --schema SCHEMA
                            Specify a CSV-formatted schema file for converting
                            fixed-width files. See web documentation.
+     --positions {characters,bytes}
+                           Whether the "start" and "length" values in a
+                           fixed-width schema are character positions (the
+                           default) or byte positions. Byte positions require
+                           --encoding and are validated against multibyte
+                           characters, raising an error if a column boundary
+                           splits a character.
      -k KEY, --key KEY     Specify a top-level key to look within for a list of
                            objects to be converted when processing JSON.
      -n, --names           Display sheet names from the input Excel file.
@@ -89,6 +99,14 @@ Convert the 2000 census geo headers file from fixed-width to CSV and from latin-
 .. code-block:: bash
 
    in2csv -e iso-8859-1 -f fixed -s examples/realdata/census_2000/census2000_geo_schema.csv examples/realdata/census_2000/usgeo_excerpt.upl
+
+When the fixed-width specification measures columns in bytes rather than characters (for example, a Shift-JIS ledger whose place names contain Japanese characters), add :code:`--positions bytes`. The :code:`--encoding` option is required so that each column's bytes can be decoded:
+
+.. code-block:: bash
+
+   in2csv -e shift_jis --positions bytes -f fixed -s examples/testfixed_bytes_schema.csv examples/testfixed_bytes
+
+If a column boundary falls in the middle of a multibyte character, conversion stops with an error naming the column, line number and offending line.
 
 .. note::
 
