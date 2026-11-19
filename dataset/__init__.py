@@ -3,8 +3,16 @@ import warnings
 from typing import Any
 
 from dataset.database import Database
+from dataset.plan import UpdatePlan, UpdatePlanEntry, UpdateTarget
 from dataset.table import Table
-from dataset.util import DatasetError, OutRow, QueryError, RowFactory, row_factory
+from dataset.util import (
+    DatasetError,
+    OutRow,
+    QueryError,
+    RowFactory,
+    StalePreviewError,
+    row_factory,
+)
 
 # shut up useless SA warning:
 warnings.filterwarnings("ignore", "Unicode type received non-unicode bind param value.")
@@ -18,7 +26,11 @@ __all__ = [
     "OutRow",
     "QueryError",
     "RowFactory",
+    "StalePreviewError",
     "Table",
+    "UpdatePlan",
+    "UpdatePlanEntry",
+    "UpdateTarget",
     "connect",
 ]
 __version__ = "2.0.0"

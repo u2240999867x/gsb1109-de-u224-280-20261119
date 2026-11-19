@@ -1,7 +1,7 @@
 import logging
 import threading
 import warnings
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import false, func, select
@@ -16,6 +16,7 @@ from sqlalchemy.sql.expression import (
     bindparam,
 )
 
+from dataset.plan import UpdatePlan, UpdatePlanEntry, UpdateTarget
 from dataset.types import MYSQL_LENGTH_TYPES, ColumnType, Types
 from dataset.util import (
     QUERY_STEP,
@@ -25,6 +26,7 @@ from dataset.util import (
     QueryError,
     ResultIter,
     SQLWriteValue,
+    StalePreviewError,
     WriteRow,
     ensure_strings,
     index_name,
@@ -38,6 +40,18 @@ if TYPE_CHECKING:
     from dataset.database import Database
 
 log = logging.getLogger(__name__)
+
+
+def _row_matches(row: Mapping[str, Any], args: Mapping[str, Any]) -> bool:
+    """Check a row against equality/IN key filters outside of the database."""
+    for column, value in args.items():
+        current = row.get(column)
+        if isinstance(value, (list, tuple, set)):
+            if current not in value:
+                return False
+        elif current != value:
+            return False
+    return True
 
 
 class Table:
@@ -320,6 +334,155 @@ class Table:
                 self.db._auto_commit()
                 chunk = []
 
+    def preview_update_many(
+        self,
+        rows: Sequence[WriteRow | tuple[WriteRow, Sequence[str]]],
+        keys: Sequence[str],
+    ) -> UpdatePlan:
+        """Simulate a batch of keyed updates without writing anything.
+
+        Each correction in ``rows`` is matched against the table using the
+        composite ``keys``, just like :py:meth:`update_many()
+        <dataset.Table.update_many>`, but no data is modified. Instead, an
+        :py:class:`UpdatePlan <dataset.plan.UpdatePlan>` is returned listing,
+        per correction, the primary keys of the rows it would affect along
+        with the simulated before/after state.
+
+        Corrections are simulated in order: if an earlier correction changes
+        a field that a later correction matches on, the later correction is
+        resolved against the simulated state, not the current database
+        content. To make use of this, individual corrections may be given as
+        ``(row, keys)`` tuples with their own composite key, overriding the
+        batch-level ``keys``::
+
+            plan = table.preview_update_many([
+                (dict(contract='C1', stage='draft', status='billed'),
+                 ['contract', 'stage']),
+                (dict(contract='C1', status='billed', invoiced=True),
+                 ['contract', 'status']),
+            ], keys=['contract', 'stage'])
+            for entry in plan.entries:
+                print(entry.primary_keys)
+
+        The preview never creates columns; keys of the correction rows that
+        are not table columns are ignored. Key filters only support equality
+        and ``IN`` (list) semantics.
+
+        The returned plan can be passed to :py:meth:`apply_update_plan()
+        <dataset.Table.apply_update_plan>` to commit exactly the previewed
+        changes.
+        """
+        batch_keys = [self._get_column_name(k) for k in ensure_strings(keys)]
+        pk_columns = [c.name for c in self.table.primary_key.columns]
+        if not len(pk_columns):
+            raise DatasetError(
+                f"Cannot preview updates on table without a primary key: {self.name}"
+            )
+        plan = UpdatePlan(table_name=self.name, keys=batch_keys)
+        # Maps primary keys to (database snapshot, pending changes) of rows
+        # already touched by earlier corrections in this batch.
+        overlay: dict[tuple[Any, ...], tuple[dict[str, Any], MutableRow]] = {}
+        for item in rows:
+            if isinstance(item, tuple):
+                row, item_keys = item
+                item_keys = [
+                    self._get_column_name(k) for k in ensure_strings(item_keys)
+                ]
+            else:
+                row, item_keys = item, batch_keys
+            args, changes = self._keys_to_args(row, item_keys)
+            for value in args.values():
+                if isinstance(value, dict):
+                    raise QueryError(
+                        "preview_update_many only supports equality and IN "
+                        "filters in key columns"
+                    )
+            changes = {self._get_column_name(k): v for k, v in changes.items()}
+            changes = {k: v for k, v in changes.items() if self.has_column(k)}
+            clause = self._args_to_clause(args)
+            candidates: dict[tuple[Any, ...], dict[str, Any]] = {}
+            for db_row in self.find(clause):
+                pk = tuple(db_row[c] for c in pk_columns)
+                if pk not in overlay:
+                    candidates[pk] = dict(db_row)
+            # Rows touched by earlier corrections may now match (or no
+            # longer match) based on their simulated state.
+            for pk, (base, pending) in overlay.items():
+                if _row_matches({**base, **pending}, args):
+                    candidates[pk] = base
+            entry = UpdatePlanEntry(row=row, keys=list(item_keys))
+            for pk, base in candidates.items():
+                _, pending = overlay.get(pk, (base, {}))
+                entry.targets.append(
+                    UpdateTarget(
+                        primary_key=pk,
+                        before={**base, **pending},
+                        changes=dict(changes),
+                    )
+                )
+                new_pending = dict(pending)
+                new_pending.update(changes)
+                overlay[pk] = (base, new_pending)
+            plan.entries.append(entry)
+        return plan
+
+    def apply_update_plan(self, plan: UpdatePlan) -> int:
+        """Commit a previously generated update preview in one transaction.
+
+        Only the exact rows captured by :py:meth:`preview_update_many()
+        <dataset.Table.preview_update_many>` are written, each guarded by
+        its simulated ``before`` state. If any of these rows was modified
+        (or deleted) since the preview was generated, the whole batch is
+        rolled back and a :py:class:`StalePreviewError
+        <dataset.util.StalePreviewError>` is raised, so the caller can
+        re-run the preview and ask for confirmation again::
+
+            plan = table.preview_update_many(rows, keys=['contract', 'stage'])
+            try:
+                table.apply_update_plan(plan)
+            except StalePreviewError:
+                plan = table.preview_update_many(rows, keys=['contract', 'stage'])
+
+        Returns the number of rows written.
+        """
+        if plan.table_name != self.name:
+            raise DatasetError(
+                f"Update plan was previewed for table '{plan.table_name}', "
+                f"not '{self.name}'"
+            )
+        applied = 0
+        with self.db:
+            for entry in plan.entries:
+                for target in entry.targets:
+                    clause = and_(
+                        True,
+                        *[
+                            self.table.c[column] == value
+                            for column, value in target.before.items()
+                        ],
+                    )
+                    if self.count(clause) != 1:
+                        raise StalePreviewError(
+                            f"Row {target.primary_key} in table "
+                            f"'{self.name}' was modified since the update "
+                            f"plan was previewed; please re-run "
+                            f"preview_update_many() and confirm the new "
+                            f"plan."
+                        )
+                    if not len(target.changes):
+                        continue
+                    stmt = self.table.update().where(clause).values(target.changes)
+                    rp = self.db.executable.execute(stmt)
+                    if rp.supports_sane_rowcount() and rp.rowcount != 1:
+                        raise StalePreviewError(
+                            f"Row {target.primary_key} in table "
+                            f"'{self.name}' was modified since the update "
+                            f"plan was previewed; please re-run "
+                            f"preview_update_many() and confirm the new plan."
+                        )
+                    applied += 1
+        return applied
+
     def upsert(
         self,
         row: WriteRow,
@@ -579,7 +742,10 @@ class Table:
         return args, row_
 
     def create_column(
-        self, name: str, type: ColumnType, **kwargs: object  # noqa: A002
+        self,
+        name: str,
+        type: ColumnType,
+        **kwargs: object,  # noqa: A002
     ) -> None:
         """Create a new column ``name`` of a specified type.
         ::

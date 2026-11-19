@@ -52,6 +52,10 @@ class QueryError(DatasetError):
     pass
 
 
+class StalePreviewError(DatasetError):
+    """Raised when rows changed between preview and commit of an update plan."""
+
+
 def iter_result_proxy(
     rp: ResultProxy[Any], step: int | None = None
 ) -> Iterator[Row[Any]]:

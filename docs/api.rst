@@ -19,8 +19,22 @@ Table
 -----
 
 .. autoclass:: dataset.Table
-   :members: exists, columns, find, find_one, all, count, distinct, insert, insert_ignore, insert_many, update, update_many, upsert, upsert_many, delete, create_column, create_column_by_example, drop_column, create_index, drop, has_column, has_index
+   :members: exists, columns, find, find_one, all, count, distinct, insert, insert_ignore, insert_many, update, update_many, preview_update_many, apply_update_plan, upsert, upsert_many, delete, create_column, create_column_by_example, drop_column, create_index, drop, has_column, has_index
    :special-members: __len__, __iter__
+
+
+Update plans
+------------
+
+.. autoclass:: dataset.UpdatePlan
+   :members: affected_primary_keys, is_noop
+
+.. autoclass:: dataset.UpdatePlanEntry
+   :members: primary_keys
+
+.. autoclass:: dataset.UpdateTarget
+
+.. autoexception:: dataset.StalePreviewError
 
 
 Data Export
