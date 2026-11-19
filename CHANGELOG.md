@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Add an optional grouped mode to
+  [`datajudge.BetweenRequirement.add_n_rows_max_loss_constraint`][datajudge.requirements.BetweenRequirement.add_n_rows_max_loss_constraint].
+  When `group_columns1` and `group_columns2` are provided, the maximal relative
+  loss is enforced per group instead of on the total row count, so an overall
+  pass can no longer mask a group being cleared. Groups that vanish from the
+  first table are treated as a full (100%) loss, groups without a historical
+  baseline (including zero-baseline groups) are reported separately and do not
+  enter the relative loss average.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

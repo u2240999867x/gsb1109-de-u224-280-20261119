@@ -139,6 +139,34 @@ def int_square_table(engine, metadata):
 
 
 @pytest.fixture(scope="module")
+def brand_table1(engine, metadata):
+    # Current table: brand "B" vanished, brand "C" grew and brand "D" is new.
+    table_name = "brand_table1"
+    columns = [sa.Column("brand", _string_column(engine))]
+    data = (
+        [{"brand": "A"} for _ in range(90)]
+        + [{"brand": "C"} for _ in range(30)]
+        + [{"brand": "D"} for _ in range(7)]
+    )
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
+def brand_table2(engine, metadata):
+    # Baseline table holding the historical row counts per brand.
+    table_name = "brand_table2"
+    columns = [sa.Column("brand", _string_column(engine))]
+    data = (
+        [{"brand": "A"} for _ in range(100)]
+        + [{"brand": "B"} for _ in range(50)]
+        + [{"brand": "C"} for _ in range(20)]
+    )
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
 def mix_table1(engine, metadata):
     table_name = "mix_table1"
     columns = [

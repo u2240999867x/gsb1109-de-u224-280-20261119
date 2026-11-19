@@ -235,6 +235,48 @@ def test_n_rows_max_loss_between(engine, int_table2, int_table1, data):
     assert operation(req[0].test(engine).outcome)
 
 
+def test_n_rows_max_loss_grouped(engine, brand_table2, brand_table1):
+    # Baseline: brand A = 100, B = 50, C = 20.
+    # Current: brand A = 90 (10% loss), B vanished (100% loss),
+    # C = 30 (growth), D = 7 (new brand without a baseline).
+    # The overall loss is about 25% and would mask the vanishing of brand B.
+    req = requirements.BetweenRequirement.from_tables(*brand_table1, *brand_table2)
+    req.add_n_rows_max_loss_constraint(
+        constant_max_relative_loss=0.5,
+        group_columns1=["brand"],
+        group_columns2=["brand"],
+    )
+    test_result = req[0].test(engine)
+    # The vanished brand B makes the grouped constraint fail while the
+    # total-row-count comparison would still pass.
+    assert not test_result.outcome
+    message = test_result.failure_message
+    assert "'B': 50 -> 0 rows (loss 100.000000%)" in message
+    assert "'D': 7 rows" in message
+
+
+def test_n_rows_max_loss_grouped_tolerant(engine, brand_table2, brand_table1):
+    req = requirements.BetweenRequirement.from_tables(*brand_table1, *brand_table2)
+    req.add_n_rows_max_loss_constraint(
+        constant_max_relative_loss=1.0,
+        group_columns1=["brand"],
+        group_columns2=["brand"],
+    )
+    test_result = req[0].test(engine)
+    assert test_result.outcome, test_result.failure_message
+
+
+def test_n_rows_max_loss_ungrouped_masks_cleared_brand(
+    engine, brand_table2, brand_table1
+):
+    # Without grouping, the ~25% total loss passes the 50% threshold even
+    # though brand B disappeared completely.
+    req = requirements.BetweenRequirement.from_tables(*brand_table1, *brand_table2)
+    req.add_n_rows_max_loss_constraint(constant_max_relative_loss=0.5)
+    test_result = req[0].test(engine)
+    assert test_result.outcome, test_result.failure_message
+
+
 @pytest.mark.parametrize(
     "data",
     [

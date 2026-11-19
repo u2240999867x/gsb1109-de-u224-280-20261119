@@ -1478,6 +1478,8 @@ class BetweenRequirement(Requirement):
         date_range_loss_deviation: float | None = None,
         condition1: Condition | None = None,
         condition2: Condition | None = None,
+        group_columns1: list[str] | None = None,
+        group_columns2: list[str] | None = None,
         name: str | None = None,
         cache_size=None,
     ) -> None:
@@ -1488,12 +1490,27 @@ class BetweenRequirement(Requirement):
         $$n^{rows}_1 \geq n^{rows}_2 \cdot (1 - \text{cmrl})$$
 
         See readme for more information on ``constant_max_relative_loss``.
+
+        If ``group_columns1`` and ``group_columns2`` are given, the assertion is
+        evaluated per group instead of on the total row count. Every group
+        present in the second table must satisfy the maximal relative loss on
+        its own, so that an overall pass cannot mask a group being cleared.
+        Groups that vanish from the first table are treated as a full (100%)
+        loss. Groups that only occur in the first table have no historical
+        baseline and are reported separately without entering the relative
+        loss average. Groups with a zero baseline in the second table are
+        excluded from the percentage average as well. Either both or neither
+        of ``group_columns1`` and ``group_columns2`` must be provided.
         """
         max_relative_loss_getter = self._get_deviation_getter(
             constant_max_relative_loss, date_range_loss_deviation
         )
-        ref = DataReference(self._data_source, condition=condition1)
-        ref2 = DataReference(self._data_source2, condition=condition2)
+        ref = DataReference(
+            self._data_source, columns=group_columns1, condition=condition1
+        )
+        ref2 = DataReference(
+            self._data_source2, columns=group_columns2, condition=condition2
+        )
         self._constraints.append(
             nrows_constraints.NRowsMaxLoss(
                 ref,

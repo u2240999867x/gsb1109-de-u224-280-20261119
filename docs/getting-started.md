@@ -91,6 +91,11 @@ date_growth := (max_date_table_2 - min_date_table_2) / (max_date_table_1 - min_d
 
 This example revolving around `NRowsMinGain` generalizes to many `Constraint` s concerned with growth, gain, loss or shrinkage limitations.
 
+Limitations of loss can also be evaluated per group rather than on the total row count. Passing `group_columns1` and `group_columns2` to
+[`add_n_rows_max_loss_constraint`][datajudge.requirements.BetweenRequirement.add_n_rows_max_loss_constraint] enforces the maximal relative loss for every group individually,
+so that an overall pass cannot mask a group being cleared. Groups disappearing from the first table are counted as a full loss, while groups that only exist in the
+first table and groups with a zero baseline in the second table have no historical basis and are reported separately without entering the relative loss average.
+
 ## Testing a specification
 
 In order to test whether the `Constraint` s expressed in a specification hold true, you can simply run
