@@ -1,0 +1,185 @@
+import numpy as np
+import pandas as pd
+from asv_runner.benchmarks.mark import parameterize
+
+import xarray as xr
+
+from . import randn, requires_dask
+
+nx = 3000
+long_nx = 30000
+ny = 200
+nt = 1000
+window = 20
+# numbagg and bottleneck are only used for rolling along a single dimension
+BACKENDS = ["numbagg", "bottleneck", "numpy"]
+
+randn_xy = randn((nx, ny), frac_nan=0.1)
+randn_xt = randn((nx, nt))
+randn_t = randn((nt,))
+randn_long = randn((long_nx,), frac_nan=0.1)
+
+
+def _create_ds():
+    return xr.Dataset(
+        {
+            "var1": (("x", "y"), randn_xy),
+            "var2": (("x", "t"), randn_xt),
+            "var3": (("t",), randn_t),
+        },
+        coords={
+            "x": np.arange(nx),
+            "y": np.linspace(0, 1, ny),
+            "t": pd.date_range("1970-01-01", periods=nt, freq="D"),
+            "x_coords": ("x", np.linspace(1.1, 2.1, nx)),
+        },
+    )
+
+
+def _backend_options(backend):
+    # numbagg is used before bottleneck if both are enabled and have the function
+    return xr.set_options(
+        use_numbagg=backend == "numbagg", use_bottleneck=backend == "bottleneck"
+    )
+
+
+def _requires_rolling_method(func, *args):
+    """Set up benchmarks whose first parameter is a rolling method.
+
+    Skip the methods that don't exist in older versions or in pandas (if the last
+    parameter is "pandas"). asv only skips benchmarks when a setup raises
+    NotImplementedError, not the benchmark itself.
+    """
+    if args and args[-1] == "pandas":
+        rolling = pd.Series([0.0]).rolling(1)
+    else:
+        rolling = xr.DataArray([0.0], dims="x").rolling(x=1)
+    if not hasattr(rolling, func):
+        raise NotImplementedError(f"{type(rolling).__name__}.{func} doesn't exist")
+
+
+class Rolling:
+    def setup(self, *args, **kwargs):
+        self.ds = _create_ds()
+        self.da_long = xr.DataArray(
+            randn_long, dims="x", coords={"x": np.arange(long_nx) * 0.1}
+        )
+
+    @parameterize(
+        {"func": ["mean", "count"], "center": [True, False], "backend": BACKENDS}
+    )
+    def time_rolling(self, func, center, backend):
+        with _backend_options(backend):
+            getattr(self.ds.rolling(x=window, center=center), func)().load()
+
+    @parameterize(
+        {
+            "func": ["mean", "count", "max", "argmax", "idxmax"],
+            "center": [True, False],
+            "backend": [*BACKENDS, "pandas"],
+        }
+    )
+    def time_rolling_long(self, func, center, backend):
+        if backend == "pandas":
+            rolling = self.da_long.to_series().rolling(
+                window=window, center=center, min_periods=1
+            )
+            getattr(rolling, func)()
+        else:
+            rolling = self.da_long.rolling(x=window, center=center, min_periods=1)
+            with _backend_options(backend):
+                getattr(rolling, func)().load()
+
+    time_rolling_long.setup = _requires_rolling_method
+
+    @parameterize({"window_": [20, 40]})
+    def time_rolling_np(self, window_):
+        self.ds.rolling(x=window_, min_periods=5).reduce(np.nansum).load()
+
+    @parameterize({"center": [True, False]})
+    def time_rolling_construct(self, center):
+        self.ds.rolling(x=window, center=center).construct("window_dim").sum(
+            dim="window_dim"
+        ).load()
+
+
+class RollingDask(Rolling):
+    def setup(self, *args, **kwargs):
+        requires_dask()
+        super().setup(**kwargs)
+        # small chunks make dask's automatic rechunking of the windows explode
+        # the number of tasks
+        self.ds = self.ds.chunk({"x": 500, "y": 200, "t": 500})
+        self.da_long = self.da_long.chunk({"x": 10000})
+
+
+class Cumulative:
+    # cumulative windows span the whole dimension, so the reductions without
+    # bottleneck scale quadratically with its size
+    def setup(self, *args, **kwargs):
+        self.da = xr.DataArray(
+            randn((20, nt), frac_nan=0.1),
+            dims=("x", "t"),
+            coords={"t": pd.date_range("1970-01-01", periods=nt, freq="D")},
+        )
+
+    @parameterize(
+        {"func": ["sum", "mean", "max", "argmax", "idxmax"], "backend": BACKENDS}
+    )
+    def time_cumulative(self, func, backend):
+        with _backend_options(backend):
+            getattr(self.da.cumulative("t"), func)().load()
+
+    time_cumulative.setup = _requires_rolling_method
+
+    def time_cumsum(self):
+        # reference for time_cumulative with func="sum"
+        self.da.cumsum("t").load()
+
+    @parameterize({"func": ["sum", "max", "argmax"], "backend": BACKENDS})
+    def peakmem_cumulative(self, func, backend):
+        with _backend_options(backend):
+            getattr(self.da.cumulative("t"), func)().load()
+
+
+class CumulativeDask(Cumulative):
+    def setup(self, *args, **kwargs):
+        requires_dask()
+        super().setup(**kwargs)
+        self.da = self.da.chunk({"t": 250})
+
+
+class RollingMemory:
+    def setup(self, *args, **kwargs):
+        self.ds = _create_ds()
+
+
+class DataArrayRollingMemory(RollingMemory):
+    @parameterize({"func": ["sum", "max", "mean"]})
+    def peakmem_ndrolling_reduce(self, func):
+        getattr(self.ds.var1.rolling(x=10, y=4), func)()
+
+    @parameterize({"func": ["sum", "max", "mean"], "backend": BACKENDS})
+    def peakmem_1drolling_reduce(self, func, backend):
+        with _backend_options(backend):
+            getattr(self.ds.var3.rolling(t=100), func)()
+
+    @parameterize({"stride": [None, 5, 50]})
+    def peakmem_1drolling_construct(self, stride):
+        self.ds.var2.rolling(t=100).construct("w", stride=stride)
+        self.ds.var3.rolling(t=100).construct("w", stride=stride)
+
+
+class DatasetRollingMemory(RollingMemory):
+    @parameterize({"func": ["sum", "max", "mean"]})
+    def peakmem_ndrolling_reduce(self, func):
+        getattr(self.ds.rolling(x=10, y=4), func)()
+
+    @parameterize({"func": ["sum", "max", "mean"], "backend": BACKENDS})
+    def peakmem_1drolling_reduce(self, func, backend):
+        with _backend_options(backend):
+            getattr(self.ds.rolling(t=100), func)()
+
+    @parameterize({"stride": [None, 5, 50]})
+    def peakmem_1drolling_construct(self, stride):
+        self.ds.rolling(t=100).construct("w", stride=stride)
