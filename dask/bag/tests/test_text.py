@@ -151,3 +151,80 @@ def test_complex_delimiter():
         vals = read_text(".test.delim.txt", linedelimiter="$$$$", blocksize=2).compute()
         assert vals[-1] == "hello"
         assert vals[0].endswith("$$$$")
+
+
+def test_read_text_missing_raises_by_default(tmp_path):
+    urlpath = str(tmp_path / "missing.*.txt")
+    with pytest.raises(ValueError, match="No files found"):
+        read_text(urlpath)
+    with pytest.raises(OSError, match="resolved to no files"):
+        read_text(urlpath, blocksize="10MB")
+
+
+def test_read_text_missing_returns_empty_bag(tmp_path):
+    import dask.bag as db
+
+    urlpath = str(tmp_path / "missing.*.txt")
+    bag = read_text(urlpath, on_missing="empty", label="late-source")
+    assert isinstance(bag, db.Bag)
+    assert bag.npartitions == 0
+    assert bag.source_label == "late-source"
+    assert bag.compute(scheduler="sync") == []
+
+    # The blocksize branch (read_bytes) reports missing files as OSError.
+    bag_blocked = read_text(
+        urlpath, blocksize="10MB", on_missing="empty", label="late-source"
+    )
+    assert bag_blocked.npartitions == 0
+    assert bag_blocked.source_label == "late-source"
+
+
+def test_read_text_missing_no_collection(tmp_path):
+    urlpath = str(tmp_path / "missing.*.txt")
+    assert read_text(urlpath, collection=False, on_missing="empty") == []
+
+
+def test_read_text_on_missing_invalid(tmp_path):
+    with pytest.raises(ValueError, match="on_missing"):
+        read_text(str(tmp_path / "*.txt"), on_missing="bogus")
+
+
+def test_read_text_on_missing_empty_keeps_present_files(tmp_path):
+    fn = tmp_path / "present.txt"
+    fn.write_text("a\nb\n")
+    bag = read_text(str(fn), on_missing="empty", label="present")
+    assert bag.npartitions == 1
+    assert bag.compute(scheduler="sync") == ["a\n", "b\n"]
+    assert bag.source_label is None
+
+
+def test_read_text_missing_sources_concat_with_origins(tmp_path):
+    import dask.bag as db
+
+    present_path = tmp_path / "present.txt"
+    present_path.write_text("x\ny\n")
+
+    sources = {
+        "missing-streaming": read_text(
+            str(tmp_path / "missing-1.*.txt"),
+            on_missing="empty",
+            label="missing-streaming",
+        ),
+        "present": read_text(str(present_path)),
+        "missing-blocked": read_text(
+            str(tmp_path / "missing-2.*.txt"),
+            blocksize="10MB",
+            on_missing="empty",
+            label="missing-blocked",
+        ),
+    }
+    bag, origins, empty_sources = db.concat_with_origins(sources)
+
+    assert bag.compute(scheduler="sync") == ["x\n", "y\n"]
+    assert empty_sources == [
+        ("missing-streaming", 0),
+        ("missing-blocked", 2),
+    ]
+    assert {o.source for o in origins} == {"present"}
+    assert [(o.source_index, o.source_partition) for o in origins] == [(1, 0)]
+

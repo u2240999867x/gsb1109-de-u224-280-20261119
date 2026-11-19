@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import io
 from functools import partial
+from typing import Literal
 
 from fsspec.core import open_files
 from tlz import concat
 
-from dask.bag.core import from_delayed
+from dask.bag.core import empty_bag, from_delayed
 from dask.bytes import read_bytes
 from dask.delayed import delayed
 from dask.utils import parse_bytes, system_encoding
@@ -25,6 +26,8 @@ def read_text(
     storage_options=None,
     files_per_partition=None,
     include_path=False,
+    on_missing: Literal["error", "empty"] = "error",
+    label=None,
 ):
     """Read lines from text files
 
@@ -56,6 +59,17 @@ def read_text(
         Whether or not to include the path in the bag.
         If true, elements are tuples of (line, path).
         Default is False.
+    on_missing : {"error", "empty"}, optional
+        What to do when ``urlpath`` resolves to no files. The default
+        ``"error"`` raises (preserving historical behavior). ``"empty"``
+        returns an empty bag with zero partitions instead, which can be
+        concatenated with other sources via
+        :func:`dask.bag.concat_with_origins` and shows up as an empty source
+        rather than failing the whole run. Only used when ``collection`` is
+        True.
+    label : hashable, optional
+        Source label to attach to the returned empty bag when
+        ``on_missing="empty"`` and no files are found. Ignored otherwise.
 
     Examples
     --------
@@ -77,6 +91,13 @@ def read_text(
     >>> b.take(1) # doctest: +SKIP
     (('first line of the first file', '/home/dask/myfiles.0.txt'),)
 
+    A source that has no files for the day can be read as an empty bag instead
+    of raising:
+
+    >>> b = read_text('today.*.json', on_missing='empty', label='today')  # doctest: +SKIP
+    >>> b.npartitions  # doctest: +SKIP
+    0
+
     Returns
     -------
     dask.bag.Bag or list
@@ -85,7 +106,12 @@ def read_text(
     See Also
     --------
     from_sequence: Build bag from Python sequence
+    dask.bag.empty_bag : Build a labeled empty bag directly
     """
+    if on_missing not in ("error", "empty"):
+        raise ValueError(
+            f"on_missing must be 'error' or 'empty', got {on_missing!r}"
+        )
     if blocksize is not None and files_per_partition is not None:
         raise ValueError("Only one of blocksize or files_per_partition can be set")
     if isinstance(blocksize, str):
@@ -130,15 +156,22 @@ def read_text(
         # special case for linedelimiter=None: we will need to split on an actual bytestring
         # and the line reader will then use "universal" mode. Just as well that \r\n and \n
         # will both work (thankfully \r for MacOS is no longer a thing)
-        o = read_bytes(
-            urlpath,
-            delimiter=linedelimiter.encode() if linedelimiter is not None else b"\n",
-            blocksize=blocksize,
-            sample=False,
-            compression=compression,
-            include_path=include_path,
-            **(storage_options or {}),
-        )
+        try:
+            o = read_bytes(
+                urlpath,
+                delimiter=linedelimiter.encode()
+                if linedelimiter is not None
+                else b"\n",
+                blocksize=blocksize,
+                sample=False,
+                compression=compression,
+                include_path=include_path,
+                **(storage_options or {}),
+            )
+        except OSError as e:
+            if on_missing == "empty" and str(e).endswith("resolved to no files"):
+                return _return_missing(collection, label)
+            raise
         raw_blocks = o[1]
         blocks = [
             delayed(decode)(b, encoding, errors, linedelimiter)
@@ -153,12 +186,21 @@ def read_text(
             ]
 
     if not blocks:
+        if on_missing == "empty":
+            return _return_missing(collection, label)
         raise ValueError("No files found", urlpath)
 
     if collection:
         blocks = from_delayed(blocks)
 
     return blocks
+
+
+def _return_missing(collection: bool, label):
+    """Handle a source with no files according to ``on_missing``."""
+    if collection:
+        return empty_bag(label)
+    return []
 
 
 def file_to_blocks(include_path, lazy_file, delimiter=None):

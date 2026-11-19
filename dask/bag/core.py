@@ -7,9 +7,11 @@ import operator
 import uuid
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Hashable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial, reduce, wraps
 from random import Random
+from typing import TypeAlias
 from urllib.request import urlopen
 
 import tlz as toolz
@@ -482,12 +484,21 @@ class Bag(DaskMethodsMixin):
     30
     """
 
-    def __init__(self, dsk: Graph, name: str, npartitions: int):
+    def __init__(
+        self,
+        dsk: Graph,
+        name: str,
+        npartitions: int,
+        source_label: Hashable | None = None,
+    ):
         if not isinstance(dsk, HighLevelGraph):
             dsk = HighLevelGraph.from_collections(name, dsk, dependencies=[])
         self.dask = dsk
         self.name = name
         self.npartitions = npartitions
+        # Optional provenance tag, e.g. set by ``empty_bag``. Ordinary bags
+        # leave this as ``None``.
+        self.source_label = source_label
 
     def __dask_graph__(self) -> Graph:
         return self.dask
@@ -514,7 +525,7 @@ class Bag(DaskMethodsMixin):
         name = self.name
         if rename:
             name = rename.get(name, name)
-        return type(self)(dsk, name, self.npartitions)
+        return type(self)(dsk, name, self.npartitions, self.source_label)
 
     def __str__(self):
         return f"dask.bag<{key_split(self.name)}, npartitions={self.npartitions}>"
@@ -647,10 +658,15 @@ class Bag(DaskMethodsMixin):
         return (self.dask, self.name, self.npartitions)
 
     def __getstate__(self):
-        return self._args
+        return (self.dask, self.name, self.npartitions, self.source_label)
 
     def __setstate__(self, state):
-        self.dask, self.name, self.npartitions = state
+        if len(state) == 4:
+            self.dask, self.name, self.npartitions, self.source_label = state
+        else:
+            # Backwards compatibility with bags pickled before source_label.
+            self.dask, self.name, self.npartitions = state
+            self.source_label = None
 
     def filter(self, predicate):
         """Filter elements in collection by a predicate function.
@@ -1854,8 +1870,108 @@ def dictitems(d):
     return list(d.items())
 
 
-def concat(bags):
+@dataclass(frozen=True)
+class PartitionOrigin:
+    """Provenance of a single output partition of a concatenated bag.
+
+    Records where one partition of a bag produced by :func:`concat` (or
+    :func:`concat_with_origins`) came from, so the mapping stays usable after
+    the output partitions are reordered or empty ones are dropped.
+
+    Parameters
+    ----------
+    partition : int
+        Index of the partition in the concatenated output bag.
+    source : Hashable
+        Label of the originating source, or ``None`` when no label was given.
+    source_index : int
+        Position of the source in the sequence passed to the concat call.
+    source_partition : int
+        Index of the partition within the originating source bag.
+
+    See Also
+    --------
+    concat_with_origins : Concatenate sources while collecting provenance.
+    """
+
+    partition: int
+    source: Hashable | None
+    source_index: int
+    source_partition: int
+
+
+SourceInput: TypeAlias = Sequence[Bag] | Mapping[Hashable, Bag]
+
+
+def _normalize_sources(
+    sources: SourceInput,
+) -> list[tuple[Hashable, Bag]]:
+    """Normalize a bags sequence or ``{label: bag}`` mapping into pairs.
+
+    Returns a list of ``(label, bag)`` pairs. For a plain sequence the label is
+    the bag's layer name; for a mapping each key is used verbatim as the label.
+    """
+    if isinstance(sources, dict):
+        return list(sources.items())
+    pairs = []
+    for bag in sources:
+        label = getattr(bag, "source_label", None)
+        pairs.append((bag.name if label is None else label, bag))
+    return pairs
+
+
+def _build_concat(
+    sources: SourceInput,
+) -> tuple[Bag, list[PartitionOrigin], list[tuple[Hashable, int]]]:
+    """Build a concatenated bag and per-partition provenance from sources.
+
+    Each input partition becomes exactly one output partition, in source order,
+    including empty partitions. Sources without any partitions (e.g. a source
+    whose files are missing) contribute no partitions but are still represented
+    in the returned empty-source records.
+
+    Returns
+    -------
+    bag : Bag
+    origins : list[PartitionOrigin]
+        Provenance ordered by output partition index.
+    empty_sources : list[tuple[Hashable, int]]
+        ``(label, source_index)`` pairs for sources with zero partitions.
+    """
+    pairs = _normalize_sources(sources)
+    token = tokenize(*(bag for _, bag in pairs))
+    name = f"concat-{token}"
+    dsk = {}
+    origins = []
+    empty_sources = []
+    out_index = 0
+    for source_index, (label, bag) in enumerate(pairs):
+        keys = bag.__dask_keys__()
+        if not keys:
+            empty_sources.append((label, source_index))
+        for source_partition, key in enumerate(keys):
+            dsk[(name, out_index)] = key
+            origins.append(
+                PartitionOrigin(
+                    partition=out_index,
+                    source=label,
+                    source_index=source_index,
+                    source_partition=source_partition,
+                )
+            )
+            out_index += 1
+    graph = HighLevelGraph.from_collections(
+        name, dsk, dependencies=[bag for _, bag in pairs]
+    )
+    return Bag(graph, name, len(dsk)), origins, empty_sources
+
+
+def concat(bags: SourceInput) -> Bag:
     """Concatenate many bags together, unioning all elements.
+
+    Every partition of every input bag becomes one partition of the result,
+    in the order the bags are given (including empty partitions). Bags with
+    zero partitions are accepted and simply contribute nothing.
 
     >>> import dask.bag as db
     >>> a = db.from_sequence([1, 2, 3])
@@ -1864,13 +1980,117 @@ def concat(bags):
 
     >>> list(c)
     [1, 2, 3, 4, 5, 6]
+
+    See Also
+    --------
+    concat_with_origins : Same concatenation with a partition-to-source mapping.
     """
-    token = tokenize(*bags)
-    name = f"concat-{token}"
-    counter = itertools.count(0)
-    dsk = {(name, next(counter)): key for bag in bags for key in bag.__dask_keys__()}
-    graph = HighLevelGraph.from_collections(name, dsk, dependencies=bags)
-    return Bag(graph, name, len(dsk))
+    bag, _, _ = _build_concat(bags)
+    return bag
+
+
+def concat_with_origins(
+    sources: SourceInput,
+) -> tuple[Bag, list[PartitionOrigin], list[tuple[Hashable, int]]]:
+    """Concatenate labeled source bags and retain partition provenance.
+
+    Combines several source bags into one bag the same way :func:`concat`
+    does, while recording which source (and which partition of it) every output
+    partition came from. The mapping is keyed by output partition index, so it
+    keeps working when the partitions are later reordered or the empty ones are
+    filtered out.
+
+    A source that has no partitions -- for example one whose input files are
+    missing for the day -- gets its own record in ``empty_sources``. It never
+    contributes a partition, so no partition of another source can be
+    mislabeled with its name.
+
+    Parameters
+    ----------
+    sources : Sequence[Bag] or Mapping[Hashable, Bag]
+        The bags to concatenate, either as a sequence or as a mapping from
+        source labels to bags. With a sequence, each bag's layer name
+        (``bag.name``) is used as its label.
+
+    Returns
+    -------
+    result : Bag
+        The concatenated bag.
+    origins : list[PartitionOrigin]
+        One :class:`PartitionOrigin` per output partition, ordered by output
+        partition index.
+    empty_sources : list[tuple[Hashable, int]]
+        ``(source label, source index)`` pairs for sources with zero
+        partitions. Empty when every source has at least one partition.
+
+    Examples
+    --------
+    >>> import dask.bag as db
+    >>> morning = db.from_sequence([1, 2], npartitions=2)
+    >>> evening = db.from_sequence([3, 4], npartitions=2)
+    >>> bag, origins, empty_sources = concat_with_origins(
+    ...     {"morning": morning, "evening": evening}
+    ... )
+    >>> bag.compute()
+    [1, 2, 3, 4]
+    >>> [(o.partition, o.source, o.source_partition) for o in origins]
+    [(0, 'morning', 0), (1, 'morning', 1), (2, 'evening', 0), (3, 'evening', 1)]
+    >>> empty_sources
+    []
+
+    Dropping empty output partitions does not invalidate the mapping:
+
+    >>> lengths = bag.map_partitions(lambda part: [len(list(part))]).compute()
+    >>> kept = [o for o, n in zip(origins, lengths) if n]
+    >>> [(o.partition, o.source) for o in kept]
+    [(0, 'morning'), (1, 'morning'), (2, 'evening'), (3, 'evening')]
+    """
+    return _build_concat(sources)
+
+
+def empty_bag(label: Hashable | None = None) -> Bag:
+    """Create a bag with no partitions, optionally tagged with a source label.
+
+    This stands in for a source that has no data for a run (for example a daily
+    input whose files are missing). Unlike an empty *partition*, the resulting
+    bag has zero partitions, so concatenating it into other bags does not add
+    any output partition and cannot cause another source's partitions to be
+    mislabeled.
+
+    Parameters
+    ----------
+    label : Hashable, optional
+        Source label to associate with the empty bag. Stored on the bag as
+        ``source_label``; it is surfaced by :func:`concat_with_origins` in its
+        ``empty_sources`` record.
+
+    Returns
+    -------
+    Bag
+        A bag with ``npartitions == 0``.
+
+    Examples
+    --------
+    >>> import dask.bag as db
+    >>> missing = db.empty_bag("late-source")
+    >>> missing.npartitions
+    0
+    >>> missing.compute()
+    []
+    >>> present = db.from_sequence([1, 2, 3])
+    >>> bag, origins, empty_sources = db.concat_with_origins(
+    ...     {"missing": missing, "present": present}
+    ... )
+    >>> bag.compute()
+    [1, 2, 3]
+    >>> empty_sources
+    [('missing', 0)]
+    >>> [(o.partition, o.source) for o in origins]
+    [(0, 'present'), (1, 'present'), (2, 'present')]
+    """
+    token = tokenize("empty-bag", label)
+    name = f"empty-bag-{token}"
+    return Bag({}, name, 0, source_label=label)
 
 
 def reify(seq):

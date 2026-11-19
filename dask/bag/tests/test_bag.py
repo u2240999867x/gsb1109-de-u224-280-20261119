@@ -22,7 +22,10 @@ import dask.bag as db
 from dask._task_spec import List, Task
 from dask.bag.core import (
     Bag,
+    PartitionOrigin,
     collect,
+    concat_with_origins,
+    empty_bag,
     empty_safe_apply,
     from_delayed,
     lazify,
@@ -878,6 +881,165 @@ def test_concat_after_map():
     b = db.from_sequence([4, 5])
     result = db.concat([a.map(inc), b])
     assert list(result) == [2, 3, 4, 5]
+
+
+def test_concat_with_origins_mapping_labels():
+    morning = db.from_sequence([1, 2, 3], npartitions=2)
+    evening = db.from_sequence([4, 5], npartitions=1)
+    bag, origins, empty_sources = concat_with_origins(
+        {"morning": morning, "evening": evening}
+    )
+
+    assert bag.compute(scheduler="sync") == [1, 2, 3, 4, 5]
+    assert bag.npartitions == 3
+    assert empty_sources == []
+    assert origins == [
+        PartitionOrigin(0, "morning", 0, 0),
+        PartitionOrigin(1, "morning", 0, 1),
+        PartitionOrigin(2, "evening", 1, 0),
+    ]
+    # Origins are aligned positionally with the output partitions.
+    assert [o.partition for o in origins] == list(range(bag.npartitions))
+
+
+def test_concat_with_origins_sequence_uses_bag_names():
+    a = db.from_sequence([1, 2], npartitions=2)
+    b = db.from_sequence([3], npartitions=1)
+    bag, origins, empty_sources = concat_with_origins([a, b])
+
+    assert bag.compute(scheduler="sync") == [1, 2, 3]
+    assert empty_sources == []
+    assert [(o.source, o.source_index, o.source_partition) for o in origins] == [
+        (a.name, 0, 0),
+        (a.name, 0, 1),
+        (b.name, 1, 0),
+    ]
+
+
+def test_concat_with_origins_after_repartition_and_empty_filter():
+    a = db.from_sequence([1, 2, 3, 4], npartitions=4)
+    b = db.from_sequence([5, 6], npartitions=2)
+    bag, origins, _ = concat_with_origins({"a": a, "b": b})
+
+    # Repartition changes the output layout but provenance still locates
+    # every retained partition by its original index.
+    repartitioned = bag.repartition(3)
+    assert repartitioned.npartitions == 3
+    assert [o.partition for o in origins] == list(range(bag.npartitions))
+
+    # A filter that empties one partition: dropping it must not shift the
+    # source labels of the surviving partitions.
+    filtered = bag.filter(lambda x: x != 3)
+    lengths = filtered.map_partitions(lambda part: [len(list(part))]).compute(
+        scheduler="sync"
+    )
+    assert lengths[2] == 0  # partition 2 held the value 3 from source "a"
+    kept = [o for o, n in zip(origins, lengths) if n]
+    # The empty partition's origin is excluded; surviving origins keep their
+    # original partition index and their true source labels.
+    assert [(o.partition, o.source, o.source_partition) for o in kept] == [
+        (0, "a", 0),
+        (1, "a", 1),
+        (3, "a", 3),
+        (4, "b", 0),
+        (5, "b", 1),
+    ]
+
+
+def test_concat_with_origins_reorder_then_lookup():
+    a = db.from_sequence([1, 2], npartitions=2)
+    b = db.from_sequence([3, 4], npartitions=2)
+    bag, origins, _ = concat_with_origins({"a": a, "b": b})
+
+    # Reorder the output partitions arbitrarily; lookup by partition index
+    # still resolves each segment to the source it came from.
+    order = [3, 0, 2, 1]
+    by_partition = {o.partition: o for o in origins}
+    reordered = [by_partition[i] for i in order]
+    assert [o.source for o in reordered] == ["b", "a", "b", "a"]
+    assert [o.source_partition for o in reordered] == [1, 0, 0, 1]
+
+
+def test_concat_with_origins_empty_source_gets_own_record():
+    missing = empty_bag("missing")
+    present = db.from_sequence([1, 2, 3], npartitions=2)
+    also_missing = empty_bag("also-missing")
+
+    bag, origins, empty_sources = concat_with_origins(
+        {"missing": missing, "present": present, "also-missing": also_missing}
+    )
+
+    assert bag.npartitions == present.npartitions
+    assert bag.compute(scheduler="sync") == [1, 2, 3]
+    # Empty sources are reported independently, never as output partitions.
+    assert empty_sources == [("missing", 0), ("also-missing", 2)]
+    # No output partition is mislabeled with an empty source's label.
+    assert {o.source for o in origins} == {"present"}
+    assert [o.partition for o in origins] == [0, 1]
+    assert [(o.source_index, o.source_partition) for o in origins] == [(1, 0), (1, 1)]
+
+
+def test_concat_with_origins_all_sources_empty():
+    bag, origins, empty_sources = concat_with_origins(
+        {"x": empty_bag("x"), "y": empty_bag("y")}
+    )
+    assert bag.npartitions == 0
+    assert bag.compute(scheduler="sync") == []
+    assert origins == []
+    assert empty_sources == [("x", 0), ("y", 1)]
+
+
+def test_concat_accepts_empty_bag():
+    bag = db.concat([empty_bag("missing"), db.from_sequence([1, 2])])
+    assert bag.compute(scheduler="sync") == [1, 2]
+    assert bag.npartitions == 2
+
+
+def test_empty_bag_label_and_pickle():
+    from pickle import dumps, loads
+
+    bag = empty_bag("late-source")
+    assert bag.npartitions == 0
+    assert bag.source_label == "late-source"
+    assert bag.compute(scheduler="sync") == []
+
+    restored = loads(dumps(bag))
+    assert restored.npartitions == 0
+    assert restored.source_label == "late-source"
+
+    plain = db.from_sequence([1])
+    assert plain.source_label is None
+    assert loads(dumps(plain)).source_label is None
+
+
+def test_concat_with_origins_matches_plain_concat_tokens():
+    a = db.from_sequence([1, 2], npartitions=2)
+    b = db.from_sequence([3, 4], npartitions=2)
+    plain = db.concat([a, b])
+    tracked, _, _ = concat_with_origins([a, b])
+    assert plain.name == tracked.name
+    assert plain.compute(scheduler="sync") == tracked.compute(scheduler="sync")
+    # Plain concat keeps its historical deterministic naming.
+    assert db.concat([a, b]).name == plain.name
+
+
+def test_concat_with_origins_falsy_label_preserved():
+    bag = empty_bag(0)
+    _, origins, empty_sources = concat_with_origins([bag])
+    assert empty_sources == [(0, 0)]
+
+
+def test_empty_bag_label_survives_persist():
+    bag = empty_bag("late-source")
+    persisted = bag.persist(scheduler="sync")
+    assert persisted.npartitions == 0
+    assert persisted.source_label == "late-source"
+
+    present = db.from_sequence([1, 2], npartitions=2)
+    present.source_label = "present"
+    persisted_present = present.persist(scheduler="sync")
+    assert persisted_present.source_label == "present"
+
 
 
 def test_args():

@@ -12,6 +12,7 @@ Create Bags
    from_sequence
    from_delayed
    from_url
+   empty_bag
    range
    read_text
    read_avro
@@ -36,6 +37,8 @@ Top-level functions
    :toctree: generated/
 
    concat
+   concat_with_origins
+   PartitionOrigin
    map
    map_partitions
    to_textfiles
