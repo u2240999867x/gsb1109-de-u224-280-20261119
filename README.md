@@ -525,6 +525,13 @@ m = d.match(pattern, indexes=True)
 # If overwrite is False, existing values will not be overwritten.
 # If concat is True, list values will be concatenated together.
 d.merge(a, b, c, overwrite=True, concat=False)
+
+# Merge the list of dicts at keypath item-by-item instead of replacing it.
+# Items are identified by by_key (default: "sku"); matching items are deeply
+# merged, unmatched items are appended preserving their original order.
+# Duplicate by_key values raise MergeConflictError; a None value still clears
+# the existing value (when overwrite is True).
+d.merge(a, keypath="items", by_key="sku")
 ```
 
 #### `move`

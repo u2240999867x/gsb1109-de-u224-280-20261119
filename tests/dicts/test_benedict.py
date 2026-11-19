@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 from benedict import benedict
+from benedict.exceptions import MergeConflictError
 
 
 class benedict_test_case(unittest.TestCase):
@@ -1601,6 +1602,78 @@ b:
             },
         }
         self.assertEqual(d, r)
+
+    def test_merge_by_keypath_by_key(self) -> None:
+        d = benedict(
+            {
+                "order_id": "A1",
+                "items": [
+                    {"sku": "S1", "qty": 2, "delivery": "2026-12-01"},
+                    {"sku": "S2", "qty": 1, "delivery": "2026-12-05"},
+                ],
+            }
+        )
+        d.merge(
+            {
+                "order_id": "A1",
+                "items": [
+                    {"sku": "S3", "qty": 4, "delivery": "2026-12-10"},
+                    {"sku": "S1", "delivery": None},
+                ],
+            },
+            keypath="items",
+            by_key="sku",
+        )
+        r = {
+            "order_id": "A1",
+            "items": [
+                {"sku": "S1", "qty": 2, "delivery": None},
+                {"sku": "S2", "qty": 1, "delivery": "2026-12-05"},
+                {"sku": "S3", "qty": 4, "delivery": "2026-12-10"},
+            ],
+        }
+        self.assertEqual(d, r)
+
+    def test_merge_by_keypath_by_key_with_custom_separator(self) -> None:
+        d = benedict(
+            {"data": {"lines": [{"sku": "A", "delivery": "old"}]}},
+            keypath_separator="/",
+        )
+        d.merge(
+            {"data": {"lines": [{"sku": "A", "delivery": "new"}]}},
+            keypath="data/lines",
+            by_key="sku",
+        )
+        self.assertEqual(
+            d, {"data": {"lines": [{"sku": "A", "delivery": "new"}]}}
+        )
+        d.deepupdate(
+            {"data": {"lines": [{"sku": "A", "delivery": "again"}]}},
+            keypath="data/lines",
+            by_key="sku",
+        )
+        self.assertEqual(
+            d, {"data": {"lines": [{"sku": "A", "delivery": "again"}]}}
+        )
+
+    def test_merge_by_keypath_by_key_with_conflict(self) -> None:
+        d = benedict({"items": [{"sku": "S1", "delivery": "old"}]})
+        with self.assertRaisesRegex(MergeConflictError, "Duplicate merge key 'sku'"):
+            d.merge(
+                {"items": [{"sku": "S2", "delivery": "a"}, {"sku": "S2"}]},
+                keypath="items",
+                by_key="sku",
+            )
+        self.assertEqual(d, {"items": [{"sku": "S1", "delivery": "old"}]})
+
+    def test_merge_by_keypath_by_key_frozen(self) -> None:
+        d = benedict({"items": [{"sku": "S1"}]}).freeze()
+        with self.assertRaisesRegex(TypeError, "frozen"):
+            d.merge(
+                {"items": [{"sku": "S1", "delivery": "x"}]},
+                keypath="items",
+                by_key="sku",
+            )
 
     def test_move(self) -> None:
         d = {

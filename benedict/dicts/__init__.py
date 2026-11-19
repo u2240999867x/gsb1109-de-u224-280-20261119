@@ -159,11 +159,11 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         """
         return self.clone()
 
-    def deepupdate(self, other: Mapping[str, _V], *args: Any) -> None:
+    def deepupdate(self, other: Mapping[str, _V], *args: Any, **kwargs: Any) -> None:
         """
         Alias of 'merge' method.
         """
-        self.merge(other, *args)
+        self.merge(other, *args, **kwargs)
 
     def dump(self, data: Any = None) -> str:
         """
@@ -269,12 +269,19 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         Sub-dictionaries will be merged together.
         If overwrite is False, existing values will not be overwritten.
         If concat is True, list values will be concatenated together.
+        If keypath (or key) is set, the list of dicts at that keypath is
+        merged item-by-item instead of being replaced: items are identified
+        by by_key (default 'sku'), matching items are deeply merged,
+        unmatched items are appended preserving their original order.
+        Duplicate by_key values raise MergeConflictError; an explicit None
+        still clears the existing value (when overwrite is True).
         """
         # merge writes into existing nested dicts, check the frozen state here
         self._check_frozen()
         others = [other] + list(args)
         for other in others:
             keypath_util.check_keys(other, self._keypath_separator)
+        kwargs.setdefault("keypath_separator", self._keypath_separator)
         _merge(self, *others, **kwargs)
 
     def move(self, key_src: _KPT, key_dest: _KPT, overwrite: bool = True) -> None:

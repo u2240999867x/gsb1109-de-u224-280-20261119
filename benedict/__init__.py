@@ -1,4 +1,5 @@
 from benedict.dicts import benedict
+from benedict.exceptions import MergeConflictError
 from benedict.metadata import (
     __author__,
     __copyright__,
@@ -10,6 +11,7 @@ from benedict.metadata import (
 
 __all__ = [
     "benedict",
+    "MergeConflictError",
     "__author__",
     "__copyright__",
     "__description__",

@@ -1,3 +1,9 @@
+class MergeConflictError(ValueError):
+    """
+    Raised when merging list items by key finds duplicate key values.
+    """
+
+
 class ExtrasRequireModuleNotFoundError(ModuleNotFoundError):
     def __init__(self, *, target: str) -> None:
         message = (
