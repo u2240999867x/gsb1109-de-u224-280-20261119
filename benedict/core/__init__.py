@@ -16,7 +16,7 @@ from benedict.core.nest import nest
 from benedict.core.remove import remove
 from benedict.core.rename import rename
 from benedict.core.search import search
-from benedict.core.standardize import standardize
+from benedict.core.standardize import build_standardization_plan, standardize
 from benedict.core.subset import subset
 from benedict.core.swap import swap
 from benedict.core.traverse import traverse
@@ -24,6 +24,7 @@ from benedict.core.unflatten import unflatten
 from benedict.core.unique import unique
 
 __all__ = [
+    "build_standardization_plan",
     "clean",
     "clone",
     "dump",

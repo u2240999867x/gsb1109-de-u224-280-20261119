@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+- Add strict standardization: `standardize(strict=True)` raises a new `StandardizationConflictError` when two or more keys of the same mapping would be renamed to the same standardized key (eg. `Item-ID` and `item_id` -> `item_id`). The error exposes a plan whose `conflicts` report the original field paths (including renamed parents and list indexes), and the input is left untouched.
+- Add `standardize_plan` method (and `build_standardization_plan` core function) returning a read-only plan with planned `changes`, `conflicts` and a `preview` of the fully standardized structure, without mutating the input.
+- Apply `standardize` atomically: the original input is replaced only after the whole standardization pass succeeds, so a failed pass never leaves partially renamed keys.
+
 ## [0.40.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.40.1) - 2026-10-20
 -   Fix `items` and `values` returning generators instead of views (no `len`, single iteration), eg. with `toml-rs`. #636 (by [@Gabrieljr42](https://github.com/Gabrieljr42) in #637)
 -   Honor freezing when deleting or popping a keypath and when merging into a frozen `benedict` instance. (by [@helo060228](https://github.com/helo060228) in #635)

@@ -324,6 +324,7 @@ Here are the details of the supported formats, operations and extra options docs
     -   [`rename`](#rename)
     -   [`search`](#search)
     -   [`standardize`](#standardize)
+    -   [`standardize_plan`](#standardize_plan)
     -   [`subset`](#subset)
     -   [`swap`](#swap)
     -   [`traverse`](#traverse)
@@ -578,6 +579,34 @@ r = d.search("hello", in_keys=True, in_values=True, exact=False, case_sensitive=
 ```python
 # Standardize all dict keys, e.g. "Location Latitude" -> "location_latitude".
 d.standardize()
+
+# Strict mode raises a StandardizationConflictError when two keys of the same
+# mapping would be renamed to the same standardized key, e.g. "Item-ID" and
+# "item_id" both -> "item_id". The dict is left untouched and the error carries
+# a plan whose conflicts report every original field path, even when a parent
+# key is itself being renamed.
+from benedict.exceptions import StandardizationConflictError
+
+try:
+    d.standardize(strict=True)
+except StandardizationConflictError as error:
+    for conflict in error.plan.conflicts:
+        # conflict.original_paths -> ("Dealer-Info.Item-ID", "Dealer-Info.item_id")
+        ...
+```
+
+#### `standardize_plan`
+
+```python
+# Build a read-only plan without modifying the current dict.
+plan = d.standardize_plan()
+# Planned renames, each with its original path.
+plan.changes
+# Key collisions with the original paths involved (empty when there is none).
+plan.conflicts
+# Preview of the fully standardized structure; non-conflicting sub-structures
+# are still inspectable even when another level conflicts.
+plan.preview
 ```
 
 #### `subset`

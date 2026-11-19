@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 from benedict import benedict
+from benedict.exceptions import StandardizationConflictError
 
 
 class benedict_test_case(unittest.TestCase):
@@ -2178,6 +2179,53 @@ b:
         self.assertEqual(b, r)
         self.assertEqual(b["location_coordinates.lat"], 0.0)
         self.assertEqual(b["location_coordinates.lng"], 0.0)
+
+    def test_standardize_strict_conflict_reports_paths_and_keeps_input(self) -> None:
+        d = {
+            "Dealer-Info": {
+                "Item-ID": 1,
+                "item_id": 2,
+            }
+        }
+        b = benedict(d, keypath_separator=None)
+        with self.assertRaises(StandardizationConflictError) as ctx:
+            b.standardize(strict=True)
+        conflict = ctx.exception.plan.conflicts[0]
+        self.assertEqual(conflict.path, "Dealer-Info")
+        self.assertEqual(
+            conflict.original_paths,
+            ("Dealer-Info.Item-ID", "Dealer-Info.item_id"),
+        )
+        # The original input only changes when the whole pass succeeds.
+        self.assertEqual(
+            b,
+            {"Dealer-Info": {"Item-ID": 1, "item_id": 2}},
+        )
+        # The preview still exposes the non-conflicting sub-structures.
+        self.assertEqual(
+            ctx.exception.plan.preview["dealer_info"]["item_id"],
+            2,
+        )
+
+    def test_standardize_plan_preview_without_mutation(self) -> None:
+        d = {"Dealer-Info": [{"Item-ID": 1}]}
+        b = benedict(d, keypath_separator=None)
+        plan = b.standardize_plan()
+        self.assertFalse(plan.has_conflicts)
+        self.assertEqual(plan.preview, {"dealer_info": [{"item_id": 1}]})
+        # Building the plan does not alter the current dict.
+        self.assertEqual(b, {"Dealer-Info": [{"Item-ID": 1}]})
+        b.standardize()
+        self.assertEqual(b, {"dealer_info": [{"item_id": 1}]})
+
+    def test_standardize_strict_success_applies_all_changes(self) -> None:
+        d = {"Item-ID": 1, "Product Name": {"Sub-Field": [{"K": 2}]}}
+        b = benedict(d, keypath_separator=None)
+        b.standardize(strict=True)
+        self.assertEqual(
+            b,
+            {"item_id": 1, "product_name": {"sub_field": [{"k": 2}]}},
+        )
 
     def test_subset(self) -> None:
         d = {

@@ -43,6 +43,12 @@ from benedict.core import swap as _swap
 from benedict.core import traverse as _traverse
 from benedict.core import unflatten as _unflatten
 from benedict.core import unique as _unique
+from benedict.core.standardize import (
+    StandardizationPlan,
+)
+from benedict.core.standardize import (
+    build_standardization_plan as _build_standardization_plan,
+)
 from benedict.core.traverse import TraverseCallback
 from benedict.dicts.base import BaseDict
 from benedict.dicts.io import IODict
@@ -334,11 +340,27 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         """
         return _search(self, query, in_keys, in_values, exact, case_sensitive)
 
-    def standardize(self) -> None:
+    def standardize(self, *, strict: bool = False) -> None:
         """
         Standardize all dict keys (e.g. 'Location Latitude' -> 'location_latitude').
+
+        If strict is True, a ``StandardizationConflictError`` is raised when
+        two or more keys of the same mapping would be renamed to the same
+        standardized key (e.g. 'Item-ID' and 'item_id' -> 'item_id'), and the
+        current dict is not modified. The attached plan reports the original
+        paths involved in each conflict.
         """
-        _standardize(self)
+        _standardize(self, strict=strict)
+
+    def standardize_plan(self) -> StandardizationPlan:
+        """
+        Build a standardization plan without modifying the current dict.
+
+        The returned plan exposes the planned changes, the key conflicts
+        (with their original paths) and a preview of the fully standardized
+        structure.
+        """
+        return _build_standardization_plan(self)
 
     def subset(self, keys: Sequence[_KPT], *args: Any) -> Self:
         """
