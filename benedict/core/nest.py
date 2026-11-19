@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Any
 
-from benedict.core.groupby import groupby
+from benedict.core.groupby import MISSING, _get_value, groupby
 
 
 def _nest_items(
@@ -28,8 +28,16 @@ def nest(
         [id_key == parent_id_key, id_key == children_key, parent_id_key == children_key]
     ):
         raise ValueError("keys should be different.")
-    nested_items = groupby(items, parent_id_key)
-    root_items = nested_items.get(None, [])
+    nested_items = groupby(items, parent_id_key, separator=None)
+    # both an explicit None and a missing parent_id identify root items,
+    # keep them in input order
+    root_items = []
+    for item in items:
+        parent_id = _get_value(item, [parent_id_key])
+        if parent_id is None or parent_id is MISSING:
+            root_items.append(nested_items[parent_id].pop(0))
+    nested_items.pop(None, None)
+    nested_items.pop(MISSING, None)
     for item in root_items:
         _nest_items(nested_items, item, id_key, children_key)
-    return nested_items.get(None)
+    return root_items or None

@@ -214,8 +214,9 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
     def groupby(self, key: _KPT, by_key: _KPT) -> Self:
         """
         Group a list of dicts at key by the value of the given by_key and return a new dict.
+        The by_key argument supports keypath(s), nested values are compared by value.
         """
-        result = _groupby(self[key], by_key)
+        result = _groupby(self[key], by_key, self._keypath_separator)
         keypath_util.check_keys(result, self._keypath_separator)
         return cast("Self", self._cast(result))
 

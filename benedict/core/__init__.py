@@ -4,7 +4,7 @@ from benedict.core.dump import dump
 from benedict.core.filter import filter
 from benedict.core.find import find
 from benedict.core.flatten import flatten
-from benedict.core.groupby import groupby
+from benedict.core.groupby import MISSING, groupby
 from benedict.core.invert import invert
 from benedict.core.items_sorted import items_sorted_by_keys, items_sorted_by_values
 from benedict.core.keylists import keylists
@@ -31,6 +31,7 @@ __all__ = [
     "find",
     "flatten",
     "groupby",
+    "MISSING",
     "invert",
     "items_sorted_by_keys",
     "items_sorted_by_values",

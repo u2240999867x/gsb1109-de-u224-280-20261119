@@ -471,7 +471,21 @@ if d.frozen:
 ```python
 # Group a list of dicts at key by the value of the given by_key and return a new dict.
 g = d.groupby("cities", by_key="country_code")
+
+# by_key supports keypaths and multiple (composite) paths;
+# items with equal nested values are grouped together.
+g = d.groupby("rules", by_key=["category.level_1", "category.level_2"])
+g = d.groupby("rules", by_key=("category.level_1", "category.level_2"))
+
+# Explicit None values, missing keys and empty list values are three distinct groups.
+# Missing keys are grouped under benedict.core.MISSING.
+from benedict.core import MISSING
+null_items = g[None]
+missing_items = g[MISSING]
+empty_list_items = g[()]
 ```
+
+Items inside each group keep the same order they have in the input list.
 
 #### `invert`
 
