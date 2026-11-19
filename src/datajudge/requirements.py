@@ -1117,6 +1117,7 @@ class WithinRequirement(Requirement):
         relative_tolerance: float = 0.0,
         aggregated: bool = True,
         n_counterexamples: int = 5,
+        unicode_normalization: str | bool | None = None,
         cache_size=None,
     ):
         """Assesses whether the values in a column match a given regular expression pattern.
@@ -1132,6 +1133,12 @@ class WithinRequirement(Requirement):
         assertion text. If all counterexamples are meant to be shown, provide ``-1`` as
         an argument.
 
+        Set ``unicode_normalization`` to ``"NFC"``, ``"NFD"``, ``"NFKC"`` or ``"NFKD"``
+        to normalize every value before matching it against ``regex``. ``True`` is a
+        shorthand for ``"NFKC"``, the form that maps full-width digits to standard
+        digits. Counterexamples are always reported as they are stored in the database,
+        so values that only look valid due to normalization remain visible.
+
         When using this method, the regex matching will take place in memory. If instead,
         you would like the matching to take place in database which is typically faster and
         substantially more memory-saving, please consider using
@@ -1146,6 +1153,7 @@ class WithinRequirement(Requirement):
                 relative_tolerance=relative_tolerance,
                 aggregated=aggregated,
                 n_counterexamples=n_counterexamples,
+                unicode_normalization=unicode_normalization,
                 name=name,
                 cache_size=cache_size,
             )
@@ -1157,9 +1165,11 @@ class WithinRequirement(Requirement):
         regex: str,
         condition: Condition | None = None,
         name: str | None = None,
+        allow_none: bool = False,
         relative_tolerance: float = 0.0,
         aggregated: bool = True,
         n_counterexamples: int = 5,
+        unicode_normalization: str | bool | None = None,
         cache_size=None,
     ):
         """Assesses whether the values in a column match a given regular expression pattern.
@@ -1171,6 +1181,11 @@ class WithinRequirement(Requirement):
         ``n_counterexamples`` defines how many counterexamples are displayed in an
         assertion text. If all counterexamples are meant to be shown, provide ``-1`` as
         an argument.
+
+        ``unicode_normalization`` behaves as in ``add_varchar_regex_constraint`` but is
+        applied by the database. Only the normalization forms natively supported by the
+        backend are available; DuckDB, for instance, only implements ``"NFC"``. Use the
+        in-memory variant for full control over the normalization form.
 
         When using this method, the regex matching will take place in database, which is
         only supported for Postgres, Sqllite and Snowflake. Note that for this
@@ -1184,9 +1199,11 @@ class WithinRequirement(Requirement):
             varchar_constraints.VarCharRegexDb(
                 ref,
                 regex=regex,
+                allow_none=allow_none,
                 relative_tolerance=relative_tolerance,
                 aggregated=aggregated,
                 n_counterexamples=n_counterexamples,
+                unicode_normalization=unicode_normalization,
                 name=name,
                 cache_size=cache_size,
             )

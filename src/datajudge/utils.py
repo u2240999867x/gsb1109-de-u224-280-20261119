@@ -1,7 +1,47 @@
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Collection
 from typing import Protocol
+
+UNICODE_NORMALIZATION_FORMS = ("NFC", "NFD", "NFKC", "NFKD")
+
+
+def validate_unicode_normalization(
+    unicode_normalization: str | bool | None,
+) -> str | None:
+    """Validate and canonicalize a Unicode normalization form.
+
+    ``None`` (or ``False``) disables normalization, while ``True`` requests
+    ``NFKC``, the form that maps compatibility characters such as full-width
+    digits to their standard counterparts. Otherwise the form must be one of
+    ``NFC``, ``NFD``, ``NFKC`` or ``NFKD`` (case insensitive).
+    """
+    if unicode_normalization is None or unicode_normalization is False:
+        return None
+    if unicode_normalization is True:
+        return "NFKC"
+    if not isinstance(unicode_normalization, str):
+        raise ValueError(
+            "unicode_normalization must be one of "
+            f"{', '.join(UNICODE_NORMALIZATION_FORMS)}, True, False or None, "
+            f"but got {unicode_normalization!r}."
+        )
+    form = unicode_normalization.upper()
+    if form not in UNICODE_NORMALIZATION_FORMS:
+        raise ValueError(
+            "unicode_normalization must be one of "
+            f"{', '.join(UNICODE_NORMALIZATION_FORMS)}, True, False or None, "
+            f"but got {unicode_normalization!r}."
+        )
+    return form
+
+
+def normalize_unicode(value: str, unicode_normalization: str | None) -> str:
+    """Normalize a string according to the given Unicode normalization form."""
+    if unicode_normalization is None:
+        return value
+    return unicodedata.normalize(unicode_normalization, value)
 
 
 def _fmt_diff_part(s, d):

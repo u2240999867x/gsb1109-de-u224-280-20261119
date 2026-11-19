@@ -23,3 +23,7 @@ def is_db2(engine: sa.engine.Engine) -> bool:
 
 def is_duckdb(engine: sa.engine.Engine) -> bool:
     return engine.name == "duckdb"
+
+
+def is_sqlite(engine: sa.engine.Engine) -> bool:
+    return engine.name == "sqlite"

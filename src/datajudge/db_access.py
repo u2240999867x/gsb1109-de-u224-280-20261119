@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import operator
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from ._engines import (
     is_mssql,
     is_postgresql,
     is_snowflake,
+    is_sqlite,
 )
 from .condition import Condition
 from .data_source import DataSource, TableDataSource
@@ -1315,27 +1317,112 @@ def get_ks_2sample(
     return d_statistic, [final_selection]
 
 
+def _unicode_normalized_column(
+    engine: sa.engine.Engine,
+    column: sa.ColumnElement,
+    unicode_normalization: str | None,
+) -> sa.ColumnElement:
+    """Return an expression applying a Unicode normalization form to a column.
+
+    The returned expression uses the database's native normalization function
+    where available. SQLite lacks such a function, so a user-defined function
+    backed by :func:`unicodedata.normalize` is registered on the connection.
+    """
+    if unicode_normalization is None:
+        return column
+
+    if is_postgresql(engine):
+        # PostgreSQL expects the normalization form as an identifier,
+        # e.g. ``normalize(col, NFKC)``.
+        return sa.func.normalize(column, sa.text(unicode_normalization))
+    if is_snowflake(engine):
+        return sa.func.normalize(column, sa.literal(unicode_normalization))
+    if is_bigquery(engine):
+        return sa.func.normalize(column, sa.text(unicode_normalization))
+    if is_sqlite(engine):
+        return sa.func.normalize(column, sa.literal(unicode_normalization))
+    if is_duckdb(engine):
+        if unicode_normalization != "NFC":
+            raise NotImplementedError(
+                "DuckDB only provides the NFC normalization form via "
+                f"nfc_normalize, but {unicode_normalization!r} was requested."
+            )
+        return sa.func.nfc_normalize(column)
+
+    raise NotImplementedError(
+        "Unicode normalization is not supported for the database backend "
+        f"{engine.name!r}. Use the in-memory variant instead."
+    )
+
+
+def _register_sqlite_unicode_normalization(connection: sa.engine.Connection) -> None:
+    """Register a ``normalize`` SQL function on a SQLite connection.
+
+    SQLite has no built-in Unicode normalization, so the function is backed by
+    :func:`unicodedata.normalize`. Registering it repeatedly is harmless as
+    SQLite replaces an existing function of the same name arity.
+    """
+    connection_fairy = connection.connection
+    dbapi_connection = getattr(connection_fairy, "dbapi_connection", None)
+    if dbapi_connection is None:
+        dbapi_connection = connection_fairy.connection
+
+    def normalize(value: str | None, form: str | None) -> str | None:
+        if value is None:
+            return None
+        return unicodedata.normalize(str(form), value)
+
+    dbapi_connection.create_function("normalize", 2, normalize)
+
+
 def get_regex_violations(
     engine: sa.engine.Engine,
     ref: DataReference,
     aggregated: bool,
     regex: str,
     n_counterexamples: int,
-) -> tuple[tuple[int, Any], list[sa.Select]]:
+    unicode_normalization: str | None = None,
+) -> tuple[tuple[int, int, int, Any], list[sa.Select]]:
+    """Count regex violations and report the offending values as stored.
+
+    Values are matched after applying ``unicode_normalization`` (if any), but
+    counterexamples are always taken from the unmodified column. ``NULL``
+    values never count as violations and are excluded from the denominator,
+    matching the in-memory implementation. The number of ``NULL`` values is
+    returned separately so callers can reject them if required.
+    """
     original_selection = ref.get_selection(engine)
     column = ref.get_column(engine)
-    if aggregated:
-        original_selection = original_selection.distinct()
     subquery = original_selection.subquery()
+    original_column = subquery.c[column]
 
-    violation_selection = sa.select(subquery.c[column]).where(
-        sa.not_(subquery.c[column].regexp_match(regex))
+    non_null_selection = sa.select(original_column).where(original_column.is_not(None))
+    if aggregated:
+        non_null_selection = non_null_selection.distinct()
+    non_null_selection = non_null_selection.subquery()
+    raw_column = non_null_selection.c[column]
+
+    if unicode_normalization is not None:
+        normalized_column = _unicode_normalized_column(
+            engine, raw_column, unicode_normalization
+        )
+    else:
+        normalized_column = raw_column
+
+    violation_selection = sa.select(raw_column).where(
+        sa.not_(normalized_column.regexp_match(regex))
     )
     n_violations_selection = sa.select(sa.func.count()).select_from(
         violation_selection.subquery()
     )
+    n_rows_selection = sa.select(sa.func.count()).select_from(non_null_selection)
+    n_null_selection = (
+        sa.select(sa.func.count())
+        .select_from(subquery)
+        .where(original_column.is_(None))
+    )
 
-    selections = [n_violations_selection]
+    selections = [n_violations_selection, n_rows_selection, n_null_selection]
 
     if n_counterexamples == -1:
         counterexamples_selection = violation_selection
@@ -1350,9 +1437,17 @@ def get_regex_violations(
         selections.append(counterexamples_selection)
 
     with engine.connect() as connection:
+        if is_sqlite(engine):
+            _register_sqlite_unicode_normalization(connection)
         n_violations_result = connection.execute(n_violations_selection).scalar()
         if n_violations_result is None:
             n_violations_result = 0
+        n_rows_result = connection.execute(n_rows_selection).scalar()
+        if n_rows_result is None:
+            n_rows_result = 0
+        n_null_result = connection.execute(n_null_selection).scalar()
+        if n_null_result is None:
+            n_null_result = 0
         if counterexamples_selection is None:
             counterexamples = []
         else:
@@ -1360,4 +1455,6 @@ def get_regex_violations(
                 counterexamples_selection
             ).fetchall()
             counterexamples = [result[0] for result in counterexamples_result]
-    return (n_violations_result, counterexamples), selections
+    return (n_violations_result, n_rows_result, n_null_result, counterexamples), (
+        selections
+    )

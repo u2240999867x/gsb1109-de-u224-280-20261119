@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+**New features**
+
+- Add `unicode_normalization` to
+  [`datajudge.WithinRequirement.add_varchar_regex_constraint`][datajudge.requirements.WithinRequirement.add_varchar_regex_constraint]
+  and
+  [`datajudge.WithinRequirement.add_varchar_regex_constraint_db`][datajudge.requirements.WithinRequirement.add_varchar_regex_constraint_db].
+  Setting it to `"NFKC"` (or `True`) lets full-width digits match the same
+  pattern as standard digits. Counterexamples are still reported exactly as
+  stored.
+- Add `allow_none` to
+  [`datajudge.WithinRequirement.add_varchar_regex_constraint_db`][datajudge.requirements.WithinRequirement.add_varchar_regex_constraint_db]
+  so `NULL` handling matches the in-memory variant.
+
+**Bug fixes**
+
+- The in-memory and in-database regex constraints now agree on which rows count:
+  `NULL` values are excluded from the denominator, empty selections pass, and
+  `NULL` rejection is controlled by `allow_none` on both paths.
+- The in-memory regex constraint now uses search semantics like the database
+  implementations, instead of only matching at the start of a value.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

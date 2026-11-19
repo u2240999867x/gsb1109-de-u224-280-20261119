@@ -2,9 +2,11 @@ import pytest
 
 from datajudge.utils import (
     format_difference,
+    normalize_unicode,
     output_processor_limit,
     output_processor_sort,
     sort_tuple_none_aware,
+    validate_unicode_normalization,
 )
 
 
@@ -327,3 +329,44 @@ def test_sort_tuple_none_aware(input_main, output_main):
 def test_sort_tuple_none_error(input_main, output_main, error):
     with pytest.raises(error):
         sort_tuple_none_aware(input_main)
+
+
+@pytest.mark.parametrize(
+    "value, form",
+    [
+        ("１２３４５", "NFKC"),
+        ("ＡＢＣ", "NFKC"),
+        ("é", "NFC"),
+        ("é", "NFD"),
+    ],
+)
+def test_normalize_unicode(value, form):
+    result = normalize_unicode(value, form)
+    assert isinstance(result, str)
+
+
+@pytest.mark.parametrize(
+    "form, expected",
+    [
+        ("nfkc", "NFKC"),
+        ("NFC", "NFC"),
+        ("NfD", "NFD"),
+        (None, None),
+    ],
+)
+def test_validate_unicode_normalization(form, expected):
+    assert validate_unicode_normalization(form) == expected
+
+
+@pytest.mark.parametrize("form", ["NFK", "C", "", 42])
+def test_validate_unicode_normalization_invalid(form):
+    with pytest.raises(ValueError, match="unicode_normalization"):
+        validate_unicode_normalization(form)
+
+
+def test_normalize_unicode_disabled():
+    assert normalize_unicode("１２３４５", None) == "１２３４５"
+
+
+def test_normalize_full_width_digits():
+    assert normalize_unicode("１２３４５", "NFKC") == "12345"
