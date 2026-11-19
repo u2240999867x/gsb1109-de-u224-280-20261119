@@ -4,7 +4,14 @@ from typing import Any
 
 from dataset.database import Database
 from dataset.table import Table
-from dataset.util import DatasetError, OutRow, QueryError, RowFactory, row_factory
+from dataset.util import (
+    DatasetError,
+    OutRow,
+    QueryError,
+    ReplaceError,
+    RowFactory,
+    row_factory,
+)
 
 # shut up useless SA warning:
 warnings.filterwarnings("ignore", "Unicode type received non-unicode bind param value.")
@@ -17,6 +24,7 @@ __all__ = [
     "DatasetError",
     "OutRow",
     "QueryError",
+    "ReplaceError",
     "RowFactory",
     "Table",
     "connect",

@@ -64,6 +64,29 @@ The list of filter columns given as the second argument filter using the
 values in the first column. If you don't want to update over a
 particular value, just use the auto-generated ``id`` column.
 
+Replacing a region's roster
+---------------------------
+
+Some sources periodically resend a complete roster for one region. Inserting
+the roster again would leave behind entries that the source has removed, so
+replace the region instead::
+
+   # Delete the region's old rows and load the complete roster in one step.
+   table.replace_many(roster, region='north')
+
+The region column defaults to ``region``. Pass a different column name with
+``region_column='district'``, or name it in the second argument with
+``table.replace_many(roster, ['district'], region='north')``. An empty roster
+clears the region::
+
+   table.replace_many([], region='north')
+
+Suppliers occasionally send a file labelled for the wrong region. Every row is
+checked before the old data is touched; a mismatch raises
+:py:class:`dataset.ReplaceError` and leaves the existing roster and all other
+regions unchanged. The delete and reload are wrapped in one transaction, so an
+error during the load also restores the previous roster.
+
 Using Transactions
 ------------------
 

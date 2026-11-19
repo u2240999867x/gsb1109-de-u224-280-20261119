@@ -1,10 +1,11 @@
 from datetime import datetime
 
 import pytest
-from sqlalchemy.exc import ArgumentError
+from sqlalchemy.exc import ArgumentError, IntegrityError
 from sqlalchemy.types import BIGINT, TEXT
 
 from dataset import chunked
+from dataset.util import ReplaceError
 
 from .conftest import TEST_CITY_1, TEST_DATA
 
@@ -449,3 +450,137 @@ def test_key_order(db, table):
 def test_empty_query(table):
     empty = list(table.find(place="not in data"))
     assert len(empty) == 0, empty
+
+
+def test_replace_many_removes_stale_rows(db):
+    tbl = db["region_roster"]
+    tbl.insert_many(
+        [
+            {"claims_id": "a", "region": "north", "name": "Alpha"},
+            {"claims_id": "b", "region": "north", "name": "Bravo"},
+            {"claims_id": "c", "region": "south", "name": "Charlie"},
+        ]
+    )
+
+    tbl.replace_many(
+        [
+            {"claims_id": "a", "region": "north", "name": "Alpha"},
+            {"claims_id": "d", "region": "north", "name": "Delta"},
+        ],
+        region="north",
+    )
+
+    north = sorted(row["claims_id"] for row in tbl.find(region="north"))
+    assert north == ["a", "d"], north
+    assert [row["claims_id"] for row in tbl.find(region="south")] == ["c"]
+
+
+def test_replace_many_empty_roster_clears_region(db):
+    tbl = db["region_roster"]
+    tbl.insert_many(
+        [
+            {"claims_id": "a", "region": "north"},
+            {"claims_id": "c", "region": "south"},
+        ]
+    )
+
+    tbl.replace_many([], region="north")
+    assert list(tbl.find(region="north")) == []
+    assert len(list(tbl.find(region="south"))) == 1
+
+
+def test_replace_many_wrong_region_is_atomic(db):
+    tbl = db["region_roster"]
+    tbl.insert_many(
+        [
+            {"claims_id": "a", "region": "north"},
+            {"claims_id": "c", "region": "south"},
+        ]
+    )
+
+    with pytest.raises(ReplaceError):
+        tbl.replace_many(
+            [
+                {"claims_id": "b", "region": "north"},
+                {"claims_id": "d", "region": "south"},
+            ],
+            region="north",
+        )
+
+    assert sorted(row["claims_id"] for row in tbl.find()) == ["a", "c"]
+
+
+def test_replace_many_infers_region_from_rows(db):
+    tbl = db["region_roster"]
+    tbl.insert_many([{"claims_id": "a", "region": "north"}])
+
+    tbl.replace_many([{"claims_id": "b", "region": "north"}])
+    assert [row["claims_id"] for row in tbl.find()] == ["b"]
+
+
+def test_replace_many_in_transaction(db):
+    tbl = db["region_roster"]
+    tbl.insert_many([{"claims_id": "a", "region": "north"}])
+
+    with db:
+        tbl.replace_many([{"claims_id": "b", "region": "north"}], region="north")
+
+    assert [row["claims_id"] for row in tbl.find()] == ["b"]
+
+
+def test_replace_many_custom_region_column(db):
+    tbl = db["region_roster"]
+    tbl.insert_many(
+        [
+            {"claims_id": "a", "district": "north"},
+            {"claims_id": "c", "district": "south"},
+        ]
+    )
+
+    tbl.replace_many(
+        [{"claims_id": "b", "district": "north"}],
+        ["district"],
+        region="north",
+    )
+    assert sorted(row["claims_id"] for row in tbl.find(district="north")) == ["b"]
+    assert [row["claims_id"] for row in tbl.find(district="south")] == ["c"]
+
+    tbl.replace_region("north", [{"claims_id": "d", "district": "north"}])
+    assert sorted(row["claims_id"] for row in tbl.find(district="north")) == ["d"]
+
+
+def test_replace_many_rejects_batch_with_only_wrong_region(db):
+    tbl = db["region_roster"]
+    tbl.insert_many(
+        [
+            {"claims_id": "a", "region": "north"},
+            {"claims_id": "c", "region": "south"},
+        ]
+    )
+
+    with pytest.raises(ReplaceError):
+        tbl.replace_many(
+            [
+                {"claims_id": "x", "region": "south"},
+                {"claims_id": "y", "region": "south"},
+            ],
+            region="north",
+        )
+
+    assert sorted(row["claims_id"] for row in tbl.find()) == ["a", "c"]
+
+
+def test_replace_many_restores_roster_on_load_failure(db):
+    tbl = db["region_roster"]
+    tbl.insert_many([{"id": 1, "claims_id": "keep", "region": "north"}])
+
+    with pytest.raises(IntegrityError):
+        tbl.replace_many(
+            [
+                {"id": 2, "claims_id": "a", "region": "north"},
+                {"id": 2, "claims_id": "b", "region": "north"},
+            ],
+            region="north",
+        )
+
+    assert [row["claims_id"] for row in tbl.find()] == ["keep"]

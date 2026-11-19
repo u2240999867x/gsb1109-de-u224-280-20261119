@@ -1,7 +1,7 @@
 import logging
 import threading
 import warnings
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import false, func, select
@@ -23,6 +23,7 @@ from dataset.util import (
     MutableRow,
     OutRow,
     QueryError,
+    ReplaceError,
     ResultIter,
     SQLWriteValue,
     WriteRow,
@@ -236,6 +237,317 @@ class Table:
                 self.db.executable.execute(self.table.insert(), chunk)
                 self.db._auto_commit()
                 chunk = []
+
+    def replace_many(
+        self,
+        rows: Iterable[WriteRow] | None,
+        keys: Sequence[str] | str | None = None,
+        region: SQLWriteValue = None,
+        chunk_size: int = 1000,
+        ensure: bool | None = None,
+        types: dict[str, ColumnType] | None = None,
+        region_column: str | None = None,
+    ) -> int:
+        """Replace one region's complete roster in the table.
+
+        All existing rows for the region are deleted and ``rows`` are inserted
+        in their place. This differs from :py:meth:`insert_many`, which only
+        adds rows and therefore leaves behind entries that have disappeared
+        from the supplier's latest roster.
+
+        The scope column defaults to ``region``; pass ``region_column`` (or
+        name it in ``keys``) for a different column. The region value can be
+        passed explicitly or inferred from the rows. An empty ``rows`` sequence
+        clears the region when the region is known explicitly; without a
+        region it is rejected rather than clearing the whole table.
+
+        Every row is validated before anything is deleted. If a row belongs to
+        a different region, or the batch mixes regions, :py:class:`ReplaceError`
+        is raised and neither the existing roster nor any other region is
+        modified. The delete and reload run in one transaction, so a failure
+        while inserting also restores the previous roster.
+
+        ::
+
+            table.replace_many(roster, region='north')
+            table.replace_many(roster, ['region'])
+            table.replace_many([], region='north')
+        """
+        rows, keys, region = self._replacement_arguments(rows, keys, region)
+
+        if rows is None:
+            rows = []
+        elif isinstance(rows, Mapping):
+            rows = [rows]
+        elif isinstance(rows, str):
+            raise ReplaceError("Replacement rows must be a sequence of mappings.")
+        else:
+            rows = list(rows)
+
+        region_name, region = self._replacement_scope(rows, keys, region, region_column)
+        prepared = self._prepare_replacement_rows(rows, region, region_name)
+
+        if not prepared:
+            if not self.exists:
+                return 0
+            with self.db.lock:
+                if self.db.in_transaction:
+                    self.delete(**{region_name: region})
+                else:
+                    with self.db:
+                        self.delete(**{region_name: region})
+            return 0
+
+        # Schema synchronisation may commit implicitly on some backends, so it
+        # has to happen before deletion to keep the old roster recoverable.
+        sync_row: MutableRow = {}
+        for row in prepared:
+            for key, value in row.items():
+                sync_row.setdefault(key, value)
+        self._sync_columns(sync_row, ensure, types=types)
+
+        with self.db.lock:
+            if self.db.in_transaction:
+                savepoint = self.db.executable.begin_nested()
+                try:
+                    self._replace_region_rows(region_name, region, prepared, chunk_size)
+                    savepoint.commit()
+                except Exception:
+                    savepoint.rollback()
+                    raise
+            else:
+                self.db.begin()
+                try:
+                    self._replace_region_rows(region_name, region, prepared, chunk_size)
+                    self.db.commit()
+                except Exception:
+                    self.db.rollback()
+                    raise
+        return len(prepared)
+
+    def _replacement_arguments(
+        self,
+        rows: Iterable[WriteRow] | None,
+        keys: Sequence[str] | str | None,
+        region: SQLWriteValue,
+    ) -> tuple[Iterable[WriteRow] | None, Sequence[str] | str | None, SQLWriteValue]:
+        """Accept both ``(rows, keys, region)`` and ``(region_value, rows)``."""
+        if (
+            isinstance(rows, (str, int, float))
+            and not isinstance(rows, bool)
+            and keys is not None
+            and not isinstance(keys, (str, Mapping))
+        ):
+            candidate = list(keys)
+            if all(isinstance(row, Mapping) for row in candidate):
+                if region is None:
+                    region = rows
+                return candidate, None, region
+        return rows, keys, region
+
+    def _replacement_scope(
+        self,
+        rows: Sequence[WriteRow],
+        keys: Sequence[str] | str | None,
+        region: SQLWriteValue,
+        region_column: str | None,
+    ) -> tuple[str, SQLWriteValue]:
+        """Resolve the scope column and the region value for the batch."""
+        candidates = ensure_strings(keys)
+        scope_column = region_column
+
+        if (
+            scope_column is None
+            and region is None
+            and len(candidates) == 1
+            and not self._is_scope_column(rows, candidates[0])
+        ):
+            # A lone string that is not a column is a region value.
+            region = candidates[0]
+            candidates = []
+
+        if scope_column is None and candidates:
+            scope_column = self._pick_key_scope(rows, candidates, region)
+
+        if scope_column is None and region is not None:
+            if self._is_scope_column(rows, "region"):
+                scope_column = "region"
+            else:
+                for candidate in self._row_keys(rows):
+                    if self._column_conforms(rows, candidate, region):
+                        scope_column = candidate
+                        break
+
+        if scope_column is None and self._is_scope_column(rows, "region"):
+            scope_column = "region"
+
+        scope_name = self._get_column_name(scope_column or "region")
+
+        if region is None:
+            distinct: list[SQLWriteValue] = []
+            for row in rows:
+                value = self._row_column(row, scope_name)
+                if value is not None and value not in distinct:
+                    distinct.append(value)
+            if len(distinct) > 1:
+                raise ReplaceError("A replacement batch may only contain one region.")
+            if distinct:
+                region = distinct[0]
+
+        if region is None:
+            raise ReplaceError("A region is required to replace a roster.")
+        return scope_name, region
+
+    def _pick_key_scope(
+        self,
+        rows: Sequence[WriteRow],
+        candidates: Sequence[str],
+        region: SQLWriteValue,
+    ) -> str | None:
+        """Choose the scope column among explicitly named keys."""
+        if region is not None:
+            for candidate in candidates:
+                if self._column_conforms(rows, candidate, region):
+                    return candidate
+        for candidate in candidates:
+            if self._column_matches(candidate, "region") and self._is_scope_column(
+                rows, candidate
+            ):
+                return candidate
+        for candidate in candidates:
+            if self._is_scope_column(rows, candidate):
+                return candidate
+        return None
+
+    def _prepare_replacement_rows(
+        self,
+        rows: Sequence[WriteRow],
+        region: SQLWriteValue,
+        region_column: str,
+    ) -> list[MutableRow]:
+        """Validate every row before any existing data is removed."""
+        prepared: list[MutableRow] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise ReplaceError("Replacement rows must be mappings.")
+            out: MutableRow = {}
+            for key, value in row.items():
+                if self._column_matches(key, region_column):
+                    if value is not None and value != region:
+                        raise ReplaceError(
+                            "Replacement batch contains a row for a different region."
+                        )
+                else:
+                    out[key] = value
+            out[region_column] = region
+            prepared.append(out)
+        return prepared
+
+    def _replace_region_rows(
+        self,
+        region_column: str,
+        region: SQLWriteValue,
+        rows: Sequence[WriteRow],
+        chunk_size: int,
+    ) -> None:
+        if self.exists:
+            clause = self._args_to_clause({region_column: region})
+            self.db.executable.execute(self.table.delete().where(clause))
+        self.insert_many(rows, chunk_size=chunk_size)
+
+    def replace_region(
+        self,
+        rows: Iterable[WriteRow] | None,
+        region: SQLWriteValue,
+        region_column: str | None = None,
+        chunk_size: int = 1000,
+        ensure: bool | None = None,
+        types: dict[str, ColumnType] | None = None,
+    ) -> int:
+        """Replace one region's rows; accepts either argument order."""
+        rows, region = self._ordered_region_arguments(rows, region)
+        keys = None if isinstance(region_column, str) else region_column
+        if not isinstance(region_column, str):
+            region_column = None
+        return self.replace_many(
+            rows,
+            keys,
+            region=region,
+            region_column=region_column,
+            chunk_size=chunk_size,
+            ensure=ensure,
+            types=types,
+        )
+
+    replace = replace_many
+    replace_by_region = replace_region
+
+    @staticmethod
+    def _ordered_region_arguments(
+        rows: Iterable[WriteRow] | None, region: SQLWriteValue
+    ) -> tuple[Iterable[WriteRow] | None, SQLWriteValue]:
+        """Allow both ``(rows, region)`` and ``(region, rows)`` call orders."""
+        if isinstance(rows, (str, int, float)) and not isinstance(rows, bool):
+            if isinstance(region, Mapping):
+                return [region], rows
+            if isinstance(region, (str, bytes)) or region is None:
+                return rows, region
+            candidate = list(region)
+            if all(isinstance(item, Mapping) for item in candidate):
+                return candidate, rows
+        return rows, region
+
+    @staticmethod
+    def _column_key(name: str) -> str | None:
+        try:
+            return normalize_column_key(normalize_column_name(name))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _column_matches(cls, name: str, column: str) -> bool:
+        return cls._column_key(name) == cls._column_key(column)
+
+    @classmethod
+    def _row_column(cls, row: WriteRow, column: str) -> SQLWriteValue:
+        for key, value in row.items():
+            if cls._column_matches(key, column):
+                return value
+        return None
+
+    @classmethod
+    def _rows_have_column(cls, rows: Sequence[WriteRow], column: str) -> bool:
+        return any(cls._column_matches(key, column) for row in rows for key in row)
+
+    def _is_scope_column(self, rows: Sequence[WriteRow], column: str) -> bool:
+        if self._rows_have_column(rows, column):
+            return True
+        try:
+            return self.exists and self.has_column(column)
+        except ValueError:
+            return False
+
+    @classmethod
+    def _row_keys(cls, rows: Sequence[WriteRow]) -> list[str]:
+        keys: list[str] = []
+        for row in rows:
+            for key in row:
+                if key not in keys:
+                    keys.append(key)
+        return keys
+
+    @classmethod
+    def _column_conforms(
+        cls, rows: Sequence[WriteRow], column: str, region: SQLWriteValue
+    ) -> bool:
+        seen = False
+        for row in rows:
+            for key, value in row.items():
+                if cls._column_matches(key, column) and value is not None:
+                    seen = True
+                    if value != region:
+                        return False
+        return seen
 
     def update(
         self,

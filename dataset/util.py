@@ -52,6 +52,14 @@ class QueryError(DatasetError):
     pass
 
 
+class ReplaceError(DatasetError, ValueError):
+    """Raised when a replacement batch cannot be applied safely."""
+
+
+# Alias kept for callers that describe the failure in terms of the region.
+RegionMismatchError = ReplaceError
+
+
 def iter_result_proxy(
     rp: ResultProxy[Any], step: int | None = None
 ) -> Iterator[Row[Any]]:
