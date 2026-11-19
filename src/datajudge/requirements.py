@@ -271,6 +271,68 @@ class WithinRequirement(Requirement):
             )
         )
 
+    def add_conditional_null_fraction_constraint(
+        self,
+        column: str,
+        condition: Condition,
+        max_null_fraction: float = 0,
+        name: str | None = None,
+        cache_size=None,
+    ) -> None:
+        """Assert that ``column`` is only NULL outside of ``condition``.
+
+        Within the rows selected by ``condition`` the column must be populated,
+        up to an allowed ``max_null_fraction``. This expresses conditional
+        mandatory values, e.g. a tracking number being required exactly for
+        shipped rows while being allowed to be absent for unshipped rows.
+
+        The threshold is applied to the conditional population, so the reported
+        denominator is the number of rows matching ``condition`` - not the
+        number of rows in the entire data source.
+        """
+        ref = DataReference(self._data_source, [column])
+        self._constraints.append(
+            miscs_constraints.ConditionalNullFraction(
+                ref,
+                column=column,
+                condition=condition,
+                max_null_fraction=max_null_fraction,
+                name=name,
+                cache_size=cache_size,
+            )
+        )
+
+    def add_grouped_uniqueness_constraint(
+        self,
+        group_columns: list[str],
+        columns: list[str],
+        max_duplicate_fraction: float = 0,
+        name: str | None = None,
+        cache_size=None,
+    ) -> None:
+        """Assert that ``columns`` are unique within each group.
+
+        Uniqueness is scoped to the groups defined by ``group_columns``, e.g.
+        an identifier only has to be unique within its warehouse. Rows with a
+        NULL identifier are ignored here; combine this constraint with
+        :meth:`add_conditional_null_fraction_constraint` to check identifier
+        presence separately.
+
+        The reported fraction is the share of redundant rows among rows with a
+        non-null identifier, i.e. ``(rows - distinct identifiers) / rows``,
+        grouped by ``group_columns``.
+        """
+        ref = DataReference(self._data_source, [*group_columns, *columns])
+        self._constraints.append(
+            miscs_constraints.GroupedUniqueness(
+                ref,
+                group_columns=group_columns,
+                max_duplicate_fraction=max_duplicate_fraction,
+                name=name,
+                cache_size=cache_size,
+            )
+        )
+
     def add_n_rows_min_constraint(
         self,
         n_rows_min: int,

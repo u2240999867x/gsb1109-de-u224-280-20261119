@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import warnings
+from typing import Any
 
 import sqlalchemy as sa
 
 from .. import db_access
+from ..condition import Condition
 from ..db_access import DataReference
 from .base import Constraint, TestResult, _format_sample, _OptionalSelections
 
@@ -189,3 +191,174 @@ class MaxNullFraction(Constraint):
             f"while only {self._target_prefix}{threshold} were allowed to be NULL."
         )
         return result, assertion_text
+
+
+class ConditionalNullFraction(Constraint):
+    """Assert that a column is only allowed to be NULL outside of a condition.
+
+    This expresses conditional mandatory values: within the population defined
+    by ``condition`` the column must be populated; outside of the condition
+    NULL values are allowed. Typical example: a tracking number must exist for
+    shipped rows and may be missing for rows that have not been shipped yet.
+
+    The threshold is applied to the conditional population only, i.e. the
+    denominator is the number of rows matching ``condition`` rather than the
+    number of rows in the whole data source.
+
+    Parameters
+    ----------
+    ref:
+        Reference to the column that is conditionally mandatory.
+    condition:
+        Condition selecting the rows for which ``column`` must not be NULL.
+    max_null_fraction:
+        Allowed fraction of NULL values within the conditional population.
+    name:
+        Optional name of the constraint.
+    cache_size:
+        Optional cache size for retrieved values.
+    """
+
+    def __init__(
+        self,
+        ref: DataReference,
+        column: str,
+        condition: Condition,
+        max_null_fraction: float = 0,
+        name: str | None = None,
+        cache_size=None,
+    ):
+        if not (0 <= max_null_fraction <= 1):
+            raise ValueError(
+                f"max_null_fraction was expected to lie within [0, 1] but is "
+                f"{max_null_fraction}."
+            )
+        super().__init__(
+            ref,
+            ref_value=max_null_fraction,
+            name=name,
+            cache_size=cache_size,
+        )
+        self._column = column
+        self._condition = condition
+        self._max_null_fraction = max_null_fraction
+
+    def _retrieve(
+        self, engine: sa.engine.Engine, ref: DataReference
+    ) -> tuple[tuple[int, int], _OptionalSelections]:
+        counts, selections = db_access.get_conditional_null_counts(
+            engine=engine,
+            ref=ref,
+            column=self._column,
+            condition=self._condition,
+        )
+        return counts, selections
+
+    def _compare(
+        self, value_factual: tuple[int, int], value_target: Any
+    ) -> tuple[bool, str | None]:
+        n_violations, n_denominator = value_factual
+        relative_violations = (
+            n_violations / n_denominator if n_denominator > 0 else 0.0
+        )
+        result = relative_violations <= self._max_null_fraction
+        assertion_text = (
+            f"{self._ref} has a fraction of {relative_violations} > "
+            f"{self._max_null_fraction} NULL values within the condition "
+            f"'{self._condition}' ({n_violations} / {n_denominator})."
+        )
+        return result, assertion_text
+
+    def _result_details(self, value_factual, value_target) -> dict[str, Any]:
+        n_violations, n_denominator = value_factual
+        return {
+            "_n_violations": n_violations,
+            "_n_denominator": n_denominator,
+            "_denominator_description": (
+                f"rows matching condition '{self._condition}'"
+            ),
+        }
+
+
+class GroupedUniqueness(Constraint):
+    """Assert that a set of columns is unique within each group.
+
+    Duplicate detection is scoped to groups, e.g. identifiers only need to be
+    unique within a warehouse. Group columns are not required to be unique
+    themselves. Rows with a NULL value in any of the checked columns are
+    excluded, since a missing identifier is not a duplicate. Use
+    :class:`ConditionalNullFraction` or :class:`MaxNullFraction` to reason
+    about NULL identifiers separately.
+
+    The reported fraction is the share of redundant rows among rows with a
+    non-null identifier, i.e. the ratio ``(rows - distinct identifiers) / rows``
+    within the groups. It therefore matches the semantics of
+    :class:`~datajudge.constraints.miscs.Uniqueness` for relative tolerances.
+    """
+
+    def __init__(
+        self,
+        ref: DataReference,
+        group_columns: list[str],
+        max_duplicate_fraction: float = 0,
+        name: str | None = None,
+        cache_size=None,
+    ):
+        if not group_columns:
+            raise ValueError("At least one group column is required.")
+        if not (0 <= max_duplicate_fraction < 1):
+            raise ValueError(
+                "max_duplicate_fraction was expected to lie within [0, 1) but is "
+                f"{max_duplicate_fraction}."
+            )
+        super().__init__(
+            ref,
+            ref_value=max_duplicate_fraction,
+            name=name,
+            cache_size=cache_size,
+        )
+        self._group_columns = group_columns
+        self._max_duplicate_fraction = max_duplicate_fraction
+
+    def _retrieve(
+        self, engine: sa.engine.Engine, ref: DataReference
+    ) -> tuple[tuple[int, int, list], _OptionalSelections]:
+        return db_access.get_duplicate_counts_by_group(
+            engine=engine,
+            ref=ref,
+            group_columns=self._group_columns,
+        )
+
+    def _compare(
+        self, value_factual: tuple[int, int, list], value_target: Any
+    ) -> tuple[bool, str | None]:
+        n_duplicates, n_denominator, examples = value_factual
+        relative_duplicates = (
+            n_duplicates / n_denominator if n_denominator > 0 else 0.0
+        )
+        result = relative_duplicates <= self._max_duplicate_fraction
+        example_string = ""
+        if examples:
+            formatted = [
+                f"{dict(zip(self._group_columns, group_key))} -> "
+                f"{identifier_values} ({n_copies} copies)"
+                for group_key, identifier_values, n_copies in examples
+            ]
+            example_string = " Examples: " + "; ".join(formatted) + "."
+        assertion_text = (
+            f"{self._ref} has a fraction of {relative_duplicates} > "
+            f"{self._max_duplicate_fraction} duplicate identifiers within groups "
+            f"{self._group_columns} ({n_duplicates} / {n_denominator})."
+            f"{example_string}"
+        )
+        return result, assertion_text
+
+    def _result_details(self, value_factual, value_target) -> dict[str, Any]:
+        n_duplicates, n_denominator, _ = value_factual
+        return {
+            "_n_violations": n_duplicates,
+            "_n_denominator": n_denominator,
+            "_denominator_description": (
+                f"rows with a non-null identifier, grouped by {self._group_columns}"
+            ),
+        }

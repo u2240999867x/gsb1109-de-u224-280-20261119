@@ -32,13 +32,23 @@ def _uncommon_substrings(string1: str, string2: str) -> tuple[str, str]:
 
 @dataclass(frozen=True)
 class TestResult:
-    """The result of the execution of a Constraint."""
+    """The result of the execution of a Constraint.
+
+    Besides the outcome, a result may carry the numerator and denominator that
+    were used for a threshold-based check. This makes it possible to report
+    *why* a constraint failed and which population the threshold was applied to,
+    without having to re-run the underlying query. Both values are optional so
+    that results of constraints which do not use a fraction remain unchanged.
+    """
 
     outcome: bool
     _failure_message: str | None = field(default=None, repr=False)
     _constraint_description: str | None = field(default=None, repr=False)
     _factual_queries: str | None = field(default=None, repr=False)
     _target_queries: str | None = field(default=None, repr=False)
+    _n_violations: int | None = field(default=None, repr=False)
+    _n_denominator: int | None = field(default=None, repr=False)
+    _denominator_description: str | None = field(default=None, repr=False)
 
     def formatted_failure_message(self, formatter: Formatter) -> str | None:
         return (
@@ -52,6 +62,20 @@ class TestResult:
             else None
         )
 
+    def formatted_denominator_summary(self, formatter: Formatter) -> str | None:
+        if self._n_denominator is None:
+            return None
+        description = self._denominator_description or "rows"
+        violations = self._n_violations if self._n_violations is not None else 0
+        if self._n_denominator == 0:
+            relative = "n/a"
+        else:
+            relative = f"{violations / self._n_denominator:.2%}"
+        return formatter.fmt_str(
+            f"Denominator: {self._n_denominator} ({description}); "
+            f"violations: {violations} ({relative})"
+        )
+
     @property
     def failure_message(self) -> str | None:
         return self.formatted_failure_message(_DEFAULT_FORMATTER)
@@ -59,6 +83,25 @@ class TestResult:
     @property
     def constraint_description(self) -> str | None:
         return self.formatted_constraint_description(_DEFAULT_FORMATTER)
+
+    @property
+    def n_violations(self) -> int | None:
+        """Number of violating rows or values, if reported by the constraint."""
+        return self._n_violations
+
+    @property
+    def n_denominator(self) -> int | None:
+        """Size of the population a threshold was applied to, if applicable."""
+        return self._n_denominator
+
+    @property
+    def denominator_description(self) -> str | None:
+        """Human-readable description of the population used as denominator."""
+        return self._denominator_description
+
+    @property
+    def denominator_summary(self) -> str | None:
+        return self.formatted_denominator_summary(_DEFAULT_FORMATTER)
 
     @property
     def logging_message(self):
@@ -70,6 +113,11 @@ class TestResult:
         failure_message = (
             f"\n\n/*\nFailure message:\n{self.failure_message}\n*/"
             if self.failure_message
+            else ""
+        )
+        denominator_message = (
+            f"\n\n/*\n{self.denominator_summary}\n*/"
+            if self.denominator_summary
             else ""
         )
         factual_query_message = ""
@@ -87,6 +135,7 @@ class TestResult:
         return (
             constraint_description_message
             + failure_message
+            + denominator_message
             + factual_query_message
             + target_query_message
             + "\n --- \n"
@@ -253,6 +302,18 @@ class Constraint(abc.ABC):
     ) -> tuple[bool, str | None]:
         raise NotImplementedError()
 
+    def _result_details(
+        self, value_factual: Any, value_target: Any
+    ) -> dict[str, Any]:
+        """Extra information to attach to the `TestResult`.
+
+        Constraints whose outcome is based on a fraction can override this to
+        report numerator, denominator and a description of the denominator.
+        This allows a report to show separately which constraint failed and
+        which population its threshold was applied to.
+        """
+        return {}
+
     def test(self, engine: sa.engine.Engine) -> TestResult:
         # ty can't figure out that this is a method and that self is passed
         # as the first argument.
@@ -261,9 +322,10 @@ class Constraint(abc.ABC):
         # as the first argument.
         value_target = self._get_target_value(engine=engine)  # type: ignore[missing-argument]
         is_success, assertion_message = self._compare(value_factual, value_target)
+        details = self._result_details(value_factual, value_target)
 
         if is_success:
-            return TestResult.success()
+            return TestResult(True, **details)
 
         factual_queries = None
         if self._factual_selections:
@@ -285,11 +347,13 @@ class Constraint(abc.ABC):
                 )
                 for target_selection in self._target_selections
             ]
-        return TestResult.failure(
+        return TestResult(
+            False,
             assertion_message,
             self.get_description(),
             factual_queries,
             target_queries,
+            **details,
         )
 
     def _apply_output_formatting(self, values: Collection) -> Collection:

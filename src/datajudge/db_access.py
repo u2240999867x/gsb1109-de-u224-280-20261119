@@ -986,6 +986,134 @@ def get_missing_fraction(
     )
 
 
+def get_conditional_null_counts(
+    engine: sa.engine.Engine,
+    ref: DataReference,
+    column: str,
+    condition: Condition,
+) -> tuple[tuple[int, int], list[sa.Select]]:
+    """Count rows matching ``condition`` and the subset of them missing ``column``.
+
+    In contrast to :func:`get_missing_fraction`, the denominator is not the
+    number of rows of the whole ``DataReference`` but only the rows for which
+    ``condition`` holds. Rows outside of ``condition`` are neither violations
+    nor part of the population being judged.
+
+    The condition is merged into the ``WHERE`` clause of the underlying data
+    source, so it may reference columns that are not part of ``ref``.
+    """
+    filtered_ref = DataReference(
+        ref.data_source,
+        ref.get_columns(engine),
+        merge_conditions(ref.condition, condition),
+    )
+    subquery = filtered_ref.get_selection(engine).alias()
+    n_denominator_selection = sa.select(sa.func.count()).select_from(subquery)
+    n_violations_selection = (
+        sa.select(sa.func.count())
+        .select_from(subquery)
+        .where(subquery.c[column].is_(None))
+    )
+
+    with engine.connect() as connection:
+        n_denominator = connection.execute(n_denominator_selection).scalar()
+        n_violations = connection.execute(n_violations_selection).scalar()
+
+    return (
+        int(n_violations or 0),
+        int(n_denominator or 0),
+    ), [n_denominator_selection, n_violations_selection]
+
+
+def get_duplicate_counts_by_group(
+    engine: sa.engine.Engine,
+    ref: DataReference,
+    group_columns: Sequence[str],
+) -> tuple[
+    tuple[int, int, list[tuple[tuple[Any, ...], dict[str, Any], int]]],
+    list[sa.Select],
+]:
+    """Count duplicate identifier rows within each group.
+
+    Identifier columns are all columns of ``ref`` except ``group_columns``.
+    Rows where any of those columns is ``NULL`` are excluded: a missing
+    identifier is not a duplicate, it is handled by a separate null constraint.
+
+    The returned values are the number of redundant rows (``rows - distinct
+    identifiers``), the number of rows with a non-null identifier, and a list
+    of ``(group_key, identifier_values, n_copies)`` examples for duplicates.
+    """
+    subquery = ref.get_selection(engine).alias()
+    column_names = ref.get_columns(engine)
+    if column_names is None:
+        raise ValueError("Need columns for duplicate detection.")
+    value_columns = [name for name in column_names if name not in group_columns]
+    group_column_elements = [subquery.c[column_name] for column_name in group_columns]
+    value_column_elements = [subquery.c[column_name] for column_name in value_columns]
+
+    grouped = (
+        sa.select(
+            *group_column_elements,
+            *value_column_elements,
+            sa.func.count().label("n_copies"),
+        )
+        .where(
+            sa.and_(
+                *[
+                    column.is_not(None)
+                    for column in [*group_column_elements, *value_column_elements]
+                ]
+            )
+        )
+        .group_by(*group_column_elements, *value_column_elements)
+        .subquery()
+    )
+    n_denominator_selection = sa.select(
+        sa.func.coalesce(sa.func.sum(grouped.c.n_copies), 0)
+    )
+    n_duplicates_selection = sa.select(
+        sa.func.coalesce(
+            sa.func.sum(
+                sa.case((grouped.c.n_copies > 1, grouped.c.n_copies - 1), else_=0)
+            ),
+            0,
+        )
+    )
+    example_selection = (
+        sa.select(
+            *[grouped.c[column_name] for column_name in group_columns],
+            *[grouped.c[column_name] for column_name in value_columns],
+            grouped.c.n_copies,
+        )
+        .where(grouped.c.n_copies > 1)
+        .order_by(*[grouped.c[column_name] for column_name in group_columns])
+        .limit(5)
+    )
+
+    with engine.connect() as connection:
+        n_denominator = connection.execute(n_denominator_selection).scalar()
+        n_duplicates = connection.execute(n_duplicates_selection).scalar()
+        example_rows = connection.execute(example_selection).fetchall()
+
+    examples = []
+    n_group_columns = len(group_columns)
+    for row in example_rows:
+        row_values = tuple(row)
+        examples.append(
+            (
+                row_values[:n_group_columns],
+                dict(zip(value_columns, row_values[n_group_columns:-1])),
+                int(row_values[-1]),
+            )
+        )
+
+    return (
+        int(n_duplicates or 0),
+        int(n_denominator or 0),
+        examples,
+    ), [n_duplicates_selection, n_denominator_selection, example_selection]
+
+
 def get_column_names(
     engine: sa.engine.Engine, ref: DataReference
 ) -> tuple[list[str], None]:

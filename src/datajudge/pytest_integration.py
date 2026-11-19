@@ -51,6 +51,14 @@ def collect_data_tests(requirements: Iterable[Requirement]):
         formatter = get_formatter(pytestconfig)
         apply_patches(datajudge_engine)
         test_result = constraint.test(datajudge_engine)
-        assert test_result.outcome, test_result.formatted_failure_message(formatter)
+        failure_message = test_result.formatted_failure_message(formatter)
+        denominator_summary = test_result.formatted_denominator_summary(formatter)
+        if denominator_summary:
+            failure_message = (
+                f"{failure_message}\n{denominator_summary}"
+                if failure_message
+                else denominator_summary
+            )
+        assert test_result.outcome, failure_message
 
     return test_constraint

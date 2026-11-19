@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+**New features**
+
+- Add `WithinRequirement.add_conditional_null_fraction_constraint` for values
+  that are mandatory only inside a condition, e.g. tracking numbers that are
+  required for shipped rows while empty values are expected for unshipped
+  rows. Its threshold uses the rows matching the condition as denominator.
+- Add `WithinRequirement.add_grouped_uniqueness_constraint` for identifiers
+  that must be unique within a group such as a warehouse. Its denominator is
+  the number of rows with a non-null identifier, and duplicate examples are
+  reported per group.
+- `TestResult` now optionally carries `n_violations`, `n_denominator` and
+  `denominator_description`, which are also included in `logging_message`.
+  This lets reports show which constraint failed and which population its
+  threshold was applied to.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

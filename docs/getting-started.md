@@ -91,6 +91,48 @@ date_growth := (max_date_table_2 - min_date_table_2) / (max_date_table_1 - min_d
 
 This example revolving around `NRowsMinGain` generalizes to many `Constraint` s concerned with growth, gain, loss or shrinkage limitations.
 
+## Conditional mandatory values and grouped uniqueness
+
+Some identifiers are only mandatory in a subset of the rows and only need to
+be unique within a scope. A typical example is a logistics table where a
+tracking number must be present exactly for shipped rows and where tracking
+numbers must be unique within - not across - warehouses. Both expectations are
+expressed as separate constraints, each with its own denominator.
+
+```python
+from datajudge import Condition
+
+requirements = WithinRequirement.from_table(
+    db_name="my_db", schema_name="my_schema", table_name="shipments"
+)
+
+requirements.add_conditional_null_fraction_constraint(
+    column="tracking_number",
+    condition=Condition(raw_string="status = 'shipped'"),
+    max_null_fraction=0,
+)
+
+requirements.add_grouped_uniqueness_constraint(
+    group_columns=["warehouse"],
+    columns=["tracking_number"],
+    max_duplicate_fraction=0,
+)
+```
+
+The first constraint applies its threshold only to rows matching the
+condition, so its denominator is the number of shipped rows. Rows that have
+not been shipped yet are allowed to have an empty tracking number and are not
+counted at all. The second constraint only considers rows with a non-null
+tracking number and reports the share of redundant rows,
+`(rows - distinct tracking numbers) / rows`, computed within each warehouse.
+
+When such a constraint fails, the failure message contains the fraction as
+`violations / denominator`, and the `TestResult` additionally exposes
+`n_violations`, `n_denominator` and `denominator_description` (also included in
+`logging_message`). Because every constraint is a separate pytest test case,
+reports list each broken constraint individually together with the population
+its threshold was applied to.
+
 ## Testing a specification
 
 In order to test whether the `Constraint` s expressed in a specification hold true, you can simply run
