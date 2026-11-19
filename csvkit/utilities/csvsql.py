@@ -91,6 +91,10 @@ class CSVSQL(CSVKitUtility):
             '--chunk-size', dest='chunk_size', type=int,
             help='Chunk size for batch insert into the table. Requires --insert.')
         self.argparser.add_argument(
+            '--batch', dest='batch', action='store_true',
+            help='Execute all table creation, data inserts, and queries in a single transaction, so that the '
+                 'database is left unchanged if any step fails. Requires --db.')
+        self.argparser.add_argument(
             '--min-col-len', dest='min_col_len', type=int, default=1,
             help='The minimum length of text columns.')
         self.argparser.add_argument(
@@ -135,6 +139,8 @@ class CSVSQL(CSVKitUtility):
             self.argparser.error('The --after-insert option is only valid if --insert is also specified.')
         if self.args.chunk_size and not self.args.insert:
             self.argparser.error('The --chunk-size option is only valid if --insert is also specified.')
+        if self.args.batch and not self.args.connection_string:
+            self.argparser.error('The --batch option is only valid when either --db or --query is specified.')
 
         if self.args.no_create and self.args.create_if_not_exists:
             self.argparser.error('The --no-create and --create-if-not-exists options are mutually exclusive.')
@@ -175,6 +181,11 @@ class CSVSQL(CSVKitUtility):
         """
         if self.connection:
             transaction = self.connection.begin()
+            if self.args.batch and self.connection.dialect.name == 'sqlite':
+                # pysqlite's legacy transaction handling begins a transaction only before DML statements, so DDL
+                # like CREATE TABLE would be committed immediately. Begin explicitly, so that table creation is
+                # also rolled back if any step fails.
+                self.connection.exec_driver_sql('BEGIN')
 
         for f in self.input_files:
             try:

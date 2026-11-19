@@ -30,6 +30,10 @@ class TestCSVSQL(CSVKitTestCase, EmptyFileTests):
                 'The --insert option is only valid when either --db or --query is specified.',
             ),
             (
+                ['--batch'],
+                'The --batch option is only valid when either --db or --query is specified.',
+            ),
+            (
                 ['--db', 'sqlite:///:memory:', '--insert', '--no-create', '--overwrite'],
                 'The --overwrite option is only valid if --no-create is not specified.',
             ),
@@ -276,3 +280,45 @@ class TestCSVSQL(CSVKitTestCase, EmptyFileTests):
         self.get_output(['--db', 'sqlite:///' + self.db_file, '--insert', '--tables', 'foo', 'examples/foo1.csv'])
         self.get_output(['--db', 'sqlite:///' + self.db_file, '--insert', '--tables',
                         'foo', 'examples/foo2.csv', '--create-if-not-exists'])
+
+    def table_names(self):
+        output_file = io.StringIO()
+        utility = SQL2CSV(['--db', 'sqlite:///' + self.db_file, '--query',
+                           "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"], output_file)
+        utility.run()
+        output = output_file.getvalue()
+        output_file.close()
+        return output
+
+    def test_batch(self):
+        self.get_output(['--db', 'sqlite:///' + self.db_file, '--insert', '--batch',
+                         '--tables', 'foo,bar', 'examples/foo1.csv', 'examples/foo2.csv'])
+        self.assertEqual(self.table_names(), 'name\nbar\nfoo\n')
+
+    def test_batch_rollback(self):
+        with self.assertRaises(ValueError):
+            self.get_output(['--db', 'sqlite:///' + self.db_file, '--insert', '--batch',
+                             '--tables', 'foo,bad', 'examples/foo1.csv', 'examples/bad.csv'])
+        self.assertEqual(self.table_names(), 'name\n')
+
+    def test_batch_rollback_failed_query(self):
+        with self.assertRaises(OperationalError):
+            self.get_output(['--db', 'sqlite:///' + self.db_file, '--insert', '--batch',
+                             '--tables', 'foo,bar', 'examples/foo1.csv', 'examples/foo2.csv',
+                             '--query', 'SELECT * FROM nonexistent'])
+        self.assertEqual(self.table_names(), 'name\n')
+
+    def test_batch_rollback_existing_table(self):
+        self.get_output(['--db', 'sqlite:///' + self.db_file, '--insert', '--tables', 'foo', 'examples/foo1.csv'])
+        with self.assertRaises(ValueError):
+            self.get_output(['--db', 'sqlite:///' + self.db_file, '--insert', '--batch', '--no-create',
+                             '--tables', 'foo,bad', 'examples/foo2.csv', 'examples/bad.csv'])
+        self.assertEqual(self.table_names(), 'name\nfoo\n')
+
+        output_file = io.StringIO()
+        utility = SQL2CSV(['--db', 'sqlite:///' + self.db_file, '--query', 'SELECT COUNT(*) AS n FROM foo'],
+                          output_file)
+        utility.run()
+        output = output_file.getvalue()
+        output_file.close()
+        self.assertEqual(output, 'n\n2\n')

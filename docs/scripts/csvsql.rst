@@ -21,7 +21,7 @@ Generate SQL statements for a CSV file or execute those statements directly on a
                  [--no-constraints] [--unique-constraint UNIQUE_CONSTRAINT]
                  [--no-create] [--create-if-not-exists] [--overwrite]
                  [--db-schema DB_SCHEMA] [-y SNIFF_LIMIT] [-I]
-                 [--chunk-size CHUNK_SIZE]
+                 [--chunk-size CHUNK_SIZE] [--batch]
                  [FILE [FILE ...]]
 
    Generate SQL statements for one or more CSV files, or execute those statements
@@ -87,6 +87,9 @@ Generate SQL statements for a CSV file or execute those statements directly on a
      --chunk-size CHUNK_SIZE
                            Chunk size for batch insert into the table. Requires
                            --insert.
+     --batch               Execute all table creation, data inserts, and queries
+                           in a single transaction, so that the database is left
+                           unchanged if any step fails. Requires --db.
      --min-col-len MIN_COL_LEN
                            The minimum length of text columns.
      --col-len-multiplier COL_LEN_MULTIPLIER
