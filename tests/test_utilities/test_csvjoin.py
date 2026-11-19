@@ -1,6 +1,8 @@
+import io
 import os
 import sys
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import patch
 
 from csvkit.utilities.csvjoin import CSVJoin, launch_new_instance
@@ -110,6 +112,91 @@ class TestCSVJoin(CSVKitTestCase, EmptyFileTests):
             ['1', 'b', 'c', 'True', '2', '3'],
             ['2', 'b', 'c', '', '', ''],
             ['3', 'b', 'c', '', '', ''],
+        ])
+
+    def test_composite_key_inner(self):
+        self.assertRows(['-c', 'region+store', 'examples/join_composite_details.csv',
+                         'examples/join_composite_stores.csv'], [
+            ['region', 'store', 'amount', 'manager'],
+            ['East', 'S1', '10', 'Anna'],
+            ['East', 'S2', '20', 'Bob'],
+            ['West', 'S1', '30', 'Cleo'],
+        ])
+
+    def test_composite_key_per_file(self):
+        self.assertRows(['-c', 'region+store,region+store', 'examples/join_composite_details.csv',
+                         'examples/join_composite_stores.csv'], [
+            ['region', 'store', 'amount', 'manager'],
+            ['East', 'S1', '10', 'Anna'],
+            ['East', 'S2', '20', 'Bob'],
+            ['West', 'S1', '30', 'Cleo'],
+        ])
+
+    def test_composite_key_arity_mismatch(self):
+        self.assertError(
+            launch_new_instance,
+            ['-c', 'region+store,region'],
+            'Each file must be joined on the same number of columns.',
+            args=['examples/join_composite_details.csv', 'examples/join_composite_stores.csv'],
+        )
+
+    def test_composite_key_left_null_keys_never_match(self):
+        self.assertRows(['-c', 'region+store', '--left', 'examples/join_composite_details.csv',
+                         'examples/join_composite_stores.csv'], [
+            ['region', 'store', 'amount', 'manager'],
+            ['East', 'S1', '10', 'Anna'],
+            ['East', 'S2', '20', 'Bob'],
+            ['West', 'S1', '30', 'Cleo'],
+            ['West', '', '40', ''],
+        ])
+
+    def test_null_keys_never_match(self):
+        self.assertRows(['-c', 'a', 'examples/blanks.csv', 'examples/blanks.csv'], [
+            ['a', 'b', 'c', 'd', 'e', 'f', 'b2', 'c2', 'd2', 'e2', 'f2'],
+        ])
+
+    def test_right_unique(self):
+        self.assertRows(['-c', 'region+store', '--right-unique', 'examples/join_composite_details.csv',
+                         'examples/join_composite_stores.csv'], [
+            ['region', 'store', 'amount', 'manager'],
+            ['East', 'S1', '10', 'Anna'],
+            ['East', 'S2', '20', 'Bob'],
+            ['West', 'S1', '30', 'Cleo'],
+        ])
+
+    def test_right_unique_requires_columns(self):
+        self.assertError(
+            launch_new_instance,
+            ['--right-unique'],
+            'You must provide join column names when using --right-unique.',
+        )
+
+    def test_right_unique_violation(self):
+        self.assertError(
+            launch_new_instance,
+            ['-c', 'region+store', '--right-unique'],
+            'The right-hand file "examples/join_composite_stores_dup.csv" contains duplicate join keys: '
+            'East, S1 (2 rows)',
+            args=['examples/join_composite_details.csv', 'examples/join_composite_stores_dup.csv'],
+        )
+
+    def test_right_unique_violation_writes_no_output(self):
+        output_file = io.TextIOWrapper(io.BytesIO(), encoding='utf-8', newline='', write_through=True)
+        utility = self.Utility([
+            '-c', 'region+store', '--right-unique',
+            'examples/join_composite_details.csv', 'examples/join_composite_stores_dup.csv',
+        ], output_file)
+
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            utility.run()
+
+        self.assertEqual(output_file.buffer.getvalue(), b'')
+
+    def test_right_table_only_key_columns(self):
+        self.assertRows(['-c', 'a', 'examples/join_a.csv', 'examples/join_key_only.csv'], [
+            ['a', 'b', 'c'],
+            ['1', 'b', 'c'],
+            ['2', 'b', 'c'],
         ])
 
     def test_sniff_limit_zero_limit(self):

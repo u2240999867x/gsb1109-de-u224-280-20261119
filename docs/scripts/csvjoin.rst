@@ -5,7 +5,7 @@ csvjoin
 Description
 ===========
 
-Merges two or more CSV tables together using a method analogous to SQL JOIN operation. By default it performs an inner join, but full outer, left outer, and right outer are also available via flags. Key columns are specified with the -c flag (either a single column which exists in all tables, or a comma-separated list of columns with one corresponding to each). If the columns flag is not provided then the tables will be merged "sequentially", that is they will be merged in row order with no filtering:
+Merges two or more CSV tables together using a method analogous to SQL JOIN operation. By default it performs an inner join, but full outer, left outer, and right outer are also available via flags. Key columns are specified with the -c flag (either a single column which exists in all tables, a "+"-separated list of columns to join on a composite key, or a comma-separated list of such specifications with one corresponding to each file). Rows in which any part of the key is null never match. If the columns flag is not provided then the tables will be merged "sequentially", that is they will be merged in row order with no filtering:
 
 .. code-block:: none
 
@@ -14,8 +14,8 @@ Merges two or more CSV tables together using a method analogous to SQL JOIN oper
                   [-S] [--blanks] [--null-value NULL_VALUES [NULL_VALUES ...]]
                   [--date-format DATE_FORMAT] [--datetime-format DATETIME_FORMAT]
                   [-H] [-K SKIP_LINES] [-v] [-l] [--zero] [-V] [-c COLUMNS]
-                  [--outer] [--left] [--right] [-y SNIFF_LIMIT] [-I]
-                  [FILE [FILE ...]]
+                  [--outer] [--left] [--right] [--right-unique] [-y SNIFF_LIMIT]
+                  [-I] [FILE [FILE ...]]
 
    Execute a SQL-like join to merge CSV files on a specified column or columns.
 
@@ -26,11 +26,14 @@ Merges two or more CSV tables together using a method analogous to SQL JOIN oper
    optional arguments:
      -h, --help            show this help message and exit
      -c COLUMNS, --columns COLUMNS
-                           The column name(s) on which to join. Should be either
-                           one name (or index) or a comma-separated list with one
-                           name (or index) per file, in the same order in which
-                           the files were specified. If not specified, the two
-                           files will be joined sequentially without matching.
+                           The column name(s) on which to join. To join on a
+                           composite key, separate the names (or indices) with
+                           "+", for example "region+store". To use different
+                           columns in each file, provide a comma-separated list
+                           with one such specification per file, in the same
+                           order in which the files were specified. If not
+                           specified, the two files will be joined sequentially
+                           without matching.
      --outer               Perform a full outer join, rather than the default
                            inner join.
      --left                Perform a left outer join, rather than the default
@@ -41,6 +44,10 @@ Merges two or more CSV tables together using a method analogous to SQL JOIN oper
                            inner join. If more than two files are provided this
                            will be executed as a sequence of right outer joins,
                            starting at the right.
+     --right-unique        Require that each join key appears in at most one
+                           row of every right-hand file. If any key is
+                           duplicated, the duplicated keys are reported and no
+                           output is written.
      -y SNIFF_LIMIT, --snifflimit SNIFF_LIMIT
                            Limit CSV dialect sniffing to the specified number of
                            bytes. Specify "0" to disable sniffing entirely, or
@@ -60,6 +67,12 @@ Examples
 .. code-block:: bash
 
    csvjoin -c 1 examples/join_a.csv examples/join_b.csv
+
+Join on a composite key (a store is identified by its region and store number together), requiring the right-hand file to have at most one row per key:
+
+.. code-block:: bash
+
+   csvjoin -c region+store --right-unique examples/join_composite_details.csv examples/join_composite_stores.csv
 
 Add two empty columns to the right of a CSV:
 

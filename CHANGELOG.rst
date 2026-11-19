@@ -1,6 +1,9 @@
 Unreleased
 ----------
 
+-  feat: :doc:`/scripts/csvjoin` joins on composite keys, specified as ``+``-separated column names (e.g. :code:`-c region+store`).
+-  feat: :doc:`/scripts/csvjoin` adds a :code:`--right-unique` option to require that each join key appears in at most one row of every right-hand file. If any key is duplicated, the duplicated keys are reported and no output is written.
+-  fix: :doc:`/scripts/csvjoin` rows in which any part of the join key is null no longer match each other.
 -  fix: :doc:`/scripts/csvgrep` treats an empty :code:`--regex` or :code:`--match` pattern as matching every value. Previously, with an empty pattern, :code:`--any-match` matched no rows, and :code:`--any-match --invert-match` matched every row.
 -  feat: :doc:`/scripts/csvcut` adds an :code:`--ignore-unknown-columns` option to skip identifiers in :code:`-c/--columns` that do not match a column in the input.
 -  feat: :doc:`/scripts/csvclean` adds a :code:`--remove-empty-columns` option to remove empty columns from standard output.

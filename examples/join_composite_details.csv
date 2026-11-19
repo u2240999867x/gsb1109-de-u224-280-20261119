@@ -1,0 +1,5 @@
+region,store,amount
+East,S1,10
+East,S2,20
+West,S1,30
+West,,40
