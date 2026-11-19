@@ -36,6 +36,7 @@ from benedict.core import move as _move
 from benedict.core import nest as _nest
 from benedict.core import remove as _remove
 from benedict.core import rename as _rename
+from benedict.core import rename_items as _rename_items
 from benedict.core import search as _search
 from benedict.core import standardize as _standardize
 from benedict.core import subset as _subset
@@ -320,6 +321,15 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         If deep is True, the key is renamed at every nesting level.
         """
         _rename(self, key, key_new, deep=deep)  # type: ignore[misc]
+
+    def rename_items(self, changes: Mapping[_KPT, _KPT], deep: bool = False) -> bool:
+        """
+        Rename multiple dict item keys simultaneously, so swaps and rename
+        chains preserve every value.
+        A KeyError is raised on destination collisions or sub-path conflicts.
+        Returns True if at least one item was renamed, False otherwise.
+        """
+        return _rename_items(self, changes, deep=deep)  # type: ignore[misc]
 
     def search(
         self,

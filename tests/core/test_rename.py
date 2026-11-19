@@ -1,6 +1,7 @@
 import unittest
 
 from benedict.core import rename as _rename
+from benedict.core import rename_items as _rename_items
 
 
 class rename_test_case(unittest.TestCase):
@@ -189,3 +190,99 @@ class rename_test_case(unittest.TestCase):
         d = {"section": {"users": ([({"fname": "Alice"},)],)}}
         _rename(d, "fname", "first_name", deep=True)
         self.assertEqual(d, {"section": {"users": ([({"first_name": "Alice"},)],)}})
+
+
+class rename_items_test_case(unittest.TestCase):
+    """
+    This class describes a rename_items test case.
+    """
+
+    def test_rename_items_swap(self) -> None:
+        # Telemetry temperature meanings are swapped between A and B.
+        d = {"temperature_a": 10, "temperature_b": 20, "unit": "celsius"}
+        changed = _rename_items(
+            d, {"temperature_a": "temperature_b", "temperature_b": "temperature_a"}
+        )
+        self.assertTrue(changed)
+        r = {"temperature_a": 20, "temperature_b": 10, "unit": "celsius"}
+        self.assertEqual(d, r)
+
+    def test_rename_items_swap_keeps_both_values(self) -> None:
+        d = {"a": {"x": 1}, "b": {"y": 2}}
+        _rename_items(d, {"a": "b", "b": "a"})
+        self.assertEqual(d, {"a": {"y": 2}, "b": {"x": 1}})
+
+    def test_rename_items_swap_dicts_are_independent(self) -> None:
+        d = {"a": {"x": 1}, "b": {"y": 2}}
+        _rename_items(d, {"a": "b", "b": "a"})
+        d["a"]["z"] = 3
+        self.assertEqual(d["b"], {"x": 1})
+
+    def test_rename_items_chain(self) -> None:
+        d = {"a": 1, "b": 2, "c": 3}
+        _rename_items(d, {"a": "b", "b": "c", "c": "a"})
+        self.assertEqual(d, {"a": 3, "b": 1, "c": 2})
+
+    def test_rename_items_move_nested_field_at_top_level(self) -> None:
+        d = {"temperature": {"a": 10, "b": 20}, "meta": {"id": 1}}
+        changed = _rename_items(d, {"temperature": "readings", "meta": "info"})
+        self.assertTrue(changed)
+        r = {"readings": {"a": 10, "b": 20}, "info": {"id": 1}}
+        self.assertEqual(d, r)
+
+    def test_rename_items_swap_inside_nested_dict(self) -> None:
+        d = {"telemetry": {"a": 10, "b": 20}}
+        _rename_items(d, {"a": "b", "b": "a"}, deep=True)
+        self.assertEqual(d, {"telemetry": {"a": 20, "b": 10}})
+
+    def test_rename_items_deep_inside_list(self) -> None:
+        d = {"readings": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}
+        _rename_items(d, {"a": "b", "b": "a"}, deep=True)
+        r = {"readings": [{"a": 2, "b": 1}, {"a": 4, "b": 3}]}
+        self.assertEqual(d, r)
+
+    def test_rename_items_deep_inside_tuple(self) -> None:
+        d = {"readings": ({"a": 1, "b": 2},)}
+        _rename_items(d, {"a": "b", "b": "a"}, deep=True)
+        self.assertEqual(d, {"readings": ({"a": 2, "b": 1},)})
+
+    def test_rename_items_destination_is_existing_key(self) -> None:
+        d = {"a": 1, "b": 2, "c": 3}
+        with self.assertRaises(KeyError):
+            _rename_items(d, {"a": "c"})
+        self.assertEqual(d, {"a": 1, "b": 2, "c": 3})
+
+    def test_rename_items_swap_replaces_existing_destination_value(self) -> None:
+        # In a swap the existing destination value is itself moved away.
+        d = {"a": 1, "b": 2, "c": 3}
+        _rename_items(d, {"a": "b", "b": "a"})
+        self.assertEqual(d, {"a": 2, "b": 1, "c": 3})
+
+    def test_rename_items_duplicate_destinations(self) -> None:
+        d = {"a": 1, "b": 2}
+        with self.assertRaises(KeyError):
+            _rename_items(d, {"a": "z", "b": "z"})
+        self.assertEqual(d, {"a": 1, "b": 2})
+
+    def test_rename_items_missing_source_is_ignored(self) -> None:
+        d = {"a": 1, "b": 2}
+        changed = _rename_items(d, {"a": "z", "missing": "w"})
+        self.assertTrue(changed)
+        self.assertEqual(d, {"z": 1, "b": 2})
+
+    def test_rename_items_no_changes_returns_false(self) -> None:
+        d = {"a": 1, "b": 2}
+        self.assertFalse(_rename_items(d, {"x": "y"}))
+        self.assertFalse(_rename_items(d, {"a": "a"}))
+        self.assertEqual(d, {"a": 1, "b": 2})
+
+    def test_rename_items_empty_changes_returns_false(self) -> None:
+        d = {"a": 1}
+        self.assertFalse(_rename_items(d, {}))
+        self.assertEqual(d, {"a": 1})
+
+    def test_rename_items_plain_dict_literal_dotted_keys(self) -> None:
+        # Plain dicts have no keypath separator: dotted keys are literal.
+        d = {"a.x": 1, "a": {"x": 2}}
+        _rename_items(d, {"a.x": "a.y"})
+        self.assertEqual(d, {"a.y": 1, "a": {"x": 2}})

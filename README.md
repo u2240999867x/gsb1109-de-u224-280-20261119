@@ -322,6 +322,7 @@ Here are the details of the supported formats, operations and extra options docs
     -   [`nest`](#nest)
     -   [`remove`](#remove)
     -   [`rename`](#rename)
+    -   [`rename_items`](#rename_items)
     -   [`search`](#search)
     -   [`standardize`](#standardize)
     -   [`subset`](#subset)
@@ -564,6 +565,24 @@ d.rename("first_name", "firstname")
 
 # Use deep=True to rename the key at every nesting level.
 d.rename("fname", "first_name", deep=True)
+```
+
+#### `rename_items`
+
+```python
+# Rename multiple dict item keys simultaneously, as if all changes
+# happened at the same time, so swaps and rename chains preserve
+# every value. Returns True if at least one item was renamed.
+d.rename_items({"temperature_a": "temperature_b", "temperature_b": "temperature_a"})
+
+# Keypaths are supported, so nested fields can be migrated to new paths.
+d.rename_items({"meta.id": "meta.identifier"})
+
+# A KeyError is raised when a destination lands on an existing value
+# not moved by another change, when two destinations collide, or when
+# a destination is a sub-path of another change's source.
+# Use deep=True to apply the same renames at every nesting level.
+d.rename_items({"a": "b", "b": "a"}, deep=True)
 ```
 
 #### `search`

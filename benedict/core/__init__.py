@@ -14,7 +14,7 @@ from benedict.core.merge import merge
 from benedict.core.move import move
 from benedict.core.nest import nest
 from benedict.core.remove import remove
-from benedict.core.rename import rename
+from benedict.core.rename import rename, rename_items
 from benedict.core.search import search
 from benedict.core.standardize import standardize
 from benedict.core.subset import subset
@@ -42,6 +42,7 @@ __all__ = [
     "nest",
     "remove",
     "rename",
+    "rename_items",
     "search",
     "standardize",
     "subset",

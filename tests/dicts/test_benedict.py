@@ -2015,6 +2015,95 @@ b:
         }
         self.assertEqual(b, r)
 
+    def test_rename_items_swap(self) -> None:
+        d = {
+            "temperature_a": 10,
+            "temperature_b": 20,
+            "unit": "celsius",
+        }
+        b = benedict(d)
+        changed = b.rename_items(
+            {"temperature_a": "temperature_b", "temperature_b": "temperature_a"}
+        )
+        self.assertTrue(changed)
+        r = {
+            "temperature_a": 20,
+            "temperature_b": 10,
+            "unit": "celsius",
+        }
+        self.assertEqual(b, r)
+
+    def test_rename_items_swap_and_migrate_nested_field(self) -> None:
+        d = {
+            "telemetry": {
+                "temperature": {"a": 10, "b": 20},
+                "meta": {"id": 1},
+            }
+        }
+        b = benedict(d)
+        changed = b.rename_items(
+            {
+                "telemetry.temperature.a": "telemetry.temperature.b",
+                "telemetry.temperature.b": "telemetry.temperature.a",
+                "telemetry.meta.id": "telemetry.meta.identifier",
+            }
+        )
+        self.assertTrue(changed)
+        r = {
+            "telemetry": {
+                "temperature": {"a": 20, "b": 10},
+                "meta": {"identifier": 1},
+            }
+        }
+        self.assertEqual(b, r)
+
+    def test_rename_items_destination_is_existing_keypath(self) -> None:
+        d = {"a": {"x": 1}, "b": 2}
+        b = benedict(d)
+        with self.assertRaises(KeyError):
+            b.rename_items({"b": "a.x"})
+        self.assertEqual(b, d)
+
+    def test_rename_items_destination_is_subpath_of_other_source(self) -> None:
+        d = {"a": {"x": 1}, "b": 2}
+        b = benedict(d)
+        with self.assertRaises(KeyError):
+            b.rename_items({"a": "b", "b": "a.x"})
+        self.assertEqual(b, d)
+
+    def test_rename_items_destination_subpath_conflict_between_destinations(
+        self,
+    ) -> None:
+        d = {"a": 1, "b": 2}
+        b = benedict(d)
+        with self.assertRaises(KeyError):
+            b.rename_items({"a": "x", "b": "x.y"})
+        self.assertEqual(b, d)
+
+    def test_rename_items_no_changes_returns_false(self) -> None:
+        d = {"a": 1, "b": 2}
+        b = benedict(d)
+        self.assertFalse(b.rename_items({"missing": "whatever"}))
+        self.assertFalse(b.rename_items({"a": "a"}))
+        self.assertEqual(b, d)
+
+    def test_rename_items_deep_swaps_nested(self) -> None:
+        d = {
+            "readings": [
+                {"a": 1, "b": 2},
+                {"a": 3, "b": 4},
+            ]
+        }
+        b = benedict(d)
+        b.rename_items({"a": "b", "b": "a"}, deep=True)
+        r = {
+            "readings": [
+                {"a": 2, "b": 1},
+                {"a": 4, "b": 3},
+            ]
+        }
+        self.assertEqual(b, r)
+
     def test_search(self) -> None:
         d: dict[str, Any] = {
             "a": "Hello world",

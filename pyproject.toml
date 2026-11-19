@@ -54,6 +54,7 @@ keywords = [
     "nest",
     "remove",
     "rename",
+    "rename_items",
     "search",
     "standardize",
     "subset",
