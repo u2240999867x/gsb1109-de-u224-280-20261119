@@ -318,6 +318,8 @@ Here are the details of the supported formats, operations and extra options docs
     -   [`keypaths`](#keypaths)
     -   [`match`](#match)
     -   [`merge`](#merge)
+    -   [`merge_sources`](#merge_sources)
+    -   [`merge_with_sources`](#merge_with_sources)
     -   [`move`](#move)
     -   [`nest`](#nest)
     -   [`remove`](#remove)
@@ -525,6 +527,36 @@ m = d.match(pattern, indexes=True)
 # If overwrite is False, existing values will not be overwritten.
 # If concat is True, list values will be concatenated together.
 d.merge(a, b, c, overwrite=True, concat=False)
+
+# Optionally pass 'source' (or 'sources') to also track which document
+# each merged field comes from, then query it by keypath or keylist:
+d.merge(revision, source="json")  # d["a"] -> "base", d["b"] -> "json"
+d.source_of("db.host")            # -> "json"
+d.sources["db.port"]              # -> "base"
+```
+
+#### `merge_sources`
+
+```python
+# Merge one or more dictionary objects into current instance, tracking the
+# source of every merged field. 'sources' contains one label for the current
+# instance and one for each merged dict, in order.
+# Return a SourceMap that can be queried by keypath string, keylist or tuple.
+sources = d.merge_sources(revision, sources=["yaml", "json"])
+sources["db.host"]                # -> "json"
+sources[["db", "host"]]           # -> "json"
+sources["db"]["port"]             # -> "yaml"
+sources.flat                      # -> {"db": "yaml", "db.host": "json", ...}
+```
+
+#### `merge_with_sources`
+
+```python
+# Merge into a clone of the current instance and return both the merged dict
+# and its field sources, without modifying the current instance.
+merged, sources = d.merge_with_sources(revision, sources=["yaml", "json"])
+merged["db.host"]                 # -> "json"
+merged.source_of("db.port")       # -> "yaml"
 ```
 
 #### `move`

@@ -32,6 +32,7 @@ from benedict.core import items_sorted_by_values as _items_sorted_by_values
 from benedict.core import keypaths as _keypaths
 from benedict.core import match as _match
 from benedict.core import merge as _merge
+from benedict.core import merge_sources as _merge_sources
 from benedict.core import move as _move
 from benedict.core import nest as _nest
 from benedict.core import remove as _remove
@@ -43,6 +44,7 @@ from benedict.core import swap as _swap
 from benedict.core import traverse as _traverse
 from benedict.core import unflatten as _unflatten
 from benedict.core import unique as _unique
+from benedict.core.source_map import MergeResult, SourceMap
 from benedict.core.traverse import TraverseCallback
 from benedict.dicts.base import BaseDict
 from benedict.dicts.io import IODict
@@ -64,9 +66,12 @@ __all__ = [
 _KPT = keypath_util.KeyType
 _K = TypeVar("_K", default=str)
 _V = TypeVar("_V", default=Any)
+_SOURCE_MISSING: Any = object()
 
 
 class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_K, _V]):
+    _sources: SourceMap | None = None
+
     def __init__(
         self,
         *args: Any,
@@ -81,6 +86,8 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
             kwargs.setdefault("keyattr_dynamic", obj.keyattr_dynamic)
             kwargs.setdefault("keypath_separator", obj.keypath_separator)
             super().__init__(obj.dict(), **kwargs)
+            if obj._sources is not None:
+                object.__setattr__(self, "_sources", obj._sources.copy())
             return
         super().__init__(*args, **kwargs)
 
@@ -93,12 +100,46 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         )
         for key, value in self.items():
             obj[key] = _clone(value, memo=memo)
+        if self._sources is not None:
+            object.__setattr__(obj, "_sources", self._sources.copy())
         if self._frozen:
             obj.freeze()
         return obj
 
+    def __setstate__(self, state: Mapping[str, Any]) -> None:
+        super().__setstate__(state)
+        object.__setattr__(self, "_sources", state.get("_sources", None))
+
     def __getitem__(self, key: _KPT) -> Any:  # type: ignore[override]
-        return self._cast(super().__getitem__(key))
+        return self._cast_with_sources(super().__getitem__(key), key)
+
+    def _cast_with_sources(self, value: Any, key: Any) -> Any:
+        """
+        Cast the value and, when sources are tracked, attach to nested dicts
+        the portion of the source map that belongs to them.
+        """
+        value = self._cast(value)
+        if not self._sources:
+            return value
+        keys = keypath_util.parse_keys(key, self._keypath_separator)
+        if not keys:
+            return value
+        path = tuple(keys)
+        if isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, benedict):
+                    self._attach_sources(item, path + (index,))
+        elif isinstance(value, benedict):
+            self._attach_sources(value, path)
+        return value
+
+    def _attach_sources(
+        self, value: benedict[Any, Any], path: tuple[Any, ...]
+    ) -> None:
+        submap = self._sources.submap(path) if self._sources else None
+        if submap is None:
+            submap = SourceMap(separator=self._keypath_separator or ".")
+        object.__setattr__(value, "_sources", submap)
 
     def __setitem__(self, key: _KPT, value: _V) -> None:  # type: ignore[override]
         self._check_frozen()
@@ -135,7 +176,10 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         """
         Creates and return a clone of the current dict instance (deep copy).
         """
-        return cast("Self", self._cast(_clone(self)))
+        obj = cast("Self", self._cast(_clone(self)))
+        if self._sources is not None:
+            object.__setattr__(obj, "_sources", self._sources.copy())
+        return obj
 
     def copy(self) -> Self:
         """
@@ -149,6 +193,8 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         )
         for key, value in self.items():
             obj[key] = value
+        if self._sources is not None:
+            object.__setattr__(obj, "_sources", self._sources.copy())
         if self._frozen:
             obj.freeze()
         return obj
@@ -201,7 +247,7 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         return cast("Self", _flatten(self, separator, indexes))
 
     def get(self, key: _KPT, default: _V | None = None) -> Any:  # type: ignore[override]
-        return self._cast(super().get(key, default))
+        return self._cast_with_sources(super().get(key, default), key)
 
     def get_dict(self, key: _K, default: Any = None) -> Any:
         return self._cast(super().get_dict(key, default))
@@ -263,19 +309,131 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         """
         return _match(self, pattern, separator=self._keypath_separator, indexes=indexes)
 
-    def merge(self, other: Mapping[str, _V], *args: Any, **kwargs: Any) -> None:
+    def merge(
+        self, other: Mapping[str, _V], *args: Any, **kwargs: Any
+    ) -> SourceMap | None:
         """
         Merge one or more dict objects into current instance (deepupdate).
         Sub-dictionaries will be merged together.
         If overwrite is False, existing values will not be overwritten.
         If concat is True, list values will be concatenated together.
+        If 'sources' or 'source' is provided, the source of every merged field
+        is tracked (see 'merge_sources') and the source map is returned,
+        otherwise None is returned.
         """
+        sources = kwargs.pop("sources", None)
+        source = kwargs.pop("source", None)
+        track_sources = kwargs.pop("track_sources", False) or kwargs.pop(
+            "with_sources", False
+        )
+        if sources is None and source is not None:
+            sources = ["base"] + [source] * (len(args) + 1)
+        if sources is None and track_sources:
+            # track using default labels
+            return self.merge_sources(other, *args, **kwargs)
+        if sources is not None:
+            return self.merge_sources(other, *args, sources=sources, **kwargs)
         # merge writes into existing nested dicts, check the frozen state here
         self._check_frozen()
         others = [other] + list(args)
         for other in others:
             keypath_util.check_keys(other, self._keypath_separator)
         _merge(self, *others, **kwargs)
+        return None
+
+    def merge_sources(
+        self, other: Mapping[str, _V], *args: Any, **kwargs: Any
+    ) -> SourceMap:
+        """
+        Merge one or more dict objects into current instance, tracking the
+        source of every merged field.
+        Sub-dictionaries will be merged together.
+        If overwrite is False, existing values will not be overwritten.
+        If concat is True, list values will be concatenated together.
+        The 'sources' argument contains one label for the current instance and
+        one for each merged dict, in order (eg. sources=["yaml", "json"]).
+        Return a SourceMap to query the source of a specific field by keypath
+        or keylist, eg. sources["a.b"] or sources[["a", "b"]].
+        """
+        # merge writes into existing nested dicts, check the frozen state here
+        self._check_frozen()
+        others = [other] + list(args)
+        for other in others:
+            keypath_util.check_keys(other, self._keypath_separator)
+        kwargs.setdefault("separator", self._keypath_separator or ".")
+        kwargs.setdefault("base_sources", getattr(self, "_sources", None))
+        source_map = _merge_sources(self, *others, **kwargs)
+        # bypass KeyattrDict.__setattr__: track sources as state, not as a key
+        object.__setattr__(self, "_sources", source_map)
+        return source_map
+
+    def merge_with_sources(
+        self, other: Mapping[str, _V], *args: Any, **kwargs: Any
+    ) -> MergeResult:
+        """
+        Merge one or more dict objects into a clone of the current instance and
+        return both the merged dict and the sources of its fields, without
+        modifying the current instance.
+        The result can be unpacked (merged, sources = ...) or queried by
+        attribute (result.merged, result.sources).
+        It accepts the same arguments as 'merge_sources'.
+        """
+        sources = kwargs.pop("sources", None)
+        merged = self.clone().unfreeze()
+        new_source_map = merged.merge_sources(
+            other, *args, sources=sources, **kwargs
+        )
+        if self._frozen:
+            merged.freeze()
+        return MergeResult(merged=merged, sources=new_source_map)
+
+    def source_of(self, key: _KPT, default: Any = _SOURCE_MISSING) -> Any:
+        """
+        Return the source label of the given field, using the sources recorded
+        by the last source-tracked merge.
+        Raise a KeyError if no source is recorded for the given key, unless a
+        default value is provided.
+        """
+        if default is _SOURCE_MISSING:
+            return self.sources[key]
+        return self.sources.get(key, default)
+
+    def get_source(self, key: _KPT, default: Any = None) -> Any:
+        """
+        Return the source label of the given field, or the default value if no
+        source is recorded for it.
+        """
+        return self.sources.get(key, default)
+
+    @property
+    def sources(self) -> SourceMap:
+        """
+        Return the sources recorded by the last source-tracked merge.
+        It can be used both as a mapping and as a callable::
+            d.sources["a.b"]
+            d.sources()["a.b"]
+        """
+        sources = getattr(self, "_sources", None)
+        separator = self._keypath_separator or "."
+        if sources is None:
+            return SourceMap(separator=separator)
+        if sources.separator != separator:
+            return sources.copy(separator=separator)
+        return sources
+
+    @property
+    def source_map(self) -> SourceMap:
+        """
+        Alias of the 'sources' property.
+        """
+        return self.sources
+
+    @property
+    def field_sources(self) -> SourceMap:
+        """
+        Alias of the 'sources' property.
+        """
+        return self.sources
 
     def move(self, key_src: _KPT, key_dest: _KPT, overwrite: bool = True) -> None:
         """
@@ -298,7 +456,7 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         return _nest(self[key], id_key, parent_id_key, children_key)
 
     def pop(self, key: _KPT, *args: Any) -> _V:  # type: ignore[override]
-        return cast("_V", self._cast(super().pop(key, *args)))
+        return cast("_V", self._cast_with_sources(super().pop(key, *args), key))
 
     def remove(
         self, keys: _KPT | Iterable[_KPT], *args: Any, deep: bool = False
@@ -311,7 +469,10 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         _remove(self, keys, *args, deep=deep)
 
     def setdefault(self, key: _KPT, default: _V | None = None) -> _V:  # type: ignore[override]
-        return cast("_V", self._cast(super().setdefault(key, default)))
+        return cast(
+            "_V",
+            self._cast_with_sources(super().setdefault(key, default), key),
+        )
 
     def rename(self, key: _KPT, key_new: _KPT, deep: bool = False) -> None:
         """
@@ -390,14 +551,16 @@ class _BenedictItemsView(ItemsView[Any, Any]):
         return item in items
 
     def __iter__(self) -> Iterator[tuple[Any, Any]]:
-        cast_value = self._mapping._cast
-        for key, value in BaseDict.items(self._mapping):
-            yield key, cast_value(value)
+        mapping = self._mapping
+        cast_value = mapping._cast_with_sources
+        for key, value in BaseDict.items(mapping):
+            yield key, cast_value(value, key)
 
     def __reversed__(self) -> Iterator[tuple[Any, Any]]:
         mapping = self._mapping
+        cast_value = mapping._cast_with_sources
         for key in BaseDict.__reversed__(mapping):
-            yield key, mapping._cast(BaseDict.__getitem__(mapping, key))
+            yield key, cast_value(BaseDict.__getitem__(mapping, key), key)
 
 
 class _BenedictValuesView(ValuesView[Any]):
@@ -412,14 +575,16 @@ class _BenedictValuesView(ValuesView[Any]):
         return value in BaseDict.values(self._mapping)
 
     def __iter__(self) -> Iterator[Any]:
-        cast_value = self._mapping._cast
-        for value in BaseDict.values(self._mapping):
-            yield cast_value(value)
+        mapping = self._mapping
+        cast_value = mapping._cast_with_sources
+        for key, value in BaseDict.items(mapping):
+            yield cast_value(value, key)
 
     def __reversed__(self) -> Iterator[Any]:
         mapping = self._mapping
+        cast_value = mapping._cast_with_sources
         for key in BaseDict.__reversed__(mapping):
-            yield mapping._cast(BaseDict.__getitem__(mapping, key))
+            yield cast_value(BaseDict.__getitem__(mapping, key), key)
 
 
 # fix benedict json dumps support - #57 #59 #61

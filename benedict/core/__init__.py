@@ -10,12 +10,13 @@ from benedict.core.items_sorted import items_sorted_by_keys, items_sorted_by_val
 from benedict.core.keylists import keylists
 from benedict.core.keypaths import keypaths
 from benedict.core.match import match
-from benedict.core.merge import merge
+from benedict.core.merge import merge, merge_sources, merge_with_sources
 from benedict.core.move import move
 from benedict.core.nest import nest
 from benedict.core.remove import remove
 from benedict.core.rename import rename
 from benedict.core.search import search
+from benedict.core.source_map import MergeResult, SourceMap, SourceNode
 from benedict.core.standardize import standardize
 from benedict.core.subset import subset
 from benedict.core.swap import swap
@@ -38,11 +39,15 @@ __all__ = [
     "keypaths",
     "match",
     "merge",
+    "merge_sources",
+    "merge_with_sources",
+    "MergeResult",
     "move",
     "nest",
     "remove",
     "rename",
     "search",
+    "SourceMap",
     "standardize",
     "subset",
     "swap",
