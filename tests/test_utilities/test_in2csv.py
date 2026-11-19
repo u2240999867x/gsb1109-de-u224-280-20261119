@@ -172,6 +172,22 @@ class TestIn2CSV(CSVKitTestCase, EmptyFileTests):
         self.assertConverted('xlsx', 'examples/test_skip_lines.xlsx',
                              'examples/testxlsx_converted.csv', ['--skip-lines', '3'])
 
+    def test_convert_xls_with_merge_header(self):
+        self.assertRows(['--no-inference', 'examples/test_merged_header.xls'], [
+            ['产品组甲 字段一', '产品组甲 件数', '产品组甲 金额',
+             '产品组乙 字段二', '产品组乙 件数', '产品组乙 重量', '备注'],
+            ['1.0', '2.0', '3.0', '4.0', '5.0', '6.0', '7.0'],
+            ['8.0', '9.0', '10.0', '11.0', '12.0', '13.0', '14.0'],
+        ])
+
+    def test_convert_xlsx_with_merged_header(self):
+        self.assertRows(['--no-inference', 'examples/test_merged_header.xlsx'], [
+            ['产品组甲 字段一', '产品组甲 件数', '产品组甲 金额',
+             '产品组乙 字段二', '产品组乙 件数', '产品组乙 重量', '备注'],
+            ['1', '2', '3', '4', '5', '6', '7'],
+            ['8', '9', '10', '11', '12', '13', '14'],
+        ])
+
     def test_names(self):
         self.assertLines(['--names', 'examples/sheets.xlsx'], [
             'not this one',

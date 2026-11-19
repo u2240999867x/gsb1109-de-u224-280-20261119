@@ -28,6 +28,7 @@ The header line is required though the columns may be in any order:
                  [-f {csv,dbf,fixed,geojson,json,ndjson,xls,xlsx}] [-s SCHEMA]
                  [-k KEY] [-n] [--sheet SHEET] [--write-sheets WRITE_SHEETS]
                  [--use-sheet-names] [--reset-dimensions]
+                 [--header-rows HEADER_ROWS]
                  [--encoding-xls ENCODING_XLS] [-y SNIFF_LIMIT] [-I]
                  [FILE]
 
@@ -55,6 +56,10 @@ The header line is required though the columns may be in any order:
      --use-sheet-names     Use the sheet names as file names when --write-sheets
                            is set.
      --reset-dimensions    Ignore the sheet dimensions provided by the XLSX file.
+     --header-rows HEADER_ROWS
+                           The number of initial rows to use as the column header
+                           of an Excel sheet. By default, two rows are combined
+                           if the first row contains merged group cells.
      --encoding-xls ENCODING_XLS
                            Specify the encoding of the input XLS file.
      -y SNIFF_LIMIT, --snifflimit SNIFF_LIMIT
@@ -80,6 +85,14 @@ See also: :doc:`../common_arguments`.
 .. note::
 
     To convert from HTML, consider `messytables <https://messytables.readthedocs.io/>`_.
+
+.. note::
+
+    If an Excel worksheet's first row contains cells merged across multiple columns, csvkit combines that row with the
+    second row to name the columns, for example ``产品组 件数``. A merged cell's value applies only to the columns it
+    covers: an unmerged blank cell in the first row does not inherit a preceding group's name. Columns with the same
+    name are made unique, as usual. Use :code:`--header-rows` to set the number of header rows explicitly, or
+    :code:`--no-header-row` to treat every row as data.
 
 Examples
 ========

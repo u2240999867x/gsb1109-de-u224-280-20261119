@@ -2,6 +2,7 @@
 
 import functools
 import sys
+from dataclasses import dataclass
 from io import BytesIO
 from os.path import splitext
 
@@ -17,6 +18,186 @@ from csvkit.convert.fixed import fixed2csv
 from csvkit.convert.geojs import geojson2csv
 
 SUPPORTED_FORMATS = ['csv', 'dbf', 'fixed', 'geojson', 'json', 'ndjson', 'xls', 'xlsx']
+
+# The string with which to join the values of a multi-row header.
+HEADER_SEPARATOR = ' '
+
+
+@dataclass(frozen=True)
+class MergedRange:
+    min_row: int
+    min_col: int
+    max_row: int
+    max_col: int
+
+    @property
+    def spans_columns(self):
+        return self.max_col > self.min_col
+
+
+def cell_value(rows, row, column):
+    """
+    Return the value of the 1-based cell in a list of header rows.
+    """
+    if 1 <= row <= len(rows) and 1 <= column <= len(rows[row - 1]):
+        return rows[row - 1][column - 1]
+    return None
+
+
+def combine_header_rows(rows, ranges=()):
+    """
+    Combine one or more header rows into column names.
+
+    A merged cell's value applies to every cell in its range. Unmerged blank
+    cells stay blank, so they don't inherit a preceding group name.
+    """
+    width = max((len(row) for row in rows), default=0)
+    expanded = [list(row) + [None] * (width - len(row)) for row in rows]
+
+    for cell_range in ranges:
+        value = cell_value(rows, cell_range.min_row, cell_range.min_col)
+
+        if value is None or str(value).strip() == '':
+            continue
+
+        for row in range(max(cell_range.min_row, 1), min(cell_range.max_row, len(expanded)) + 1):
+            for column in range(max(cell_range.min_col, 1), min(cell_range.max_col, width) + 1):
+                expanded[row - 1][column - 1] = value
+
+    names = []
+
+    for column in range(width):
+        parts = []
+
+        for row in expanded:
+            value = row[column]
+
+            if value is None or str(value).strip() == '':
+                continue
+
+            value = str(value).strip()
+
+            if not parts or parts[-1] != value:
+                parts.append(value)
+
+        names.append(HEADER_SEPARATOR.join(parts))
+
+    return names
+
+
+def group_header_rows(rows, ranges=()):
+    """
+    Return the number of rows to use as a header.
+
+    The first two rows are treated as a header if the first row has a merged
+    group name and the second row names the fields within that group.
+    """
+    if len(rows) < 2:
+        return 1
+
+    for cell_range in ranges:
+        if cell_range.min_row != 1 or cell_range.max_row != 1 or not cell_range.spans_columns:
+            continue
+
+        values = [
+            cell_value(rows, 2, column)
+            for column in range(cell_range.min_col, cell_range.max_col + 1)
+        ]
+        values = [value for value in values if value is not None and str(value).strip()]
+
+        if values:
+            return 2
+
+    return 1
+
+
+def xlsx_header(path, sheet_name, skip_lines=0, header_rows=0):
+    """
+    Return the number of header rows and the names of the columns in an XLSX
+    worksheet.
+    """
+    workbook = openpyxl.load_workbook(path, read_only=False, data_only=True)
+
+    try:
+        if isinstance(sheet_name, str):
+            worksheet = workbook[sheet_name]
+        elif isinstance(sheet_name, int):
+            worksheet = workbook.worksheets[sheet_name]
+        else:
+            worksheet = workbook.active
+
+        first_row = skip_lines + 1
+        ranges = [
+            MergedRange(
+                cell_range.min_row - first_row + 1,
+                cell_range.min_col,
+                cell_range.max_row - first_row + 1,
+                cell_range.max_col,
+            )
+            for cell_range in worksheet.merged_cells.ranges
+            if cell_range.min_row <= first_row and cell_range.max_row >= first_row
+        ]
+
+        rows = [
+            list(row)
+            for row in worksheet.iter_rows(
+                min_row=first_row,
+                max_row=first_row + (header_rows or 2) - 1,
+                max_col=worksheet.max_column,
+                values_only=True,
+            )
+        ]
+    finally:
+        workbook.close()
+
+    if not header_rows:
+        header_rows = group_header_rows(rows, ranges)
+
+    return header_rows, combine_header_rows(rows[:header_rows], ranges)
+
+
+def xls_header(path, sheet_name, skip_lines=0, header_rows=0, encoding_override=None):
+    """
+    Return the number of header rows and the names of the columns in an XLS
+    worksheet.
+    """
+    contents = path.read() if hasattr(path, 'read') else None
+    workbook = xlrd.open_workbook(
+        file_contents=contents, encoding_override=encoding_override, formatting_info=True
+    )
+
+    try:
+        if isinstance(sheet_name, str):
+            worksheet = workbook.sheet_by_name(sheet_name)
+        elif isinstance(sheet_name, int):
+            worksheet = workbook.sheet_by_index(sheet_name)
+        else:
+            worksheet = workbook.sheet_by_index(0)
+
+        first_row = skip_lines
+        ranges = [
+            MergedRange(
+                min_row - first_row + 1,
+                min_col + 1,
+                max_row - first_row,
+                max_col,
+            )
+            for min_row, max_row, min_col, max_col in worksheet.merged_cells
+            if min_row <= first_row < max_row
+        ]
+
+        rows = [
+            worksheet.row_values(row, 0, worksheet.ncols)
+            for row in range(first_row, min(first_row + (header_rows or 2), worksheet.nrows))
+        ]
+    finally:
+        if hasattr(workbook, 'release_resources'):
+            workbook.release_resources()
+
+    if not header_rows:
+        header_rows = group_header_rows(rows, ranges)
+
+    return header_rows, combine_header_rows(rows[:header_rows], ranges)
 
 
 class In2CSV(CSVKitUtility):
@@ -54,6 +235,10 @@ class In2CSV(CSVKitUtility):
             '--reset-dimensions', dest='reset_dimensions', action='store_true', default=None,
             help='Ignore the sheet dimensions provided by the XLSX file.')
         self.argparser.add_argument(
+            '--header-rows', dest='header_rows', type=int,
+            help='The number of initial rows to use as the column header of an Excel sheet. By default, two rows '
+                 'are combined if the first row contains merged group cells.')
+        self.argparser.add_argument(
             '--encoding-xls', dest='encoding_xls',
             help='Specify the encoding of the input XLS file.')
         self.argparser.add_argument(
@@ -74,6 +259,42 @@ class In2CSV(CSVKitUtility):
         if not path or path == '-':
             return BytesIO(self.stdin())
         return open(path, 'rb')
+
+    def excel_table(self, filetype, data, sheet, kwargs):
+        """
+        Convert an Excel sheet to an agate table.
+
+        The first two rows are used as a multi-row header if the first row
+        contains merged group cells and the second row contains field names.
+        """
+        header_kwargs = dict(kwargs)
+        skip_lines = header_kwargs.pop('skip_lines', 0)
+
+        if self.args.no_header_row:
+            header_kwargs['header'] = False
+            header_kwargs['skip_lines'] = skip_lines
+        else:
+            header_kwargs['header'] = False
+
+            if filetype == 'xls':
+                header_rows, column_names = xls_header(
+                    BytesIO(data), sheet, skip_lines, self.args.header_rows, self.args.encoding_xls
+                )
+            else:
+                header_rows, column_names = xlsx_header(
+                    BytesIO(data), sheet, skip_lines, self.args.header_rows
+                )
+
+            header_kwargs['column_names'] = column_names
+            header_kwargs['skip_lines'] = skip_lines + header_rows
+
+        if filetype == 'xls':
+            return agate.Table.from_xls(
+                BytesIO(data), sheet=sheet, encoding_override=self.args.encoding_xls, **header_kwargs
+            )
+        return agate.Table.from_xlsx(
+            BytesIO(data), sheet=sheet, reset_dimensions=self.args.reset_dimensions, **header_kwargs
+        )
 
     def sheet_names(self, path, filetype):
         input_file = self.open_excel_input_file(path)
@@ -139,6 +360,8 @@ class In2CSV(CSVKitUtility):
         if filetype != 'dbf':
             kwargs['column_types'] = self.get_column_types()
 
+        excel_data = self.input_file.read() if filetype in ('xls', 'xlsx') else None
+
         # Convert the file.
         if (
             filetype == 'csv'
@@ -161,13 +384,8 @@ class In2CSV(CSVKitUtility):
                 table = agate.Table.from_json(self.input_file, key=self.args.key, **kwargs)
             elif filetype == 'ndjson':
                 table = agate.Table.from_json(self.input_file, key=self.args.key, newline=True, **kwargs)
-            elif filetype == 'xls':
-                table = agate.Table.from_xls(self.input_file, sheet=self.args.sheet,
-                                             encoding_override=self.args.encoding_xls, **kwargs)
-            elif filetype == 'xlsx':
-                table = agate.Table.from_xlsx(
-                    self.input_file, sheet=self.args.sheet, reset_dimensions=self.args.reset_dimensions, **kwargs
-                )
+            elif filetype in ('xls', 'xlsx'):
+                table = self.excel_table(filetype, excel_data, self.args.sheet, kwargs)
             elif filetype == 'dbf':
                 if not hasattr(self.input_file, 'name'):
                     raise ValueError('DBF files can not be converted from stdin. You must pass a filename.')
@@ -175,29 +393,26 @@ class In2CSV(CSVKitUtility):
             table.to_csv(self.output_file, **self.writer_kwargs)
 
         if self.args.write_sheets:
-            # Close and re-open the file, as the file object has been mutated or closed.
+            # Don't rely on the input file, as the file object has been mutated or closed.
             self.input_file.close()
-
-            self.input_file = self.open_excel_input_file(path)
-
-            if self.args.write_sheets == '-':
-                sheets = self.sheet_names(path, filetype)
-            else:
-                sheets = [int(sheet) if sheet.isdigit() else sheet for sheet in self.args.write_sheets.split(',')]
-
-            if filetype == 'xls':
-                tables = agate.Table.from_xls(self.input_file, sheet=sheets,
-                                              encoding_override=self.args.encoding_xls, **kwargs)
-            elif filetype == 'xlsx':
-                tables = agate.Table.from_xlsx(
-                    self.input_file, sheet=sheets, reset_dimensions=self.args.reset_dimensions, **kwargs
-                )
 
             if not path or path == '-':
                 base = 'stdin'
             else:
-                base = splitext(self.input_file.name)[0]
-            for i, (sheet_name, table) in enumerate(tables.items()):
+                base = splitext(path)[0]
+
+            sheet_names = self.sheet_names(path, filetype)
+            if self.args.write_sheets == '-':
+                sheets = sheet_names
+            else:
+                sheets = [
+                    sheet_names[int(sheet)] if sheet.isdigit() else sheet
+                    for sheet in self.args.write_sheets.split(',')
+                ]
+
+            for i, sheet_name in enumerate(sheets):
+                table = self.excel_table(filetype, excel_data, sheet_name, kwargs)
+
                 if self.args.use_sheet_names:
                     filename = '{}_{}.csv'.format(base, sheet_name)
                 else:

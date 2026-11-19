@@ -63,6 +63,7 @@ usage: in2csv [\-h] [\-d DELIMITER] [\-t] [\-q QUOTECHAR] [\-u {0,1,2,3}] [\-b]
               [\-f {csv,dbf,fixed,geojson,json,ndjson,xls,xlsx}] [\-s SCHEMA]
               [\-k KEY] [\-n] [\-\-sheet SHEET] [\-\-write\-sheets WRITE_SHEETS]
               [\-\-use\-sheet\-names] [\-\-reset\-dimensions]
+              [\-\-header\-rows HEADER_ROWS]
               [\-\-encoding\-xls ENCODING_XLS] [\-y SNIFF_LIMIT] [\-I]
               [FILE]
 
@@ -90,6 +91,10 @@ optional arguments:
   \-\-use\-sheet\-names     Use the sheet names as file names when \-\-write\-sheets
                         is set.
   \-\-reset\-dimensions    Ignore the sheet dimensions provided by the XLSX file.
+  \-\-header\-rows HEADER_ROWS
+                        The number of initial rows to use as the column header
+                        of an Excel sheet. By default, two rows are combined if
+                        the first row contains merged group cells.
   \-\-encoding\-xls ENCODING_XLS
                         Specify the encoding of the input XLS file.
   \-y SNIFF_LIMIT, \-\-snifflimit SNIFF_LIMIT
