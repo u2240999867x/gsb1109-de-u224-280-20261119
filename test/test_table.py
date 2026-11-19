@@ -449,3 +449,67 @@ def test_key_order(db, table):
 def test_empty_query(table):
     empty = list(table.find(place="not in data"))
     assert len(empty) == 0, empty
+
+
+def _get_indexes(table):
+    return table.db.inspect.get_indexes(table.name, schema=table.db.schema)
+
+
+def test_create_index(table):
+    table.create_index(["date", "place"])
+    assert table.has_index(["date", "place"])
+    indexes = _get_indexes(table)
+    assert any(idx["column_names"] == ["date", "place"] for idx in indexes)
+
+
+def test_create_index_reuses_existing(table):
+    table.create_index(["date", "place"])
+    table.create_index(["date", "place"])
+    indexes = _get_indexes(table)
+    matches = [idx for idx in indexes if idx["column_names"] == ["date", "place"]]
+    assert len(matches) == 1
+
+
+def test_create_index_column_order_matters(table):
+    table.create_index(["date", "place"])
+    assert not table.has_index(["place", "date"])
+    table.create_index(["place", "date"])
+    indexes = _get_indexes(table)
+    assert any(idx["column_names"] == ["place", "date"] for idx in indexes)
+
+
+def test_create_index_covering_index_does_not_block(table):
+    table.create_index(["date", "place", "temperature"])
+    assert not table.has_index(["date", "place"])
+    table.create_index(["date", "place"])
+    indexes = _get_indexes(table)
+    assert any(idx["column_names"] == ["date", "place"] for idx in indexes)
+
+
+def test_create_unique_index_not_blocked_by_plain_index(table):
+    table.create_index(["date", "place"])
+    assert table.has_index(["date", "place"])
+    assert not table.has_index(["date", "place"], unique=True)
+    table.create_index(["place", "date"], unique=True)
+    assert table.has_index(["place", "date"], unique=True)
+    indexes = _get_indexes(table)
+    matches = [
+        idx
+        for idx in indexes
+        if idx["column_names"] == ["place", "date"] and idx["unique"]
+    ]
+    assert len(matches) == 1
+
+
+def test_create_unique_index_reuses_existing_unique(table):
+    table.create_index(["place", "date"], unique=True)
+    table.create_index(["place", "date"], unique=True)
+    indexes = _get_indexes(table)
+    matches = [idx for idx in indexes if idx["column_names"] == ["place", "date"]]
+    assert len(matches) == 1
+
+
+def test_has_index_primary_key(table):
+    assert table.has_index(["id"])
+    assert table.has_index(["id"], unique=True)
+    assert not table.has_index(["id", "date"])

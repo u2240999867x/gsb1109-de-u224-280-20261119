@@ -59,7 +59,7 @@ class Table:
         self.name = normalize_table_name(table_name)
         self._table: SQLATable | None = None
         self._columns: dict[str, str] | None = None
-        self._indexes: list[set[str]] = []
+        self._indexes: list[tuple[list[str], bool]] = []
         self._primary_id: str | Literal[False] = (
             primary_id if primary_id is not None else self.PRIMARY_DEFAULT
         )
@@ -654,26 +654,33 @@ class Table:
                 self.db._tables.pop(self.name, None)
                 self.db._auto_commit()
 
-    def has_index(self, columns: Iterable[str]) -> bool:
-        """Check if an index exists to cover the given ``columns``."""
+    def has_index(self, columns: Iterable[str], unique: bool = False) -> bool:
+        """Check if an index exists on exactly the given ``columns``.
+
+        The column order must match the index definition. If ``unique`` is
+        ``True``, only a unique index (or the primary key) counts; a plain
+        index on the same columns is not sufficient.
+        """
         if not self.exists:
             return False
-        columns_ = {self._get_column_name(c) for c in ensure_strings(columns)}
-        if columns_ in self._indexes:
-            return True
+        columns_ = [self._get_column_name(c) for c in ensure_strings(columns)]
+        for cached_columns, cached_unique in self._indexes:
+            if cached_columns == columns_ and (cached_unique or not unique):
+                return True
         for column in columns_:
             if not self.has_column(column):
                 return False
         indexes = self.db.inspect.get_indexes(self.name, schema=self.db.schema)
         for index in indexes:
-            idx_columns = index.get("column_names", [])
-            if len(columns_.intersection(idx_columns)) == len(columns_):
-                self._indexes.append(columns_)
-                return True
+            if index.get("column_names") == columns_:
+                index_unique = bool(index.get("unique"))
+                self._indexes.append((columns_, index_unique))
+                if index_unique or not unique:
+                    return True
         if self.table.primary_key is not None:
             pk_columns = [c.name for c in self.table.primary_key.columns]
-            if len(columns_.intersection(pk_columns)) == len(columns_):
-                self._indexes.append(columns_)
+            if pk_columns == columns_:
+                self._indexes.append((columns_, True))
                 return True
         return False
 
@@ -682,10 +689,15 @@ class Table:
     ) -> None:
         """Create an index to speed up queries on a table.
 
-        If no ``name`` is given a random name is created.
+        If no ``name`` is given a random name is created. Any additional
+        keyword arguments are passed on to SQLAlchemy's ``Index``, e.g.
+        ``unique=True`` to create a unique index. An existing index is only
+        re-used if it matches the requested columns (in order) and, for
+        unique indexes, is itself unique.
         ::
 
             table.create_index(['name', 'country'])
+            table.create_index(['source', 'date'], unique=True)
         """
         columns = [self._get_column_name(c) for c in ensure_strings(columns)]
         with self.db.lock:
@@ -696,7 +708,8 @@ class Table:
                 if not self.has_column(column):
                     return
 
-            if not self.has_index(columns):
+            unique = bool(kw.get("unique", False))
+            if not self.has_index(columns, unique=unique):
                 self._threading_warn()
                 name = name or index_name(self.name, columns)
                 columns_ = [self.table.c[c] for c in columns]
@@ -713,6 +726,7 @@ class Table:
 
                 idx = Index(name, *columns_, **kw)  # type: ignore[arg-type]
                 idx.create(self.db.executable)
+                self._indexes.append((columns, unique))
                 self.db._auto_commit()
 
     def find(
