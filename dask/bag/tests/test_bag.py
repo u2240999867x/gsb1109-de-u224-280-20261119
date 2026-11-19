@@ -22,6 +22,7 @@ import dask.bag as db
 from dask._task_spec import List, Task
 from dask.bag.core import (
     Bag,
+    IntervalJoinNotUniqueError,
     collect,
     empty_safe_apply,
     from_delayed,
@@ -451,6 +452,197 @@ def test_join(transform):
     assert_eq(c, list(join(iseven, [1, 2, 3], isodd, list(b))))
     assert_eq(b.join(other, isodd), list(join(isodd, [1, 2, 3], isodd, list(b))))
     assert c.name == b.join(other, on_self=isodd, on_other=iseven).name
+
+
+def _order_product(order):
+    return order["product"]
+
+
+def _order_time(order):
+    return order["time"]
+
+
+def _catalog_product(record):
+    return record["product"]
+
+
+def _catalog_start(record):
+    return record["start"]
+
+
+def _catalog_end(record):
+    return record["end"]
+
+
+def _interval_join_orders():
+    return db.from_sequence(
+        [
+            {"product": "P1", "time": 3, "qty": 2},  # inside [0, 5)
+            {"product": "P1", "time": 5, "qty": 1},  # boundary, inside [5, 10)
+            {"product": "P2", "time": 7, "qty": 4},  # product absent from catalog
+            {"product": "P1", "time": 20, "qty": 9},  # no interval covers time
+        ],
+        npartitions=3,
+    )
+
+
+def _interval_join_catalog():
+    return (
+        {"product": "P1", "start": 0, "end": 5, "price": 10},
+        {"product": "P1", "start": 5, "end": 10, "price": 12},
+    )
+
+
+_INTERVAL_JOIN_EXPECTED = [
+    (
+        {"product": "P1", "time": 3, "qty": 2},
+        {"product": "P1", "start": 0, "end": 5, "price": 10},
+    ),
+    (
+        {"product": "P1", "time": 5, "qty": 1},
+        {"product": "P1", "start": 5, "end": 10, "price": 12},
+    ),
+    ({"product": "P2", "time": 7, "qty": 4}, ()),
+    ({"product": "P1", "time": 20, "qty": 9}, ()),
+]
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        identity,
+        lambda catalog: dask.delayed(list)(catalog),
+        lambda catalog: db.from_sequence(catalog, npartitions=1),
+    ],
+)
+def test_join_by_intervals(transform):
+    orders = _interval_join_orders()
+    catalog = transform(_interval_join_catalog())
+
+    result = orders.join_by_intervals(
+        catalog,
+        on_product=_order_product,
+        on_time=_order_time,
+        on_interval_product=_catalog_product,
+        on_interval_start=_catalog_start,
+        on_interval_end=_catalog_end,
+    )
+
+    assert result.npartitions == orders.npartitions
+    assert_eq(result, _INTERVAL_JOIN_EXPECTED)
+
+    rebuilt = orders.join_by_intervals(
+        catalog,
+        on_product=_order_product,
+        on_time=_order_time,
+        on_interval_product=_catalog_product,
+        on_interval_start=_catalog_start,
+        on_interval_end=_catalog_end,
+    )
+    assert result.name == rebuilt.name
+
+
+def test_join_by_intervals_overlap_raises():
+    orders = _interval_join_orders()
+    catalog = _interval_join_catalog() + ({"product": "P1", "start": 2, "end": 8, "price": 11},)
+
+    result = orders.join_by_intervals(
+        catalog,
+        on_product=_order_product,
+        on_time=_order_time,
+        on_interval_product=_catalog_product,
+        on_interval_start=_catalog_start,
+        on_interval_end=_catalog_end,
+    )
+    with pytest.raises(IntervalJoinNotUniqueError, match="overlapping catalog records"):
+        result.compute(scheduler="sync")
+
+
+def test_join_by_intervals_multipartition_bag_raises():
+    orders = _interval_join_orders()
+    catalog = db.from_sequence(_interval_join_catalog(), npartitions=2)
+
+    with pytest.raises(NotImplementedError, match="Multi-bag joins"):
+        orders.join_by_intervals(
+            catalog,
+            on_product=_order_product,
+            on_time=_order_time,
+            on_interval_product=_catalog_product,
+            on_interval_start=_catalog_start,
+            on_interval_end=_catalog_end,
+        )
+
+
+def test_join_by_intervals_bad_type_raises():
+    orders = _interval_join_orders()
+    with pytest.raises(TypeError, match="single-partition Bag"):
+        orders.join_by_intervals(
+            42,
+            on_product=_order_product,
+            on_time=_order_time,
+            on_interval_product=_catalog_product,
+            on_interval_start=_catalog_start,
+            on_interval_end=_catalog_end,
+        )
+
+
+def test_join_by_intervals_datetime():
+    import datetime as dt
+
+    orders = db.from_sequence(
+        [
+            {"product": "A", "ts": dt.datetime(2024, 1, 1, 12), "qty": 1},
+            {"product": "A", "ts": dt.datetime(2024, 6, 1), "qty": 2},
+        ],
+        npartitions=2,
+    )
+    catalog = (
+        {
+            "product": "A",
+            "valid_from": dt.datetime(2024, 1, 1),
+            "valid_to": dt.datetime(2024, 3, 1),
+            "price": 5,
+        },
+        {
+            "product": "A",
+            "valid_from": dt.datetime(2024, 3, 1),
+            "valid_to": dt.datetime(2025, 1, 1),
+            "price": 7,
+        },
+    )
+
+    result = orders.join_by_intervals(
+        catalog,
+        on_product=lambda order: order["product"],
+        on_time=lambda order: order["ts"],
+        on_interval_product=lambda record: record["product"],
+        on_interval_start=lambda record: record["valid_from"],
+        on_interval_end=lambda record: record["valid_to"],
+    )
+
+    assert_eq(
+        result,
+        [
+            (
+                {"product": "A", "ts": dt.datetime(2024, 1, 1, 12), "qty": 1},
+                {
+                    "product": "A",
+                    "valid_from": dt.datetime(2024, 1, 1),
+                    "valid_to": dt.datetime(2024, 3, 1),
+                    "price": 5,
+                },
+            ),
+            (
+                {"product": "A", "ts": dt.datetime(2024, 6, 1), "qty": 2},
+                {
+                    "product": "A",
+                    "valid_from": dt.datetime(2024, 3, 1),
+                    "valid_to": dt.datetime(2025, 1, 1),
+                    "price": 7,
+                },
+            ),
+        ],
+    )
 
 
 def test_foldby():

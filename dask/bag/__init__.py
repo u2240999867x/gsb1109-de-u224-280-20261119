@@ -2,6 +2,7 @@ from __future__ import annotations
 
 __all__ = [
     "Bag",
+    "IntervalJoinNotUniqueError",
     "Item",
     "map",
     "range",
@@ -22,6 +23,7 @@ try:
     from dask.bag.avro import read_avro
     from dask.bag.core import (
         Bag,
+        IntervalJoinNotUniqueError,
         Item,
         concat,
         from_delayed,

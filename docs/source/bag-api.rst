@@ -83,6 +83,7 @@ Bag Methods
    Bag.frequencies
    Bag.groupby
    Bag.join
+   Bag.join_by_intervals
    Bag.map
    Bag.map_partitions
    Bag.max

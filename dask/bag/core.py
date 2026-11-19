@@ -7,9 +7,10 @@ import operator
 import uuid
 import warnings
 from collections import defaultdict
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from functools import partial, reduce, wraps
 from random import Random
+from typing import Any
 from urllib.request import urlopen
 
 import tlz as toolz
@@ -450,6 +451,13 @@ class Item(DaskMethodsMixin):
         if optimize_graph:
             dsk = self.__dask_optimize__(dsk, self.__dask_keys__())
         return Delayed(self.key, dsk, layer=self._layer)
+
+
+class IntervalJoinNotUniqueError(ValueError):
+    """Raised when overlapping catalog intervals make an interval join ambiguous.
+
+    See :meth:`Bag.join_by_intervals` for details.
+    """
 
 
 class Bag(DaskMethodsMixin):
@@ -1216,6 +1224,128 @@ class Bag(DaskMethodsMixin):
         graph = HighLevelGraph.from_collections(name, dsk, dependencies=[self])
         return type(self)(graph, name, self.npartitions)
 
+    def join_by_intervals(
+        self,
+        other,
+        on_product,
+        on_time,
+        on_interval_product,
+        on_interval_start,
+        on_interval_end,
+    ):
+        """Join each element with the catalog record effective at a given time.
+
+        This is a left, broadcast join intended for a small catalog (a "little
+        table", e.g. a price book) whose records are valid over half-open time
+        intervals ``[start, end)``.  Every element of this bag is paired with
+        the catalog records that share the same product identifier and whose
+        interval contains the element's timestamp.  The catalog is shipped to
+        every partition, so this bag (the large order table) never has to be
+        moved onto a single machine.
+
+        Elements without a matching catalog record are preserved: they appear
+        in the result with an empty tuple in place of the catalog record.
+        When several catalog intervals for the same product overlap at an
+        element's timestamp, the match is not unique and an
+        :class:`IntervalJoinNotUniqueError` is raised at compute time.
+
+        Parameters
+        ----------
+        other: Iterable, Delayed, Bag
+            Catalog collection.  May be an iterable (tuples are recommended),
+            a :class:`~dask.delayed.Delayed` pointing to one, or a single
+            partition :class:`Bag`.
+        on_product: callable
+            Function returning the product identifier of a bag element.
+        on_time: callable
+            Function returning the timestamp of a bag element; must be
+            comparable with the catalog interval bounds.
+        on_interval_product: callable
+            Function returning the product identifier of a catalog record.
+        on_interval_start: callable
+            Function returning the inclusive lower bound of a catalog record.
+        on_interval_end: callable
+            Function returning the exclusive upper bound of a catalog record.
+
+        Returns
+        -------
+        Bag
+            A bag of ``(element, catalog_record)`` tuples, one entry per bag
+            element.  ``catalog_record`` is the matching catalog element, or
+            an empty tuple when no catalog record was effective at the
+            element's timestamp.
+
+        Examples
+        --------
+        >>> import dask.bag as db
+        >>> orders = db.from_sequence(
+        ...     [{"product": "P1", "time": 3, "qty": 2}], npartitions=1
+        ... )
+        >>> catalog = (
+        ...     {"product": "P1", "start": 0, "end": 5, "price": 10},
+        ...     {"product": "P1", "start": 5, "end": 10, "price": 12},
+        ... )
+        >>> result = orders.join_by_intervals(
+        ...     catalog,
+        ...     on_product=lambda o: o["product"],
+        ...     on_time=lambda o: o["time"],
+        ...     on_interval_product=lambda c: c["product"],
+        ...     on_interval_start=lambda c: c["start"],
+        ...     on_interval_end=lambda c: c["end"],
+        ... )
+        >>> list(result)
+        [({'product': 'P1', 'time': 3, 'qty': 2}, {'product': 'P1', 'start': 0, 'end': 5, 'price': 10})]
+        """
+        token = tokenize(
+            self,
+            other,
+            on_product,
+            on_time,
+            on_interval_product,
+            on_interval_start,
+            on_interval_end,
+        )
+        name = f"interval-join-{token}"
+        dsk: dict = {}
+        if isinstance(other, Bag):
+            if other.npartitions == 1:
+                dsk.update(other.dask)
+                other = other.__dask_keys__()[0]
+                dsk[f"{name}-other"] = (list, other)
+            else:
+                msg = (
+                    "Multi-bag joins are not implemented. "
+                    "We recommend Dask dataframe if appropriate"
+                )
+                raise NotImplementedError(msg)
+        elif isinstance(other, Delayed):
+            dsk.update(other.dask)
+            other = other._key
+        elif not isinstance(other, Iterable):
+            msg = (
+                "Joined argument must be single-partition Bag, "
+                f"delayed object, or Iterable, got {type(other).__name__}"
+            )
+            raise TypeError(msg)
+
+        for i in range(self.npartitions):
+            dsk[(name, i)] = (
+                list,
+                (
+                    interval_join_partition,
+                    on_product,
+                    on_time,
+                    on_interval_product,
+                    on_interval_start,
+                    on_interval_end,
+                    other,
+                    (self.name, i),
+                ),
+            )
+
+        graph = HighLevelGraph.from_collections(name, dsk, dependencies=[self])
+        return type(self)(graph, name, self.npartitions)
+
     def product(self, other):
         """Cartesian product between two bags."""
         assert isinstance(other, Bag)
@@ -1733,6 +1863,56 @@ class Bag(DaskMethodsMixin):
             dsk[(c, i)] = (second, (a, i))
         graph = HighLevelGraph.from_collections(b, dsk, dependencies=[self])
         return Bag(graph, b, self.npartitions)
+
+
+def _index_catalog_by_product(
+    catalog: Iterable[Any],
+    on_interval_product: Callable[[Any], Any],
+    on_interval_start: Callable[[Any], Any],
+    on_interval_end: Callable[[Any], Any],
+) -> defaultdict[Any, list[tuple[Any, Any, Any]]]:
+    """Group catalog records by product into ``(start, end, record)`` lists."""
+    indexed: defaultdict[Any, list[tuple[Any, Any, Any]]] = defaultdict(list)
+    for record in catalog:
+        indexed[on_interval_product(record)].append((on_interval_start(record), on_interval_end(record), record))
+    return indexed
+
+
+def interval_join_partition(
+    on_product: Callable[[Any], Any],
+    on_time: Callable[[Any], Any],
+    on_interval_product: Callable[[Any], Any],
+    on_interval_start: Callable[[Any], Any],
+    on_interval_end: Callable[[Any], Any],
+    catalog: Iterable[Any],
+    elements: Iterable[Any],
+) -> Iterator[tuple[Any, Any]]:
+    """Pair each element with the catalog record effective at its timestamp.
+
+    The catalog is a small, local collection.  Intervals are treated as
+    half-open ``[start, end)``.  Elements without a match yield an empty tuple
+    as their catalog record; overlapping intervals that both match raise
+    :class:`IntervalJoinNotUniqueError`.
+    """
+    catalog_by_product = _index_catalog_by_product(catalog, on_interval_product, on_interval_start, on_interval_end)
+    for element in elements:
+        timestamp = on_time(element)
+        matches = [
+            record
+            for start, end, record in catalog_by_product.get(on_product(element), ())
+            if start <= timestamp < end
+        ]
+        if not matches:
+            yield element, ()
+        elif len(matches) == 1:
+            yield element, matches[0]
+        else:
+            raise IntervalJoinNotUniqueError(
+                f"Found {len(matches)} overlapping catalog records for product "
+                f"{on_product(element)!r} at time {timestamp!r}; cannot uniquely "
+                "match a single effective record. Deduplicate the catalog or "
+                "disjoint its intervals before joining."
+            )
 
 
 def accumulate_part(binop, seq, initial, is_first=False):
