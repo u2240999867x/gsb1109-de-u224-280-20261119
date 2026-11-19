@@ -52,6 +52,10 @@ from dask.dataframe.dask_expr import (
     to_records,
     to_timedelta,
 )
+from dask.dataframe.deterministic_sample import (
+    DeterministicSampleResult,
+    deterministic_sample,
+)
 from dask.dataframe.groupby import Aggregation
 from dask.dataframe.io import (
     demo,
@@ -78,9 +82,11 @@ __all__ = [
     "Scalar",
     "Series",
     "Aggregation",
+    "DeterministicSampleResult",
     "backends",
     "compute",
     "concat",
+    "deterministic_sample",
     "dispatch",
     "from_array",
     "from_dask_array",

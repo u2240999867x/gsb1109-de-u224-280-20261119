@@ -758,6 +758,7 @@ Other functions
    :toctree: generated/
 
    compute
+   deterministic_sample
    map_partitions
    map_overlap
 
