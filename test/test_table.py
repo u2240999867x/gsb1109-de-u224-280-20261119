@@ -1,10 +1,15 @@
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.types import BIGINT, TEXT
 
+import dataset
 from dataset import chunked
+from dataset.util import DatasetError
 
 from .conftest import TEST_CITY_1, TEST_DATA
 
@@ -449,3 +454,136 @@ def test_key_order(db, table):
 def test_empty_query(table):
     empty = list(table.find(place="not in data"))
     assert len(empty) == 0, empty
+
+
+def _migrate_externally(url: str, table_name: str, drop: str, add: str) -> None:
+    """Simulate a librarian migrating the table from another connection."""
+    engine = create_engine(url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table_name} DROP COLUMN {drop}"))
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {add} TEXT"))
+    finally:
+        engine.dispose()
+
+
+def test_refresh_picks_up_external_schema_change():
+    with tempfile.TemporaryDirectory() as tmp:
+        url = f"sqlite:///{Path(tmp) / 'archive.db'}"
+        db = dataset.connect(url)
+        try:
+            table = db["archive"]
+            table.insert({"oldcol": "a", "keep": "k"})
+            assert set(table.columns) == {"id", "oldcol", "keep"}
+
+            _migrate_externally(url, "archive", "oldcol", "newcol")
+
+            # Without an explicit refresh the cached schema stays stale and
+            # the new field is silently dropped on writes with ensure=False.
+            assert table.has_column("oldcol")
+            assert not table.has_column("newcol")
+            assert table._sync_columns({"newcol": "x", "keep": "k2"}, ensure=False) == {
+                "keep": "k2"
+            }
+
+            table.refresh()
+
+            assert not table.has_column("oldcol")
+            assert table.has_column("newcol")
+            assert set(table.columns) == {"id", "keep", "newcol"}
+            assert "oldcol" not in table.table.c
+            assert "newcol" in table.table.c
+
+            # After the explicit refresh the new structure is used.
+            assert table._sync_columns({"newcol": "x", "keep": "k2"}, ensure=False) == {
+                "newcol": "x",
+                "keep": "k2",
+            }
+            table.insert({"newcol": "y", "keep": "k3"})
+            row = table.find_one(newcol="y")
+            assert row["newcol"] == "y"
+            assert row["keep"] == "k3"
+            assert "oldcol" not in row
+        finally:
+            db.close()
+
+
+def test_refresh_inside_transaction_sees_own_connection_version():
+    with tempfile.TemporaryDirectory() as tmp:
+        url = f"sqlite:///{Path(tmp) / 'archive.db'}"
+        db = dataset.connect(url)
+        try:
+            table = db["archive"]
+            table.insert({"oldcol": "a"})
+
+            with db:
+                # Open a read snapshot before the migration lands.
+                assert table.count() == 1
+                _migrate_externally(url, "archive", "oldcol", "newcol")
+
+                # The refresh re-reads through this transaction's own
+                # connection, so it reports the version that connection
+                # actually observes, not a definition from elsewhere.
+                table.refresh()
+                assert set(table.columns) == {"id", "newcol"}
+                for row in table.find():
+                    assert "newcol" in row
+                    assert "oldcol" not in row
+
+            assert table.has_column("newcol")
+            assert not table.has_column("oldcol")
+        finally:
+            db.close()
+
+
+def test_refresh_after_external_drop_and_recreate():
+    with tempfile.TemporaryDirectory() as tmp:
+        url = f"sqlite:///{Path(tmp) / 'archive.db'}"
+        db = dataset.connect(url)
+        try:
+            table = db["archive"]
+            table.insert({"oldcol": "a"})
+
+            engine = create_engine(url)
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("DROP TABLE archive"))
+                    conn.execute(
+                        text("CREATE TABLE archive (id INTEGER PRIMARY KEY, v TEXT)")
+                    )
+            finally:
+                engine.dispose()
+
+            table.refresh()
+            assert table.exists
+            assert set(table.columns) == {"id", "v"}
+            table.insert({"v": "fresh"})
+            assert table.find_one(v="fresh")["v"] == "fresh"
+        finally:
+            db.close()
+
+
+def test_refresh_missing_table_raises(db):
+    table = db["doomed"]
+    table.insert({"x": 1})
+    db.executable.execute(text("DROP TABLE doomed"))
+    db.executable.commit()
+    with pytest.raises(DatasetError):
+        table.refresh()
+    assert not table.exists
+
+
+def test_rollback_invalidates_schema_caches(db):
+    table = db["rollback_cache"]
+    table.insert({"place": "x"})
+    assert table.has_index(["id"])
+    assert table._indexes
+
+    db.begin()
+    db.rollback()
+
+    assert table._table is None
+    assert table._columns is None
+    assert table._indexes == []
+    # The table re-initializes lazily and stays usable after rollback.
+    assert table.count() == 1

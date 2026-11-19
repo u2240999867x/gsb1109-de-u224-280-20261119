@@ -137,6 +137,8 @@ class Database:
         """Clear the table metadata after transaction rollbacks."""
         for table in self._tables.values():
             table._table = None
+            table._columns = None
+            table._indexes = []
 
     def _auto_commit(self) -> None:
         """Commit pending changes when not in an explicit transaction.

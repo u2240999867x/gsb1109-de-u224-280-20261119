@@ -131,6 +131,36 @@ class Table:
             return name
         return self._column_keys.get(key, name)
 
+    def refresh(self) -> None:
+        """Reload the table structure from the database.
+
+        This drops any cached schema information and re-reads the column
+        definitions from the database, so structural changes made by
+        other connections (e.g. an old column being dropped and a new one
+        added by a migration) become visible on this object. After
+        refreshing, operations use the new structure instead of silently
+        keeping stale columns or dropping fields that the cached schema
+        does not know about.
+
+        The re-read always goes through this object's own database
+        connection. When called inside an open transaction, it therefore
+        reflects exactly the structure visible to that transaction:
+        changes committed by other connections are picked up where the
+        database and its transaction isolation allow, while changes that
+        are uncommitted or not yet visible to this transaction are not.
+        The definition observed by another connection is never
+        substituted for what this transaction can actually see.
+
+        Raises :class:`DatasetError` if the table no longer exists in
+        the database.
+        """
+        with self.db.lock:
+            self._table = None
+            self._indexes = []
+            self._reflect_table()
+            if self._table is None:
+                raise DatasetError(f"Table does not exist: {self.name}")
+
     def insert(
         self,
         row: WriteRow,

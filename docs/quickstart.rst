@@ -125,6 +125,21 @@ Now, let's list all columns available in the table ``user``:
    >>> print(db['user'].columns)
    [u'id', u'country', u'age', u'name', u'gender']
 
+The table structure is cached on the :py:class:`Table <dataset.Table>`
+object. If another process or connection changes the table (for example a
+migration that drops an old column and adds a new one), call
+:py:meth:`refresh() <dataset.Table.refresh>` to re-read the current
+structure before continuing::
+
+   table = db['user']
+   # ... another connection migrates the table ...
+   table.refresh()
+   print(table.columns)  # reflects the new columns
+
+The refresh always reads through the table's own connection. Inside an open
+transaction it therefore reflects the structure visible to that
+transaction, rather than the definition another connection might observe.
+
 Using ``len()`` we can get the total number of rows in a table:
 
    >>> print(len(db['user']))

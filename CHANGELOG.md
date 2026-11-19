@@ -4,6 +4,8 @@
 changes must be reconstructed from revision history.*
 
 * **2.0.0**: Major modernization and type annotations
+  - **`Table.refresh()`**: New method to explicitly re-read a table's structure after schema changes made by other connections, replacing stale column/index caches instead of silently keeping dropped columns or dropping unknown fields
+  - **Cache invalidation**: Transaction rollbacks now also clear the cached column and index metadata, not just the reflected table
   - **Type annotations**: Full `mypy --strict` compliance across all modules
   - **PEP 561**: Added `py.typed` marker for downstream type checking
   - **New types**: Exported `OutRow`, `RowFactory`, `QueryError` for downstream use
