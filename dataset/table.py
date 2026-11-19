@@ -1,10 +1,10 @@
 import logging
 import threading
 import warnings
-from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, Literal
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal, cast
 
-from sqlalchemy import false, func, select
+from sqlalchemy import false, func, or_, select
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.schema import Column, Index
 from sqlalchemy.schema import Table as SQLATable
@@ -553,10 +553,15 @@ class Table:
                 clauses.append(self._generate_clause(column, "=", value))
         return and_(True, *clauses)
 
-    def _args_to_order_by(
+    def _parse_order_by(
         self, order_by: str | Sequence[str] | None
-    ) -> list[UnaryExpression[Any]]:
-        orderings: list[UnaryExpression[Any]] = []
+    ) -> list[tuple[Column[Any], bool]]:
+        """Split ``order_by`` into (column, descending) pairs.
+
+        Unknown columns are silently ignored, matching the historical
+        behaviour of :py:meth:`find`.
+        """
+        orderings: list[tuple[Column[Any], bool]] = []
         for ordering in ensure_strings(order_by):
             if ordering is None:
                 continue
@@ -564,11 +569,126 @@ class Table:
             column = self._get_column_name(column)
             if not self.has_column(column):
                 continue
-            if ordering.startswith("-"):
-                orderings.append(self.table.c[column].desc())
-            else:
-                orderings.append(self.table.c[column].asc())
+            orderings.append((self.table.c[column], ordering.startswith("-")))
         return orderings
+
+    def _make_ordering(self, column: Column[Any], desc: bool) -> UnaryExpression[Any]:
+        if desc:
+            return column.desc()
+        return column.asc()
+
+    def _effective_order_by(
+        self, order_by: str | Sequence[str] | None, require_order: bool = False
+    ) -> list[tuple[Column[Any], bool]]:
+        """Build a total ordering by appending the primary key as a tie-breaker.
+
+        A sort on a non-unique column (such as an update timestamp) is not
+        deterministic: rows with the same value may come back in any order.
+        Appending the primary key in ascending order guarantees that a
+        keyset cursor can identify a single position in the result.
+
+        Without an explicit ``order_by`` (and unless a cursor requires an
+        order) an empty list is returned, so unordered queries keep their
+        historical behaviour of leaving the ordering to the database.
+        """
+        orderings = self._parse_order_by(order_by)
+        if not orderings and not require_order:
+            return []
+        seen = {column.name for column, _desc in orderings}
+        primary_key = self.table.primary_key
+        if primary_key is not None:
+            for column in primary_key.columns:
+                if column.name not in seen:
+                    orderings.append((column, False))
+                    seen.add(column.name)
+        return orderings
+
+    def _nulls_first(self, desc: bool) -> bool:
+        """Where the database puts NULL values for the given sort direction.
+
+        SQLite and MySQL treat NULL as smaller than any other value, while
+        PostgreSQL treats it as larger. The keyset comparison has to use the
+        same placement as the database's ``ORDER BY``.
+        """
+        if self.db.is_postgres:
+            return desc
+        return not desc
+
+    def _cursor_position(
+        self,
+        after: Any,
+        orderings: Sequence[tuple[Column[Any], bool]],
+    ) -> list[Any]:
+        """Normalize a cursor value into one value per ordering column."""
+        if isinstance(after, Mapping):
+            by_name: dict[str, Any] = {}
+            for key, value in after.items():
+                key = self._get_column_name(str(key))
+                by_name[key] = value
+            missing = [c.name for c, _d in orderings if c.name not in by_name]
+            if missing:
+                raise QueryError(
+                    "Cursor row is missing sort column(s): " + ", ".join(missing)
+                )
+            return [by_name[c.name] for c, _d in orderings]
+        if isinstance(after, (list, tuple)):
+            if len(after) != len(orderings):
+                raise QueryError(
+                    f"Cursor must contain {len(orderings)} value(s), got {len(after)}"
+                )
+            return list(after)
+        if len(orderings) == 1:
+            return [after]
+        raise QueryError(
+            f"Cursor must be a row mapping or a sequence with {len(orderings)} value(s)"
+        )
+
+    @staticmethod
+    def _cursor_equal(column: Column[Any], value: Any) -> ColumnElement[bool]:
+        """Compare a sort column to a cursor value, treating NULL as a value."""
+        if value is None:
+            return column.is_(None)
+        return cast(ColumnElement[bool], column == value)
+
+    def _cursor_after(
+        self,
+        column: Column[Any],
+        value: Any,
+        desc: bool,
+    ) -> ColumnElement[bool]:
+        """Rows that sort strictly after ``value`` in one sort column."""
+        nulls_first = self._nulls_first(desc)
+        if value is None:
+            # The cursor is inside the NULL group. Non-NULL rows follow it
+            # only when NULLs are sorted first; otherwise the group is
+            # continued by the next sort column.
+            return column.isnot(None) if nulls_first else false()
+        comparison = cast(
+            ColumnElement[bool], column < value if desc else column > value
+        )
+        if nulls_first:
+            return comparison
+        return or_(comparison, column.is_(None))
+
+    def _cursor_clause(
+        self,
+        after: Any,
+        orderings: Sequence[tuple[Column[Any], bool]],
+    ) -> ColumnElement[bool]:
+        """Build a keyset predicate for the position encoded by ``after``."""
+        position = self._cursor_position(after, orderings)
+        branches: list[ColumnElement[bool]] = []
+        for index, (column, desc) in enumerate(orderings):
+            prefix = [
+                self._cursor_equal(previous, position[previous_index])
+                for previous_index, (previous, _previous_desc) in enumerate(
+                    orderings[:index]
+                )
+            ]
+            branches.append(
+                and_(True, *prefix, self._cursor_after(column, position[index], desc))
+            )
+        return or_(false(), *branches)
 
     def _keys_to_args(
         self, row: WriteRow, keys: Sequence[str]
@@ -721,6 +841,7 @@ class Table:
         _limit: int | None = None,
         _offset: int = 0,
         order_by: str | Sequence[str] | None = None,
+        _after: Any = None,
         _streamed: bool = False,
         _step: int | None = QUERY_STEP,
         **kwargs: SQLWriteValue,
@@ -746,6 +867,20 @@ class Table:
             # return all rows sorted by multiple columns (descending by year)
             results = table.find(order_by=['country', '-year'])
 
+        For keyset pagination, pass the last row of the previous page as
+        ``_after``. The primary key is appended to ``order_by`` as an
+        ascending tie-breaker, so rows sharing a sort value still have a
+        stable position::
+
+            page = table.find(order_by='-updated_at', _limit=100)
+            rows = list(page)
+            nxt = table.find(order_by='-updated_at', _limit=100, _after=rows[-1])
+
+        ``_after`` may be a full row (as returned by ``find``) or a sequence
+        with one value per effective sort column, including the primary key.
+        Unlike ``_offset``, this keeps paging stable when rows are inserted
+        before the current position.
+
         You can also submit filters based on criteria other than equality,
         see :ref:`advanced_filters` for details.
 
@@ -761,11 +896,17 @@ class Table:
         if _step is False or _step == 0:
             _step = None
 
-        orderings = self._args_to_order_by(order_by)
+        orderings = self._effective_order_by(order_by, require_order=_after is not None)
+        if _after is not None and not orderings:
+            raise QueryError(
+                "Cursor pagination requires an 'order_by' or a primary key."
+            )
         args = self._args_to_clause(kwargs, clauses=_clauses)
+        if _after is not None:
+            args = and_(args, self._cursor_clause(_after, orderings))
         query = self.table.select().where(args).limit(_limit).offset(_offset)
         if len(orderings):
-            query = query.order_by(*orderings)
+            query = query.order_by(*[self._make_ordering(c, d) for c, d in orderings])
 
         stream_conn = None
         conn = self.db.executable

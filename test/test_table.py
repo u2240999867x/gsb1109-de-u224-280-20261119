@@ -5,6 +5,7 @@ from sqlalchemy.exc import ArgumentError
 from sqlalchemy.types import BIGINT, TEXT
 
 from dataset import chunked
+from dataset.util import QueryError
 
 from .conftest import TEST_CITY_1, TEST_DATA
 
@@ -253,6 +254,235 @@ def test_offset(table):
     assert len(ds) == 2, ds
     ds = list(table.find(place=TEST_CITY_1, _limit=2, _offset=2))
     assert len(ds) == 1, ds
+
+
+def _keyset_rows(table):
+    updated = datetime(2020, 1, 1, 12, 0, 0)
+    rows = [
+        {"updated": updated, "label": "a"},
+        {"updated": updated, "label": "b"},
+        {"updated": updated, "label": "c"},
+        {"updated": updated, "label": "d"},
+        {"updated": datetime(2020, 1, 2, 12, 0, 0), "label": "e"},
+        {"updated": None, "label": "f"},
+        {"updated": None, "label": "g"},
+        {"updated": datetime(2019, 12, 31, 12, 0, 0), "label": "h"},
+    ]
+    table.insert_many(rows)
+
+
+def _page_by_cursor(table, order_by, page_size, **filters):
+    """Read the whole result one page at a time and return the row ids."""
+    seen = []
+    after = None
+    while True:
+        kwargs = dict(filters, order_by=order_by, _limit=page_size)
+        if after is not None:
+            kwargs["_after"] = after
+        page = list(table.find(**kwargs))
+        if not page:
+            break
+        seen.extend(row["id"] for row in page)
+        after = page[-1]
+        assert len(page) <= page_size
+    return seen
+
+
+@pytest.mark.parametrize("page_size", [1, 2, 3, 5])
+def test_find_after_matches_full_scan(db, page_size):
+    table = db["keyset_scan"]
+    _keyset_rows(table)
+
+    order_variants = [
+        "-updated",
+        "updated",
+        ["-updated", "label"],
+        ["label", "updated"],
+    ]
+    for order_by in order_variants:
+        expected = [row["id"] for row in table.find(order_by=order_by)]
+        assert _page_by_cursor(table, order_by, page_size) == expected
+
+
+def test_find_after_desc_updated_asc_id(db):
+    table = db["keyset_desc"]
+    _keyset_rows(table)
+
+    expected = [row["id"] for row in table.find(order_by="-updated")]
+    assert _page_by_cursor(table, "-updated", 2) == expected
+
+    # Rows with equal timestamps are ordered by ascending id.
+    tie_rows = list(table.find(updated=datetime(2020, 1, 1, 12, 0, 0)))
+    ids = [row["id"] for row in tie_rows]
+    assert ids == sorted(ids)
+
+
+def test_find_after_null_updates(db):
+    table = db["keyset_null"]
+    _keyset_rows(table)
+
+    expected = [row["id"] for row in table.find(order_by="-updated")]
+    paged = _page_by_cursor(table, "-updated", 3)
+    assert paged == expected
+
+    # NULL timestamps form one contiguous group and are still pageable.
+    null_ids = [row["id"] for row in table.find(updated=None)]
+    paged_null_ids = [row_id for row_id in paged if row_id in set(null_ids)]
+    assert paged_null_ids == null_ids
+
+
+def test_find_after_multi_column_cursor(table):
+    ds = list(table.find(order_by=["-temperature", "place"], _limit=3))
+    assert len(ds) == 3, ds
+    nxt = list(table.find(order_by=["-temperature", "place"], _after=ds[-1]))
+    assert len(nxt) == len(table) - 3, nxt
+    assert not {row["id"] for row in ds} & {row["id"] for row in nxt}
+
+
+def test_find_after_survives_inserts_before_position(db):
+    table = db["keyset_inserts"]
+    _keyset_rows(table)
+
+    full = [row["id"] for row in table.find(order_by="-updated")]
+    first = list(table.find(order_by="-updated", _limit=3))
+    assert [row["id"] for row in first] == full[:3]
+
+    # Insert rows that sort before the end of the first page.
+    table.insert({"updated": datetime(2020, 1, 3), "label": "new-1"})
+    table.insert({"updated": datetime(2020, 1, 4), "label": "new-2"})
+
+    rest = []
+    after = first[-1]
+    while True:
+        page = list(table.find(order_by="-updated", _limit=3, _after=after))
+        if not page:
+            break
+        rest.extend(row["id"] for row in page)
+        after = page[-1]
+
+    assert [row["id"] for row in first] + rest == full
+
+
+def test_find_after_sequence_cursor(db):
+    table = db["keyset_sequence"]
+    _keyset_rows(table)
+    order_by = "-updated"
+    full = list(table.find(order_by=order_by))
+    position = full[2]
+    expected = [row["id"] for row in full[3:]]
+
+    numeric = list(
+        table.find(
+            order_by=order_by,
+            _after=(position["updated"], position["id"]),
+        )
+    )
+    assert [row["id"] for row in numeric] == expected
+
+
+def test_find_after_bad_cursor(table):
+    with pytest.raises(QueryError):
+        list(table.find(order_by="-temperature", _after=(1, 2, 3)))
+    with pytest.raises(QueryError):
+        list(table.find(order_by="-temperature", _after={"id": 1}))
+
+
+def test_find_after_without_order_by(table):
+    full = [row["id"] for row in table.find(order_by="id")]
+    first = list(table.find(order_by="id", _limit=2))
+    nxt = list(table.find(_limit=2, _after=first[-1]))
+    assert [row["id"] for row in first + nxt] == full[:4]
+
+
+def test_find_after_custom_primary_key(db):
+    table = db.create_table(
+        "keyset_string_pk",
+        primary_id="key",
+        primary_type=db.types.string(50),
+    )
+    for index in range(10):
+        table.insert(
+            {
+                "key": f"k{index:02d}",
+                "updated": datetime(2020, 1, index % 3 + 1),
+            }
+        )
+
+    expected = [row["key"] for row in table.find(order_by="-updated")]
+    paged = []
+    after = None
+    while True:
+        kwargs = {"order_by": "-updated", "_limit": 3}
+        if after is not None:
+            kwargs["_after"] = after
+        page = list(table.find(**kwargs))
+        if not page:
+            break
+        paged.extend(row["key"] for row in page)
+        after = page[-1]
+    assert paged == expected
+
+
+def test_find_after_order_by_primary_key(db):
+    table = db["keyset_pk_order"]
+    _keyset_rows(table)
+
+    expected = [row["id"] for row in table.find(order_by="-id")]
+    paged = _page_by_cursor(table, "-id", 3)
+    assert paged == expected
+
+
+def test_find_after_random_data_matches_full_scan(db):
+    import random
+
+    rng = random.Random(1109)
+    table = db["keyset_random"]
+    rows = []
+    for _ in range(120):
+        updated = rng.choice(
+            [
+                None,
+                datetime(2020, 1, 1),
+                datetime(2020, 1, 2),
+                datetime(2020, 1, 3),
+            ]
+        )
+        rows.append(
+            {
+                "updated": updated,
+                "bucket": rng.choice(["a", "b", "c"]),
+                "label": rng.choice(["x", "y"]),
+            }
+        )
+    table.insert_many(rows)
+
+    for order_by in [
+        "-updated",
+        "updated",
+        ["-updated", "-bucket"],
+        ["bucket", "-updated"],
+        ["-label", "updated"],
+    ]:
+        expected = [
+            (row["id"], row["updated"], row["bucket"], row["label"])
+            for row in table.find(order_by=order_by)
+        ]
+        for page_size in (1, 7, 13):
+            paged = []
+            after = None
+            while True:
+                kwargs = {"order_by": order_by, "_limit": page_size}
+                if after is not None:
+                    kwargs["_after"] = after
+                page = list(table.find(**kwargs))
+                if not page:
+                    break
+                paged.extend(
+                    (row["id"], row["updated"], row["bucket"], row["label"])
+                    for row in page
+                )
+                after = page[-1]
+            assert paged == expected, (order_by, page_size)
 
 
 def test_streamed_update(table):

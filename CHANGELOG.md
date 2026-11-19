@@ -3,6 +3,11 @@
 *The changelog has only been started with version 0.3.12, previous
 changes must be reconstructed from revision history.*
 
+* **Unreleased**
+  - **`find(_after=...)`**: Keyset pagination. The primary key is appended to
+    `order_by` as an ascending tie-breaker, and cursor comparisons follow each
+    database's `NULL` ordering, so paging through equal or missing timestamps
+    yields the same order as a single unpaged query.
 * **2.0.0**: Major modernization and type annotations
   - **Type annotations**: Full `mypy --strict` compliance across all modules
   - **PEP 561**: Added `py.typed` marker for downstream type checking

@@ -68,6 +68,44 @@ These clauses also work with :py:meth:`table.count() <dataset.Table.count>`,
 :py:meth:`table.find_one() <dataset.Table.find_one>`, and
 :py:meth:`table.delete() <dataset.Table.delete>`.
 
+Keyset pagination
+-----------------
+
+``_offset`` skips a fixed number of rows, so rows inserted before the current
+position shift the rest of the result and a row may be returned twice (or
+skipped). For incremental exports, pass the last row of the previous page as
+``_after`` instead::
+
+    page = list(table.find(order_by='-updated_at', _limit=100))
+    while page:
+        process(page)
+        page = list(
+            table.find(order_by='-updated_at', _limit=100, _after=page[-1])
+        )
+
+The primary key is appended to ``order_by`` as an ascending tie-breaker. Rows
+with the same ``updated_at`` are therefore ordered by ascending ``id``, and a
+descending timestamp sort becomes ``updated_at DESC, id ASC``. Ordering by a
+timestamp alone is not stable, since the database may return equal timestamps
+in any order.
+
+The cursor condition follows the database's own ``NULL`` ordering. SQLite and
+MySQL sort ``NULL`` values before other values, PostgreSQL sorts them after.
+In both cases ``NULL`` timestamps are read exactly once, in the same position
+as in an unpaged ``order_by`` query::
+
+    # Ascending: NULL timestamps come first on SQLite/MySQL, last on PostgreSQL
+    table.find(order_by='updated_at')
+    # Descending: NULL timestamps come last on SQLite/MySQL, first on PostgreSQL
+    table.find(order_by='-updated_at')
+
+``_after`` accepts the full row as returned by :py:meth:`find`, or a
+sequence with one value per effective sort column (the requested columns
+plus the primary key). Filtering with keyword arguments still applies to every
+page and must be repeated on each call. When ``_after`` is used without
+``order_by``, the primary key is used as the sort order, provided the table
+has one.
+
 Queries using raw SQL
 ---------------------
 
