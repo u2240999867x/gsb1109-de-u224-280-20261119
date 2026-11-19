@@ -2,7 +2,7 @@ import os
 import warnings
 from typing import Any
 
-from dataset.database import Database
+from dataset.database import Database, ReadTransaction
 from dataset.table import Table
 from dataset.util import DatasetError, OutRow, QueryError, RowFactory, row_factory
 
@@ -17,6 +17,7 @@ __all__ = [
     "DatasetError",
     "OutRow",
     "QueryError",
+    "ReadTransaction",
     "RowFactory",
     "Table",
     "connect",

@@ -1,11 +1,13 @@
 import logging
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import Connection, Engine, create_engine, event, inspect
+from sqlalchemy import Connection, Engine, Transaction, create_engine, event, inspect
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.schema import MetaData
 from sqlalchemy.sql import text
@@ -15,6 +17,7 @@ from dataset.table import Table
 from dataset.types import ColumnType, Types
 from dataset.util import (
     QUERY_STEP,
+    DatasetError,
     ResultIter,
     RowFactory,
     normalize_table_name,
@@ -23,6 +26,77 @@ from dataset.util import (
 )
 
 log = logging.getLogger(__name__)
+
+
+class ReadTransaction:
+    """Handle for an explicit, consistent read transaction.
+
+    Instances are produced by :py:meth:`Database.read_transaction` and are
+    also returned as the context variable of the ``with`` statement. They
+    identify the database transaction that backs a consistent read and never
+    commit any writes made by an enclosing transaction.
+
+    The handle is truthy while the transaction is active and falsy once it
+    has been closed::
+
+        with db.read_transaction() as rt:
+            assert rt  # the read transaction is open
+        assert not rt
+    """
+
+    def __init__(
+        self,
+        db: "Database",
+        transaction: Transaction,
+        owns_transaction: bool,
+    ):
+        self._db = db
+        self._transaction = transaction
+        # Only the handle that started the SQLAlchemy transaction is allowed
+        # to roll it back; nested or outer-tx-reusing handles merely close.
+        self._owns_transaction = owns_transaction
+        self._closed = False
+
+    @property
+    def transaction(self) -> Transaction:
+        """The SQLAlchemy ``Transaction`` backing this consistent read."""
+        return self._transaction
+
+    @property
+    def connection(self) -> Connection:
+        """The connection on which the read transaction is running."""
+        return self._db.executable
+
+    @property
+    def is_active(self) -> bool:
+        """Whether the read transaction is still open."""
+        return not self._closed and self._transaction.is_active
+
+    @property
+    def read_only(self) -> bool:
+        """Always ``True``: writes are rejected inside this context."""
+        return True
+
+    def close(self) -> None:
+        """End the read transaction.
+
+        A read transaction that owns its SQLAlchemy transaction is rolled
+        back here, discarding the read snapshot without ever committing an
+        enclosing write transaction. A handle that merely joined an existing
+        transaction leaves that transaction untouched. Closing twice is a
+        no-op.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        self._db._end_read_transaction(self)
+
+    def __bool__(self) -> bool:
+        return self.is_active
+
+    def __repr__(self) -> str:
+        state = "active" if self.is_active else "closed"
+        return f"<ReadTransaction({state})>"
 
 
 class Database:
@@ -125,6 +199,132 @@ class Database:
             return False
         return len(self.local.tx) > 0
 
+    def _read_transactions(self) -> list[ReadTransaction]:
+        """The active read-transaction handles for the current thread."""
+        handles = getattr(self.local, "read_transactions", None)
+        if handles is None:
+            handles = []
+            self.local.read_transactions = handles
+        return handles
+
+    @property
+    def current_read_transaction(self) -> ReadTransaction | None:
+        """The innermost active read transaction, if any.
+
+        All reads performed while a read transaction is active are served
+        from the SQLAlchemy transaction exposed by the returned handle.
+        """
+        handles = self._read_transactions()
+        return handles[-1] if handles else None
+
+    @property
+    def is_read_only(self) -> bool:
+        """Whether a read transaction is currently active on this thread."""
+        return bool(self._read_transactions())
+
+    @contextmanager
+    def read_transaction(self) -> Iterator[ReadTransaction]:
+        """Open an explicit, consistent read transaction.
+
+        All statements issued through this ``Database`` (and its tables) on
+        the current thread run against the same database transaction, so a
+        sequence of reads such as a table-existence check, paging through
+        :py:meth:`Table.find` and :py:meth:`Table.count` observes one stable
+        snapshot instead of drifting when another process commits rows in
+        between::
+
+            with db.read_transaction() as rt:
+                print(rt.transaction)  # the transaction backing the report
+                total = table.count()
+                page = table.find(_limit=100)
+
+        If a write transaction is already active on the thread, its
+        transaction is reused: uncommitted rows written there are visible to
+        the reads, and leaving the read transaction only ends the read scope
+        and never commits the outer write transaction. When no transaction
+        is active, a new one is started and rolled back on exit, so the read
+        never leaves any committed state behind.
+
+        On SQLite, a driver-level ``BEGIN`` is issued when the read owns the
+        connection so that all reads really share one snapshot; the pysqlite
+        driver otherwise defers transactions until the first write. Other
+        backends run all reads on the same connection and transaction, whose
+        exact isolation guarantees follow the backend's default isolation
+        level.
+
+        Writes through the :py:class:`Table` API are rejected while the read
+        transaction is active by raising :class:`dataset.DatasetError`.
+        """
+        handles = self._read_transactions()
+        conn = self.executable
+        if handles or self.in_transaction:
+            # Reuse an active read handle's transaction or the caller's
+            # explicit (possibly write) transaction. The caller's
+            # uncommitted rows stay visible, and we must never commit it.
+            transaction = conn.get_transaction()
+            assert transaction is not None
+            owns_transaction = False
+        else:
+            # No explicit user transaction: take over either a fresh
+            # connection or an autobegin transaction started by earlier
+            # reads, and own its rollback.
+            if conn.in_transaction():
+                transaction = conn.get_transaction()
+                assert transaction is not None
+            else:
+                transaction = conn.begin()
+            owns_transaction = True
+            if self.is_sqlite:
+                # SQLAlchemy's pysqlite dialect implements do_begin() as a
+                # no-op, so plain SELECTs would otherwise run in autocommit
+                # mode without pinning a snapshot. Force the driver-level
+                # transaction explicitly and take its read mark right away:
+                # in WAL mode a read snapshot is only established by the
+                # first statement touching a real table, not by BEGIN alone
+                # (and a prior autobegin read must not delay that either).
+                dbapi_connection = conn.connection.dbapi_connection
+                assert dbapi_connection is not None
+                try:
+                    if not dbapi_connection.in_transaction:
+                        dbapi_connection.execute("BEGIN")
+                    conn.execute(text("SELECT 1 FROM sqlite_master LIMIT 1"))
+                except Exception:
+                    transaction.rollback()
+                    self._release_connection()
+                    raise
+        handle = ReadTransaction(self, transaction, owns_transaction)
+        handles.append(handle)
+        try:
+            yield handle
+        finally:
+            if handles and handles[-1] is handle:
+                handle.close()
+
+    def _end_read_transaction(self, handle: ReadTransaction) -> None:
+        """Roll back a read-only transaction and pop its handle."""
+        handles = self._read_transactions()
+        if handle not in handles:
+            return
+        # Nested handles must be closed innermost-first.
+        while handles:
+            current = handles.pop()
+            current._closed = True
+            if current is handle:
+                break
+        if handle._owns_transaction and handle.transaction.is_active:
+            # This transaction was started solely for the consistent read;
+            # roll it back so no state is ever committed by a read.
+            handle.transaction.rollback()
+            self._release_connection()
+
+    def _ensure_writable(self) -> None:
+        """Reject writes that would violate an active read transaction."""
+        if self._read_transactions():
+            raise DatasetError(
+                "Cannot write while a read transaction is active; close it "
+                "with the surrounding 'with db.read_transaction()' block first."
+            )
+
     def _release_connection(self) -> None:
         """Close and release the current thread's connection back to the pool."""
         with self.lock:
@@ -154,6 +354,7 @@ class Database:
 
         No data will be written until the transaction has been committed.
         """
+        self._ensure_writable()
         if not hasattr(self.local, "tx"):
             self.local.tx = []
         if not self.executable.in_transaction():

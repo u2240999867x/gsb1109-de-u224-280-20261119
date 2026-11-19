@@ -95,6 +95,42 @@ Nested transactions are supported too::
         with db as tx2:
             tx2['user'].insert(dict(name='Jane Doe', age=37, country='France', gender='female'))
 
+Consistent read transactions
+----------------------------
+
+A report often combines several reads — checking that a table exists,
+paging through :py:meth:`table.find() <dataset.Table.find>` and calling
+:py:meth:`table.count() <dataset.Table.count>`. Without an explicit
+transaction, another process can commit rows between those calls, so the
+numbers in the finished report no longer add up. Wrap the whole read in
+:py:meth:`db.read_transaction() <dataset.Database.read_transaction>` to
+serve every statement from one transaction and a stable snapshot::
+
+    with db.read_transaction() as rt:
+        print(rt.transaction)  # the transaction backing this report
+        total = table.count()
+        rows = list(table.find(_limit=100))
+
+The returned :py:class:`ReadTransaction <dataset.ReadTransaction>` tells
+the caller exactly which read transaction the report is based on. When the
+block ends, that transaction is rolled back — a read never commits anything
+and releases its connection.
+
+The read transaction can also be nested inside a write transaction. It then
+joins the outer transaction, so uncommitted rows written there are visible
+to the reads, while leaving the read block never commits the outer writes::
+
+    with db:
+        db['user'].insert(dict(name='John Doe'))
+        with db.read_transaction():
+            assert db['user'].count() == 1  # sees the uncommitted row
+        # the outer transaction is still open and uncommitted here
+
+While a read transaction is active, writes through the :py:class:`Table
+<dataset.Table>` API raise :class:`dataset.DatasetError`; finish the read
+block first. Streaming reads (``_streamed=True``) are rejected as well,
+because they would open a separate connection outside the snapshot.
+
 Closing connections
 -------------------
 

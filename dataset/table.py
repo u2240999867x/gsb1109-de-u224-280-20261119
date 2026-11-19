@@ -154,6 +154,7 @@ class Table:
 
         Returns the inserted row's primary key.
         """
+        self.db._ensure_writable()
         row = self._sync_columns(row, ensure, types=types)
         res = self.db.executable.execute(self.table.insert().values(row))
         self.db._auto_commit()
@@ -213,6 +214,7 @@ class Table:
             rows = [dict(name='Dolly')] * 10000
             table.insert_many(rows)
         """
+        self.db._ensure_writable()
         # Sync table before inputting rows.
         sync_row: MutableRow = {}
         for row in rows:
@@ -261,6 +263,7 @@ class Table:
         be created based on the settings of ``ensure`` and ``types``, matching
         the behavior of :py:meth:`insert() <dataset.Table.insert>`.
         """
+        self.db._ensure_writable()
         row = self._sync_columns(row, ensure, types=types)
         args, row = self._keys_to_args(row, keys)
         clause = self._args_to_clause(args)
@@ -292,6 +295,7 @@ class Table:
         See :py:meth:`update() <dataset.Table.update>` for details on
         the other parameters.
         """
+        self.db._ensure_writable()
         keys = ensure_strings(keys)
 
         chunk: list[MutableRow] = []
@@ -375,6 +379,7 @@ class Table:
 
         If no arguments are given, all records are deleted.
         """
+        self.db._ensure_writable()
         if not self.exists:
             return False
         clause = self._args_to_clause(filters, clauses=clauses)
@@ -595,6 +600,7 @@ class Table:
             table.create_column('key', unique=True, nullable=False)
             table.create_column('food', default='banana')
         """
+        self.db._ensure_writable()
         name = self._get_column_name(name)
         if self.has_column(name):
             log.debug(f"Column exists: {name}")
@@ -629,6 +635,7 @@ class Table:
             raise RuntimeError("Cannot drop columns when no engine is available.")
         if self.db.engine.dialect.name == "sqlite":
             raise RuntimeError("SQLite does not support dropping columns.")
+        self.db._ensure_writable()
         name = self._get_column_name(name)
         with self.db.lock:
             if not self.exists or not self.has_column(name):
@@ -645,6 +652,7 @@ class Table:
 
         Deletes both the schema and all the contents within it.
         """
+        self.db._ensure_writable()
         with self.db.lock:
             if self.exists:
                 self._threading_warn()
@@ -687,6 +695,7 @@ class Table:
 
             table.create_index(['name', 'country'])
         """
+        self.db._ensure_writable()
         columns = [self._get_column_name(c) for c in ensure_strings(columns)]
         with self.db.lock:
             if not self.exists:
@@ -757,6 +766,11 @@ class Table:
             return ResultIter(None, row_type=self.db.row_type)
         if self.db.engine is None:
             raise RuntimeError("Cannot run queries when no engine is available.")
+        if _streamed and self.db.is_read_only:
+            raise DatasetError(
+                "Cannot use _streamed=True inside a read transaction: it would "
+                "open a separate connection outside the consistent snapshot."
+            )
 
         if _step is False or _step == 0:
             _step = None

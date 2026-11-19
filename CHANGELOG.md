@@ -3,6 +3,23 @@
 *The changelog has only been started with version 0.3.12, previous
 changes must be reconstructed from revision history.*
 
+* **Unreleased**
+  - **Consistent reads**: Added `Database.read_transaction()` as an explicit
+    entry point that serves a whole sequence of reads (table existence,
+    `find()`, `count()`) from one transaction so concurrent commits by other
+    processes can no longer make a report internally inconsistent. The
+    returned `ReadTransaction` handle exposes the backing SQLAlchemy
+    transaction, connection and active state.
+  - Read transactions nested inside a write transaction reuse that
+    transaction so uncommitted outer writes are visible to the reads; ending
+    the read never commits the outer transaction. Standalone read
+    transactions are rolled back and release their connection on exit.
+  - SQLite forces a driver-level `BEGIN` so reads really share one snapshot
+    (the pysqlite dialect otherwise starts transactions only on writes).
+  - Writes through the `Table` API and streamed `find(_streamed=True)` raise
+    `DatasetError` while a read transaction is active; `Database.is_read_only`
+    and `Database.current_read_transaction` expose the state.
+
 * **2.0.0**: Major modernization and type annotations
   - **Type annotations**: Full `mypy --strict` compliance across all modules
   - **PEP 561**: Added `py.typed` marker for downstream type checking
