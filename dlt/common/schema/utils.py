@@ -67,6 +67,7 @@ from dlt.common.schema.typing import (
     TWriteDisposition,
     TLoaderMergeStrategy,
     TSchemaContract,
+    TSchemaContractSource,
     TSortOrder,
     TTableReference,
 )
@@ -911,6 +912,33 @@ def get_inherited_table_hint(
     raise ValueError(
         f"No table hint `{table_hint_name}` found in the chain of tables for table `{table_name}`."
     )
+
+
+def get_inherited_table_hint_with_source(
+    tables: TSchemaTables, table_name: str, table_hint_name: str
+) -> Tuple[Any, Optional[TSchemaContractSource], Optional[str]]:
+    """Like `get_inherited_table_hint` but also reports where the hint value comes from.
+
+    Returns a tuple of (hint value, source, source_table_name). `source` is "table" when the
+    hint is set on `table_name` itself, "parent_table" when it was inherited from a parent table
+    (with `source_table_name` naming that parent), or None when no table in the chain defines the
+    hint (both `hint value` and `source_table_name` are then None too).
+    """
+    table = tables.get(table_name, {})
+    if table_hint_name in table:
+        return table[table_hint_name], "table", table_name  # type: ignore[literal-required]
+
+    if is_nested_table(table):
+        parent_name = table.get("parent")
+        hint_value, source, source_table_name = get_inherited_table_hint_with_source(
+            tables, parent_name, table_hint_name
+        )
+        if source == "table":
+            # the immediate parent (or an ancestor) supplied the hint
+            source = "parent_table"
+        return hint_value, source, source_table_name
+
+    return None, None, None
 
 
 def get_write_disposition(tables: TSchemaTables, table_name: str) -> TWriteDisposition:

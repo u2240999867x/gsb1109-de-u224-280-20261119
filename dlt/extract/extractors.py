@@ -17,6 +17,7 @@ from dlt.common.schema import Schema, utils
 from dlt.common.schema.typing import (
     C_DLT_LOAD_ID,
     TSchemaContractDict,
+    TSchemaContractSource,
     TSchemaEvolutionMode,
     TTableSchema,
     TTableSchemaColumns,
@@ -134,12 +135,23 @@ class Extractor:
         self.load_id = load_id
         self.item_storage = item_storage
         self._table_contracts: Dict[str, TSchemaContractDict] = {}
+        self._table_contract_sources: Dict[str, TSchemaContractSource] = {}
         self._filtered_tables: Set[str] = set()
         self._filtered_columns: Dict[str, Dict[str, TSchemaEvolutionMode]] = {}
         self._caps = _caps or DestinationCapabilitiesContext.generic_capabilities()
         self._normalize_table_identifier = lru_cache(maxsize=None)(
             partial(normalize_helpers.normalize_table_identifier, self.schema, self.naming)
         )
+
+    @property
+    def contract_sources(self) -> Dict[str, TSchemaContractSource]:
+        """Mapping of table name to the source of the schema contract applied during pre-check.
+
+        An entry is added the first time a table name is seen (including dynamically routed
+        tables), so it tells which contract configuration the first row of each table used:
+        "table", "parent_table", "schema_settings" or "default".
+        """
+        return self._table_contract_sources
 
     def write_items(self, resource: DltResource, items: TDataItems, meta: Any) -> None:
         """Write `items` to `resource` optionally computing table schemas and revalidating/filtering data"""
@@ -287,11 +299,17 @@ class Extractor:
                 )
         for computed_table in computed_tables:
             table_name = computed_table["name"]
-            # get or compute contract
+            # get or compute contract, recording the configuration source it came from
+            contract_settings, contract_source = (
+                self.schema.resolve_contract_settings_and_source_for_table(
+                    table_name, computed_table
+                )
+            )
             schema_contract = self._table_contracts.setdefault(
                 table_name,
-                self.schema.resolve_contract_settings_for_table(table_name, computed_table),
+                Schema.expand_schema_contract_settings(contract_settings),
             )
+            self._table_contract_sources.setdefault(table_name, contract_source)
 
             # this is a new table so allow evolve once
             if schema_contract["columns"] != "evolve" and self.schema.is_new_table(table_name):
@@ -323,8 +341,9 @@ class Extractor:
         return items
 
     def _reset_contracts_cache(self) -> None:
-        """Removes all cached contracts, filtered columns and tables"""
+        """Removes all cached contracts, contract sources, filtered columns and tables"""
         self._table_contracts.clear()
+        self._table_contract_sources.clear()
         self._filtered_tables.clear()
         self._filtered_columns.clear()
 

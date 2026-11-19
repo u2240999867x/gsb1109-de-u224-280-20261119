@@ -217,6 +217,15 @@ SIMPLE_REGEX_PREFIX = "re:"
 TSchemaEvolutionMode = Literal["evolve", "discard_value", "freeze", "discard_row"]
 TSchemaContractEntities = Literal["tables", "columns", "data_type"]
 
+# where the effective schema contract of a table was resolved from
+TSchemaContractSource = Literal["table", "parent_table", "schema_settings", "default"]
+"""
+- `table`: the table itself carries a `schema_contract` hint
+- `parent_table`: the hint was inherited from a parent (nested) table
+- `schema_settings`: the schema-level (`source`/pipeline) default was used
+- `default`: nothing was configured, built-in defaults apply
+"""
+
 
 class TSchemaContractDict(TypedDict, total=False):
     """TypedDict defining the schema update settings"""

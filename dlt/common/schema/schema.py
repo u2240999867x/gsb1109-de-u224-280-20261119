@@ -52,6 +52,7 @@ from dlt.common.schema.typing import (
     TTypeDetections,
     TSchemaContractDict,
     TSchemaContract,
+    TSchemaContractSource,
     TColumnType,
 )
 from dlt.common.schema.exceptions import (
@@ -332,21 +333,46 @@ class Schema:
         self, table_name: str, new_table_schema: TTableSchema = None
     ) -> TSchemaContractDict:
         """Resolve the exact applicable schema contract settings for the table `table_name`. `new_table_schema` is added to the tree during the resolution."""
+        settings, _ = self.resolve_contract_settings_and_source_for_table(
+            table_name, new_table_schema
+        )
+        # expand settings, empty settings will expand into default settings
+        return Schema.expand_schema_contract_settings(settings)
 
+    def resolve_contract_settings_and_source_for_table(
+        self, table_name: str, new_table_schema: TTableSchema = None
+    ) -> Tuple[TSchemaContract, TSchemaContractSource]:
+        """Resolve the applicable (unexpanded) schema contract settings for `table_name` together
+        with the configuration source they came from. `new_table_schema` is added to the tree
+        during the resolution so dynamic (not yet stored) tables are resolved exactly as the
+        pre-check sees them.
+
+        The source is one of:
+        - "table": the table itself sets `schema_contract`
+        - "parent_table": a parent (nested) table supplies the inherited `schema_contract`
+        - "schema_settings": the schema-level (source/pipeline) setting applies
+        - "default": nothing is configured and built-in defaults apply
+        """
         settings: TSchemaContract = {}
+        source: TSchemaContractSource = "default"
         if not is_dlt_table_or_column(table_name, self._dlt_tables_prefix):
             if new_table_schema:
                 tables = copy(self._schema_tables)
                 tables[table_name] = new_table_schema
             else:
                 tables = self._schema_tables
-            try:
-                settings = utils.get_inherited_table_hint(tables, table_name, "schema_contract")
-            except ValueError:
-                settings = self._settings.get("schema_contract", settings)
+            hint, hint_source, _ = utils.get_inherited_table_hint_with_source(
+                tables, table_name, "schema_contract"
+            )
+            if hint_source is not None:
+                settings = hint
+                source = hint_source
+            elif self._settings.get("schema_contract"):
+                # a falsy stored value means "not configured" (see `set_schema_contract`)
+                settings = self._settings["schema_contract"]
+                source = "schema_settings"
 
-        # expand settings, empty settings will expand into default settings
-        return Schema.expand_schema_contract_settings(settings)
+        return settings, source
 
     def update_table(
         self,

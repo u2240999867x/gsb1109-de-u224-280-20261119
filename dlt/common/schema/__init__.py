@@ -1,5 +1,6 @@
 from dlt.common.schema.typing import (
     TSchemaContractDict,
+    TSchemaContractSource,
     TSchemaUpdate,
     TSchemaTables,
     TTableSchema,
@@ -27,6 +28,7 @@ __all__ = [
     "Schema",
     "verify_schema_hash",
     "TSchemaContractDict",
+    "TSchemaContractSource",
     "DEFAULT_SCHEMA_CONTRACT_MODE",
     "DataValidationError",
 ]

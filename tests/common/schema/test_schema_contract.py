@@ -153,6 +153,66 @@ def test_resolve_contract_settings() -> None:
     }
 
 
+def test_resolve_contract_settings_source() -> None:
+    # nothing configured anywhere -> built-in default source
+    schema = get_schema()
+    assert schema.resolve_contract_settings_and_source_for_table("tables") == ({}, "default")
+    assert schema.resolve_contract_settings_and_source_for_table("child_table") == (
+        {},
+        "default",
+    )
+
+    # schema level (global) default is used when no table hint is present
+    schema = get_schema()
+    schema.set_schema_contract("freeze")
+    settings, source = schema.resolve_contract_settings_and_source_for_table("tables")
+    assert settings == "freeze" and source == "schema_settings"
+    settings, source = schema.resolve_contract_settings_and_source_for_table("child_table")
+    assert settings == "freeze" and source == "schema_settings"
+
+    # table's own hint -> table source, overriding the schema level setting
+    schema = get_schema()
+    schema.set_schema_contract("freeze")
+    schema.tables["tables"]["schema_contract"] = {"columns": "discard_value"}
+    settings, source = schema.resolve_contract_settings_and_source_for_table("tables")
+    assert settings == {"columns": "discard_value"} and source == "table"
+
+    # nested table inherits the parent's hint -> parent_table source
+    settings, source = schema.resolve_contract_settings_and_source_for_table("child_table")
+    assert settings == {"columns": "discard_value"} and source == "parent_table"
+
+    # the nested table's own hint wins over the inherited parent hint
+    schema.tables["child_table"]["schema_contract"] = "discard_row"
+    settings, source = schema.resolve_contract_settings_and_source_for_table("child_table")
+    assert settings == "discard_row" and source == "table"
+
+    # a dynamic table that is not stored yet is resolved via the provided new table schema
+    schema = get_schema()
+    new_table = cast(
+        TTableSchema,
+        {"name": "dynamic_payments", "columns": {}, "schema_contract": {"tables": "freeze"}},
+    )
+    settings, source = schema.resolve_contract_settings_and_source_for_table(
+        "dynamic_payments", new_table
+    )
+    assert settings == {"tables": "freeze"} and source == "table"
+
+    # dynamic table without its own hint falls back to the schema level setting
+    schema.set_schema_contract({"data_type": "discard_row"})
+    plain_new_table = cast(TTableSchema, {"name": "other_payments", "columns": {}})
+    settings, source = schema.resolve_contract_settings_and_source_for_table(
+        "other_payments", plain_new_table
+    )
+    assert settings == {"data_type": "discard_row"} and source == "schema_settings"
+
+    # dynamic table with no hint and no schema level setting uses the default
+    schema2 = get_schema()
+    settings, source = schema2.resolve_contract_settings_and_source_for_table(
+        "other_payments", plain_new_table
+    )
+    assert settings == {} and source == "default"
+
+
 # ensure other settings do not interfere with the main setting we are testing
 base_settings = [
     {"tables": "evolve", "columns": "evolve", "data_type": "evolve"},

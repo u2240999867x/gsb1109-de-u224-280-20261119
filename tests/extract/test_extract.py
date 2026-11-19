@@ -1248,6 +1248,113 @@ def _extract_resource(
     return table_metrics
 
 
+def test_contract_source_recorded_for_dynamic_tables(extract_step: Extract) -> None:
+    """The pre-check records which contract configuration the first row of each dynamically
+    routed table used: resource hint (table), schema level default (schema_settings) or the
+    built-in default (default)."""
+
+    # resource-level contract applies to every table the data is routed to
+    schema = dlt.Schema("payments")
+
+    @dlt.resource(
+        name="payments",
+        table_name=lambda item: f"pay_{item['currency']}",
+        schema_contract={"columns": "discard_row"},
+    )
+    def by_resource() -> Any:
+        yield {"currency": "eur", "id": 1}
+        yield {"currency": "usd", "id": 2, "extra": 3}
+
+    _extract_resource(extract_step, schema, by_resource())
+    object_extractor = extract_step._last_extractors["object"]
+    assert object_extractor.contract_sources["pay_eur"] == "table"
+    assert object_extractor.contract_sources["pay_usd"] == "table"
+    # the extra column of the second dynamic table is discarded by the resource contract
+    assert "extra" not in schema.tables["pay_usd"]["columns"]
+
+    # schema-level contract is the source when the resource defines none
+    schema = dlt.Schema("payments")
+    schema.set_schema_contract({"tables": "discard_row"})
+
+    @dlt.resource(name="payments", table_name=lambda item: f"route_{item['currency']}")
+    def by_schema() -> Any:
+        yield {"currency": "gbp", "id": 1}
+
+    _extract_resource(extract_step, schema, by_schema())
+    object_extractor = extract_step._last_extractors["object"]
+    assert object_extractor.contract_sources["route_gbp"] == "schema_settings"
+
+    # no configuration anywhere -> built-in default source
+    schema = dlt.Schema("payments")
+
+    @dlt.resource(name="payments", table_name=lambda item: f"plain_{item['currency']}")
+    def by_default() -> Any:
+        yield {"currency": "chf", "id": 1}
+
+    _extract_resource(extract_step, schema, by_default())
+    object_extractor = extract_step._last_extractors["object"]
+    assert object_extractor.contract_sources["plain_chf"] == "default"
+
+
+def test_contract_source_for_nested_tables(extract_step: Extract) -> None:
+    """Nested tables inherit the contract of their parent table unless they define their own."""
+
+    # nested table inherits the resource (parent) contract
+    schema = dlt.Schema("payments")
+
+    @dlt.resource(
+        name="payments",
+        schema_contract={"columns": "freeze"},
+        nested_hints={"lines": make_nested_hints()},
+    )
+    def with_nested() -> Any:
+        yield {"id": 1, "lines": [{"line_id": 9}]}
+
+    _extract_resource(extract_step, schema, with_nested())
+    object_extractor = extract_step._last_extractors["object"]
+    assert object_extractor.contract_sources["payments"] == "table"
+    assert object_extractor.contract_sources["payments__lines"] == "parent_table"
+
+    # a nested table with its own contract hint is the source itself
+    schema = dlt.Schema("payments")
+
+    @dlt.resource(
+        name="payments",
+        schema_contract={"columns": "freeze"},
+        nested_hints={
+            "lines": make_nested_hints(schema_contract={"data_type": "discard_value"})
+        },
+    )
+    def with_own_nested_contract() -> Any:
+        yield {"id": 1, "lines": [{"line_id": 9}]}
+
+    _extract_resource(extract_step, schema, with_own_nested_contract())
+    object_extractor = extract_step._last_extractors["object"]
+    assert object_extractor.contract_sources["payments"] == "table"
+    assert object_extractor.contract_sources["payments__lines"] == "table"
+
+
+def test_contract_source_first_seen_wins(extract_step: Extract) -> None:
+    """The recorded source reflects the first time a table name is seen; later rows reuse it."""
+
+    schema = dlt.Schema("payments")
+
+    @dlt.resource(
+        name="payments",
+        table_name=lambda item: f"pay_{item['currency']}",
+        schema_contract={"columns": "discard_value"},
+    )
+    def repeated() -> Any:
+        yield {"currency": "eur", "id": 1}
+        yield {"currency": "eur", "id": 2, "extra": 3}
+        yield {"currency": "usd", "id": 4}
+
+    _extract_resource(extract_step, schema, repeated())
+    object_extractor = extract_step._last_extractors["object"]
+    # one entry per distinct table name, sourced from the resource contract
+    assert object_extractor.contract_sources == {"pay_eur": "table", "pay_usd": "table"}
+
+
 def test_extract_table_and_resource_metrics_with_file_rotation() -> None:
     os.environ["DATA_WRITER__FILE_MAX_ITEMS"] = "500"
 
