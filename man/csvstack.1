@@ -41,7 +41,8 @@ Stack up the rows from multiple CSV files, optionally adding a grouping value to
 usage: csvstack [\-h] [\-d DELIMITER] [\-t] [\-q QUOTECHAR] [\-u {0,1,2,3}] [\-b]
                 [\-p ESCAPECHAR] [\-z FIELD_SIZE_LIMIT] [\-e ENCODING] [\-S] [\-H]
                 [\-K SKIP_LINES] [\-v] [\-l] [\-\-zero] [\-V] [\-g GROUPS]
-                [\-n GROUP_NAME] [\-\-filenames]
+                [\-n GROUP_NAME] [\-\-filenames] [\-\-dialect FILE=DIALECT]
+                [\-\-dialect\-file FILE]
                 [FILE [FILE ...]]
 
 Stack up the rows from multiple CSV files, optionally adding a grouping value.
@@ -62,6 +63,21 @@ optional arguments:
                         when also specifying \-g.
   \-\-filenames           Use the filename of each input file as its grouping
                         value. When specified, \-g will be ignored.
+  \-\-dialect FILE=DIALECT, \-\-dialects FILE=DIALECT
+                        Specify the dialect of one input file, as
+                        FILE=DIALECT. Repeat for each input. The dialect can
+                        be a name (semicolon, tab, comma, pipe), a single
+                        delimiter, or key=value options (delimiter, quotechar,
+                        quoting, doublequote, escapechar, skipinitialspace,
+                        strict). A comma\-separated list of dialects is
+                        applied to the inputs in order. Inputs not specified
+                        use the common input options. Output always uses
+                        csvkit\(aqs default format.
+  \-\-dialect\-file FILE, \-\-dialects\-file FILE
+                        Read FILE=DIALECT declarations from a file. Each line
+                        can declare one input, or a JSON object can map
+                        filenames to dialects. Can be specified multiple
+                        times.
 .ft P
 .fi
 .UNINDENT
@@ -73,6 +89,90 @@ See also: \fI\%Arguments common to all tools\fP\&.
 .INDENT 0.0
 .INDENT 3.5
 If you redirect output to an input file like \fBcsvstack file.csv > file.csv\fP, the file will grow indefinitely.
+.UNINDENT
+.UNINDENT
+.SH INPUT DIALECTS
+.sp
+By default, every input is read with the common \fI\%Arguments common to all tools\fP\&. If inputs use different delimiters or
+quoting conventions, declare each input\(aqs dialect separately:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+csvstack \-\-dialect daily\-01.csv=semicolon \-\-dialect daily\-02.tsv=tab daily\-01.csv daily\-02.tsv
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.sp
+The declaration is \fBFILE=DIALECT\fP\&. \fBFILE\fP can be a path, a basename, \fB\-\fP for standard input, or a 1\-based input
+position. \fBDIALECT\fP can be a name (\fBcomma\fP, \fBsemicolon\fP, \fBtab\fP, \fBpipe\fP), a single delimiter, or a
+space\-separated list of \fBkey=value\fP options: \fBdelimiter\fP, \fBquotechar\fP, \fBquoting\fP, \fBdoublequote\fP,
+\fBescapechar\fP, \fBskipinitialspace\fP and \fBstrict\fP\&. For example:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+csvstack \-\-dialect \(dqdaily\-01.csv=delimiter=; quotechar=\(aq\e\e\(dq\(aq\(dq daily\-01.csv
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.sp
+A comma\-separated list of dialects is applied to the inputs in order:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+csvstack \-\-dialect \(dqsemicolon,tab\(dq daily\-01.csv daily\-02.tsv
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.sp
+Inputs not listed in a declaration are read with the common input options, as before. The output is always written
+with csvkit\(aqs default format (comma\-delimited, double\-quoted, Unix line endings), regardless of the input dialects.
+.sp
+Declarations can also be kept in a file, one \fBFILE=DIALECT\fP per line, with blank lines and \fB#\fP comments ignored:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+# daily reports from the same batch
+daily\-01.csv=semicolon
+daily\-02.tsv=tab
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+csvstack \-\-dialect\-file daily\-dialects.txt daily\-01.csv daily\-02.tsv
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.sp
+The file can instead be a JSON object that maps filenames to dialects. A header row of \fBfile,dialect\fP is also
+accepted.
+.sp
+If an input does not match its declared dialect, \fBcsvstack\fP exits with status 1 and reports the input filename
+and the source line at which the bad record started, for example:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+daily\-01.csv: line 3: unexpected end of data
+.ft P
+.fi
 .UNINDENT
 .UNINDENT
 .SH EXAMPLES

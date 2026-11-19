@@ -1,0 +1,3 @@
+file,dialect
+examples/test_dialects_semicolon.csv,semicolon
+examples/test_dialects_tab.tsv,tab

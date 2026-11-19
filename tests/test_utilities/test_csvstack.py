@@ -1,8 +1,11 @@
+import io
 import os
 import sys
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
+
+import agate
 
 from csvkit.utilities.csvstack import CSVStack, launch_new_instance
 from tests.utils import CSVKitTestCase, EmptyFileTests, stdin_as_string
@@ -132,6 +135,253 @@ class TestCSVStack(CSVKitTestCase, EmptyFileTests):
             ['path', 'a', 'b', 'c'],
             ['dummy.csv', '1', '2', '3'],
             ['dummy2.csv', '1', '2', '3'],
+        ])
+
+    def test_dialects(self):
+        self.assertRows([
+            '--dialect', 'examples/test_dialects_semicolon.csv=semicolon',
+            '--dialect', 'examples/test_dialects_tab.tsv=tab',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_tab.tsv',
+            'examples/dummy.csv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['5', 'x;y', '7'],
+            ['6', 'a,b', '8'],
+            ['1', '2', '3'],
+        ])
+
+    def test_dialects_alias(self):
+        self.assertRows([
+            '--input-dialects', 'examples/test_dialects_semicolon.csv=semicolon',
+            'examples/test_dialects_semicolon.csv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+        ])
+
+    def test_dialects_comma_separated(self):
+        self.assertRows([
+            '--dialects',
+            'examples/test_dialects_semicolon.csv=semicolon,examples/test_dialects_tab.tsv=tab',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_tab.tsv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['5', 'x;y', '7'],
+            ['6', 'a,b', '8'],
+        ])
+
+    def test_dialects_positional(self):
+        self.assertRows([
+            '--dialects', 'semicolon,tab',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_tab.tsv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['5', 'x;y', '7'],
+            ['6', 'a,b', '8'],
+        ])
+
+    def test_dialects_unlisted_input_uses_common_options(self):
+        self.assertRows([
+            '--dialect', 'examples/test_dialects_semicolon.csv=semicolon',
+            '--delimiter', ';',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_semicolon.csv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+        ])
+
+    def test_dialects_delimiter(self):
+        self.assertRows([
+            '--dialect', 'examples/test_dialects_semicolon.csv=;',
+            '--dialect', 'examples/test_dialects_tab.tsv=\\t',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_tab.tsv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['5', 'x;y', '7'],
+            ['6', 'a,b', '8'],
+        ])
+
+    def test_dialects_options(self):
+        self.assertRows([
+            '--dialect', 'examples/test_dialects_semicolon.csv=delimiter=";" quotechar="\\""',
+            'examples/test_dialects_semicolon.csv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+        ])
+
+    def test_dialects_basename_and_index(self):
+        self.assertRows([
+            '--dialect', 'test_dialects_semicolon.csv=semicolon',
+            '--dialect', '2=tab',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_tab.tsv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['5', 'x;y', '7'],
+            ['6', 'a,b', '8'],
+        ])
+
+    def test_dialects_file(self):
+        self.assertRows([
+            '--dialect-file', 'examples/test_dialects.txt',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_tab.tsv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['5', 'x;y', '7'],
+            ['6', 'a,b', '8'],
+        ])
+
+    def test_dialects_file_json(self):
+        self.assertRows([
+            '--dialect-file', 'examples/test_dialects.json',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_tab.tsv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['5', 'x;y', '7'],
+            ['6', 'a,b', '8'],
+        ])
+
+    def test_dialects_file_csv(self):
+        self.assertRows([
+            '--dialect-file', 'examples/test_dialects.csv',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_tab.tsv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['5', 'x;y', '7'],
+            ['6', 'a,b', '8'],
+        ])
+
+    def test_dialects_file_invalid(self):
+        output_file = io.StringIO()
+        error_file = io.StringIO()
+        utility = CSVStack([
+            '--dialect-file', 'examples/test_dialects_invalid.txt',
+            'examples/dummy.csv',
+        ], output_file, error_file)
+
+        with self.assertRaises(SystemExit) as e:
+            utility.run()
+
+        self.assertEqual(e.exception.code, 1)
+        self.assertEqual(
+            error_file.getvalue().splitlines()[-1],
+            'examples/test_dialects_invalid.txt: line 1: expected "FILE=DIALECT"',
+        )
+
+    def test_dialects_stdin(self):
+        with open('examples/test_dialects_semicolon.csv', 'rb') as f, stdin_as_string(f):
+            self.assertRows([
+                '--dialect=-=semicolon',
+                '--dialect', 'examples/test_dialects_tab.tsv=tab',
+                '-',
+                'examples/test_dialects_tab.tsv',
+            ], [
+                ['a', 'b', 'c'],
+                ['1', 'x;y', '3'],
+                ['2', 'tab\there', '4'],
+                ['5', 'x;y', '7'],
+                ['6', 'a,b', '8'],
+            ])
+
+    def test_dialects_output_is_canonical(self):
+        self.assertLines([
+            '--dialect', 'examples/test_dialects_semicolon.csv=semicolon',
+            'examples/test_dialects_semicolon.csv',
+        ], [
+            'a,b,c',
+            '1,x;y,3',
+            '2,tab\there,4',
+        ])
+
+    def test_dialects_invalid(self):
+        self.assertError(
+            launch_new_instance,
+            ['--dialect', 'examples/test_dialects_semicolon.csv=nonsense'],
+            "Invalid dialect for 'examples/test_dialects_semicolon.csv': expected a dialect name, a single delimiter "
+            "or key=value pairs, got 'nonsense'.",
+            args=[],
+        )
+
+    def test_dialects_invalid_declaration(self):
+        self.assertError(
+            launch_new_instance,
+            ['--dialect', 'nonsense'],
+            "Invalid dialect declaration: 'nonsense'. Expected FILE=DIALECT.",
+            args=[],
+        )
+
+    def test_dialects_parse_error(self):
+        output_file = io.StringIO()
+        error_file = io.StringIO()
+        utility = CSVStack([
+            '--dialect', 'examples/test_dialects_unclosed.csv=semicolon',
+            'examples/test_dialects_unclosed.csv',
+        ], output_file, error_file)
+
+        with self.assertRaises(SystemExit) as e:
+            utility.run()
+
+        self.assertEqual(e.exception.code, 1)
+        self.assertEqual(error_file.getvalue().splitlines()[-1],
+                         'examples/test_dialects_unclosed.csv: line 3: unexpected end of data')
+
+    def test_dialects_short_row(self):
+        output_file = io.StringIO()
+        error_file = io.StringIO()
+        utility = CSVStack([
+            '--dialect', 'examples/test_dialects_missing_column.csv=semicolon',
+            'examples/test_dialects_missing_column.csv',
+        ], output_file, error_file)
+
+        with self.assertRaises(SystemExit) as e:
+            utility.run()
+
+        self.assertEqual(e.exception.code, 1)
+        self.assertEqual(error_file.getvalue().splitlines()[-1],
+                         'examples/test_dialects_missing_column.csv: line 3: expected 3 columns, found 2')
+
+    def test_dialects_unlisted_input_keeps_ragged_rows(self):
+        self.assertRows([
+            '--dialect', 'examples/test_dialects_semicolon.csv=semicolon',
+            '--delimiter', ';',
+            'examples/test_dialects_semicolon.csv',
+            'examples/test_dialects_missing_column.csv',
+        ], [
+            ['a', 'b', 'c'],
+            ['1', 'x;y', '3'],
+            ['2', 'tab\there', '4'],
+            ['1', '2', '3'],
+            ['4', '5', ''],
         ])
 
 

@@ -1,6 +1,7 @@
 Unreleased
 ----------
 
+-  feat: :doc:`/scripts/csvstack` adds :code:`--dialect` and :code:`--dialect-file` options, to specify the dialect of each input file independently. Inputs without a declaration are read as before, and output always uses csvkit's default format. Parse errors report the input filename and source line.
 -  fix: :doc:`/scripts/csvgrep` treats an empty :code:`--regex` or :code:`--match` pattern as matching every value. Previously, with an empty pattern, :code:`--any-match` matched no rows, and :code:`--any-match --invert-match` matched every row.
 -  feat: :doc:`/scripts/csvcut` adds an :code:`--ignore-unknown-columns` option to skip identifiers in :code:`-c/--columns` that do not match a column in the input.
 -  feat: :doc:`/scripts/csvclean` adds a :code:`--remove-empty-columns` option to remove empty columns from standard output.

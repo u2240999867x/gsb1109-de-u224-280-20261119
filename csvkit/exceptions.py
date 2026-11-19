@@ -41,3 +41,10 @@ class RequiredHeaderError(CustomException):
     Exception raised when an operation requires a CSV file to have a header row.
     """
     pass
+
+
+class CSVStackError(CustomException):
+    """
+    Exception raised when an input of :doc:`/scripts/csvstack` can't be parsed.
+    """
+    pass
