@@ -1131,12 +1131,69 @@ def column_array_agg_query(
     clause = ref.data_source._get_clause(engine)
     if not (column_names := ref.get_columns(engine)):
         raise ValueError("There must be a column to group by")
+    if is_snowflake(engine):
+        aggregation_column = lowercase_column_names(aggregation_column)
     group_columns = [clause.c[column] for column in column_names]
     agg_column = clause.c[aggregation_column]
-    selection = sa.select(*group_columns, sa.func.array_agg(agg_column)).group_by(
-        *group_columns
+    selection = (
+        sa.select(*group_columns, sa.func.array_agg(agg_column))
+        .select_from(clause)
+        .group_by(*group_columns)
     )
+    if ref.condition is not None:
+        text = str(ref.condition)
+        if is_snowflake(engine):
+            text = ref.condition._snowflake_str()
+        selection = selection.where(sa.text(text))
+    if is_mssql(engine) and isinstance(ref.data_source, TableDataSource):
+        selection = selection.with_hint(clause, "WITH (NOLOCK)")
     return [selection]
+
+
+def get_grouped_aggregate(
+    engine: sa.engine.Engine,
+    ref: DataReference,
+    aggregation_column: str,
+    *,
+    aggregate_operator: Callable = sa.func.sum,
+) -> tuple[list[tuple[Any, ...]], list[sa.Select]]:
+    """Aggregate ``aggregation_column`` for every group defined by ``ref.columns``.
+
+    Each returned row consists of the group key, the aggregate, the number of
+    non-``NULL`` values that contributed to it and the total number of rows in
+    the group.  The distinction between the latter two matters when a group
+    contains rows but no usable values: SQL's ``SUM`` returns ``NULL`` there,
+    which must not be mistaken for a genuine aggregate of zero.
+    """
+    clause = ref.data_source._get_clause(engine)
+    if not (column_names := ref.get_columns(engine)):
+        raise ValueError("There must be at least one column to group by.")
+    if is_snowflake(engine):
+        aggregation_column = lowercase_column_names(aggregation_column)
+
+    group_columns = [clause.c[column] for column in column_names]
+    agg_column = clause.c[aggregation_column]
+    selection = (
+        sa.select(
+            *group_columns,
+            aggregate_operator(agg_column).label("dj_aggregate"),
+            sa.func.count(agg_column).label("dj_n_samples"),
+            sa.func.count().label("dj_n_rows"),
+        )
+        .select_from(clause)
+        .group_by(*group_columns)
+    )
+    if ref.condition is not None:
+        text = str(ref.condition)
+        if is_snowflake(engine):
+            text = ref.condition._snowflake_str()
+        selection = selection.where(sa.text(text))
+    if is_mssql(engine) and isinstance(ref.data_source, TableDataSource):
+        selection = selection.with_hint(clause, "WITH (NOLOCK)")
+
+    with engine.connect() as connection:
+        result = connection.execute(selection).fetchall()
+    return [tuple(row) for row in result], [selection]
 
 
 def snowflake_parse_variant_column(value: str) -> dict:
@@ -1155,7 +1212,12 @@ def get_column_array_agg(
         )
     if is_snowflake(engine):
         result = [
-            (*t[:-1], list(map(int, snowflake_parse_variant_column(t[-1]))))
+            (
+                *t[:-1],
+                []
+                if t[-1] is None
+                else list(map(int, snowflake_parse_variant_column(t[-1]))),
+            )
             for t in result
         ]
     return result, selections

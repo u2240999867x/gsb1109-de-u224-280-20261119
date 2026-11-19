@@ -3122,6 +3122,42 @@ def test_groupby_aggregation_within_with_failures(
     assert operation(test_result.outcome), test_result.failure_message
 
 
+def test_groupby_sum_range_within(engine, groupby_sum_range_table):
+    req = requirements.WithinRequirement.from_table(*groupby_sum_range_table)
+    req.add_groupby_sum_range_constraint(
+        ["store", "day"], "amount", lower_bound=0, upper_bound=1000
+    )
+    test_result = req[0].test(engine)
+    assert negation(test_result.outcome), test_result.failure_message
+    assert "no amount samples" in test_result.failure_message
+
+
+def test_groupby_sum_range_within_allows_empty(engine, groupby_sum_range_table):
+    req = requirements.WithinRequirement.from_table(*groupby_sum_range_table)
+    req.add_groupby_sum_range_constraint(
+        ["store", "day"],
+        "amount",
+        lower_bound=0,
+        upper_bound=1000,
+        allow_empty_groups=True,
+    )
+    assert identity(req[0].test(engine).outcome)
+
+
+def test_groupby_sum_range_between(
+    engine, groupby_sum_range_table, groupby_sum_range_reference
+):
+    req = requirements.BetweenRequirement.from_tables(
+        *groupby_sum_range_table, *groupby_sum_range_reference
+    )
+    req.add_groupby_sum_range_constraint(
+        ["store", "day"], ["store", "day"], "amount", tolerance=0.2
+    )
+    test_result = req[0].test(engine)
+    assert negation(test_result.outcome), test_result.failure_message
+    assert "store='B', day='2026-01-01'" in test_result.failure_message
+
+
 @pytest.mark.parametrize(
     "data",
     [

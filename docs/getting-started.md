@@ -55,6 +55,79 @@ see `tests/unit/test_condition.py`.
 Many `Constraint` s have optional `columns` parameters. If no argument is given, all
 available columns will be used.
 
+## Per-group aggregates
+
+Aggregating over an entire table can hide problems: a store that is too high
+and another store that is too low may cancel out in the total. Use
+`add_groupby_aggregation_constraint` to check the aggregate separately for
+every group, for example store and day.
+
+For a single data source, either provide absolute bounds or a target aggregate
+with a relative tolerance:
+
+```python
+daily_req = WithinRequirement.from_table(
+    db_name="example", schema_name=None, table_name="daily_amounts"
+)
+
+daily_req.add_groupby_aggregation_constraint(
+    columns=["store_id", "business_date"],
+    aggregation_column="amount",
+    target_aggregate=1000,
+    tolerance=0.05,
+)
+```
+
+For two data sources, the reference aggregate is taken from the group with the
+same key:
+
+```python
+amounts_between_req = BetweenRequirement.from_tables(
+    db_name1="example",
+    schema_name1=None,
+    table_name1="daily_amounts",
+    db_name2="example",
+    schema_name2=None,
+    table_name2="daily_amounts_expected",
+)
+
+amounts_between_req.add_groupby_aggregation_constraint(
+    columns1=["store_id", "business_date"],
+    columns2=["store_id", "business_date"],
+    aggregation_column1="amount",
+    tolerance=0.05,
+)
+```
+
+Every failing group is reported with the number of contributing sample rows,
+the total number of rows in the group and the allowed range. A group that has
+rows but only `NULL` amounts is reported as having no amount samples. This is
+different from a group whose aggregate is genuinely zero: the latter is checked
+against the allowed range like any other aggregate. If `NULL`-only groups should
+not fail the test, pass `allow_empty_groups=True`.
+
+When each group has its own acceptable range, for example from a plan table,
+pass `allowed_ranges` keyed by the group columns instead of global bounds:
+
+```python
+daily_req.add_groupby_sum_range_constraint(
+    columns=["store_id", "business_date"],
+    aggregation_column="amount",
+    allowed_ranges={
+        ("store_1", "2026-01-01"): (900, 1100),
+        ("store_2", "2026-01-01"): (450, 550),
+    },
+)
+```
+
+For an exhaustive per-group report, call `constraint.get_report(engine)` on the
+added constraint. It returns one row per group with the key, the aggregate, the
+sample size, the total number of rows, both allowed bounds, a `status` and the
+outcome, regardless of whether the constraint passed overall. `status` is one of
+`ok`, `out_of_range`, `no_samples`, `no_range` or `missing`, which keeps a genuine
+aggregate of zero separate from a group without any amounts. For a plain-text
+version with one line per group, use `constraint.format_report(engine)`.
+
 ## Defining limitations of change
 
 [`BetweenRequirement`][datajudge.requirements.BetweenRequirement] s allow for `Constraint` s expressing the limitation of a loss or gain. For example, the `NRowsMinGain` `Constraint`

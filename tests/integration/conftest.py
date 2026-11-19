@@ -1069,6 +1069,47 @@ def groupby_aggregation_table_correct(engine, metadata):
 
 
 @pytest.fixture(scope="module")
+def groupby_sum_range_table(engine, metadata):
+    table_name = "groupby_sum_range_table"
+    columns = [
+        sa.Column("store", sa.String(16)),
+        sa.Column("day", sa.String(16)),
+        sa.Column("amount", sa.Integer()),
+    ]
+    rows = [
+        ("A", "2026-01-01", 100),
+        ("A", "2026-01-01", 50),
+        ("B", "2026-01-01", 80),
+        ("A", "2026-01-02", 0),
+        ("A", "2026-01-02", 0),
+        ("B", "2026-01-02", None),
+        ("B", "2026-01-02", None),
+    ]
+    data = [{"store": s, "day": d, "amount": a} for s, d, a in rows]
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
+def groupby_sum_range_reference(engine, metadata):
+    table_name = "groupby_sum_range_reference"
+    columns = [
+        sa.Column("store", sa.String(16)),
+        sa.Column("day", sa.String(16)),
+        sa.Column("amount", sa.Integer()),
+    ]
+    rows = [
+        ("A", "2026-01-01", 150),
+        ("B", "2026-01-01", 90),
+        ("A", "2026-01-02", 0),
+        ("B", "2026-01-02", 0),
+    ]
+    data = [{"store": s, "day": d, "amount": a} for s, d, a in rows]
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
 def groupby_aggregation_table_incorrect(engine, metadata):
     table_name = "groupby_aggregation_table_incorrect"
     columns = [

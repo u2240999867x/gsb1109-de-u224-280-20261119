@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC
-from collections.abc import Callable, Collection, MutableSequence, Sequence
+from collections.abc import Callable, Collection, Mapping, MutableSequence, Sequence
 from typing import (
     TypeVar,
 )
@@ -1232,27 +1232,74 @@ class WithinRequirement(Requirement):
         self,
         columns: Sequence[str],
         aggregation_column: str,
-        start_value: int,
+        start_value: int | None = None,
         tolerance: float = 0,
         condition: Condition | None = None,
         name: str | None = None,
         cache_size=None,
+        *,
+        lower_bound: float | None = None,
+        upper_bound: float | None = None,
+        target_aggregate: float | None = None,
+        max_absolute_deviation: float | None = None,
+        n_results: int = 10,
+        allow_empty_groups: bool = False,
+        max_relative_deviation: float | None = None,
+        min_value: float | None = None,
+        max_value: float | None = None,
+        max_deviation: float | None = None,
+        allowed_range: tuple[float, float] | None = None,
+        allowed_ranges: Mapping[tuple[Any, ...], tuple[float, float]] | None = None,
+        bounds: tuple[float | None, float | None] | None = None,
+        aggregate_column: str | None = None,
+        expected_sum: float | None = None,
+        min_sum: float | None = None,
+        max_sum: float | None = None,
+        relative_tolerance: float | None = None,
     ):
-        """Check whether array aggregate corresponds to an integer range.
+        """Check an aggregate per group, either for continuity or against a range.
 
-        The ``DataSource`` is grouped by ``columns``. Sql's ``array_agg`` function is then
-        applied to the ``aggregate_column``.
+        The ``DataSource`` is grouped by ``columns``, e.g. store and day. This
+        means that every group is checked on its own, so that deviations in
+        different groups cannot cancel out in an overall total.
 
-        Since we expect ``aggregate_column`` to be a numeric column, this leads to
-        a multiset of aggregated values. These values should correspond to the integers
-        ranging from ``start_value`` to the cardinality of the multiset.
+        If ``start_value`` is given, Sql's ``array_agg`` function is applied to
+        ``aggregation_column`` and the resulting multiset is expected to contain
+        the integers from ``start_value`` onwards. ``tolerance`` then expresses
+        the fraction of grouped-by rows which may have incomplete ranges.
 
-        In order to allow for slight deviations from this pattern, ``tolerance`` expresses
-        the fraction of all grouped-by rows, which may be incomplete ranges.
+        Otherwise, the aggregate (``SUM`` by default) of ``aggregation_column``
+        is compared against an allowed range per group. The range is either
+        given explicitly through ``lower_bound`` and ``upper_bound``, or derived
+        from ``target_aggregate`` together with ``tolerance`` (relative) or
+        ``max_absolute_deviation`` (absolute, takes precedence).
+
+        Groups with rows but only ``NULL`` amounts are reported as having no
+        amount samples. They are not treated as groups whose genuine aggregate
+        is zero; a real aggregate of zero is checked against the allowed range
+        like any other value. Both the number of contributing sample rows and
+        the allowed range are part of the failure message.
         """
+        if bounds is not None:
+            if lower_bound is not None or upper_bound is not None:
+                raise ValueError(
+                    "bounds and explicit bounds are mutually exclusive."
+                )
+            lower_bound, upper_bound = bounds
+        if aggregate_column is not None:
+            aggregation_column = aggregate_column
         ref = DataReference(self._data_source, list(columns), condition)
-        self._constraints.append(
-            groupby_constraints.AggregateNumericRangeEquality(
+        if start_value is not None:
+            if (
+                lower_bound is not None
+                or upper_bound is not None
+                or target_aggregate is not None
+            ):
+                raise ValueError(
+                    "Either start_value for a continuity check or an aggregate "
+                    "range, not both."
+                )
+            constraint = groupby_constraints.AggregateNumericRangeEquality(
                 ref,
                 aggregation_column=aggregation_column,
                 tolerance=tolerance,
@@ -1260,7 +1307,95 @@ class WithinRequirement(Requirement):
                 name=name,
                 cache_size=cache_size,
             )
+        else:
+            constraint = groupby_constraints.AggregateNumericRange(
+                ref,
+                aggregation_column,
+                lower_bound=lower_bound,
+                upper_bound=upper_bound,
+                target_aggregate=target_aggregate,
+                tolerance=tolerance,
+                max_absolute_deviation=max_absolute_deviation,
+                n_results=n_results,
+                allow_empty_groups=allow_empty_groups,
+                max_relative_deviation=max_relative_deviation,
+                min_value=min_value,
+                max_value=max_value,
+                max_deviation=max_deviation,
+                allowed_range=allowed_range,
+                allowed_ranges=allowed_ranges,
+                expected_sum=expected_sum,
+                min_sum=min_sum,
+                max_sum=max_sum,
+                relative_tolerance=relative_tolerance,
+                name=name,
+                cache_size=cache_size,
+            )
+        self._constraints.append(constraint)
+
+    def add_groupby_sum_range_constraint(
+        self,
+        columns: Sequence[str],
+        aggregation_column: str,
+        lower_bound: float | None = None,
+        upper_bound: float | None = None,
+        tolerance: float = 0,
+        target_aggregate: float | None = None,
+        max_absolute_deviation: float | None = None,
+        condition: Condition | None = None,
+        name: str | None = None,
+        cache_size=None,
+        *,
+        n_results: int = 10,
+        allow_empty_groups: bool = False,
+        max_relative_deviation: float | None = None,
+        min_value: float | None = None,
+        max_value: float | None = None,
+        max_deviation: float | None = None,
+        allowed_range: tuple[float, float] | None = None,
+        allowed_ranges: Mapping[tuple[Any, ...], tuple[float, float]] | None = None,
+        bounds: tuple[float | None, float | None] | None = None,
+        aggregate_column: str | None = None,
+        expected_sum: float | None = None,
+        min_sum: float | None = None,
+        max_sum: float | None = None,
+        relative_tolerance: float | None = None,
+    ):
+        """Check a ``SUM`` per group against an allowed range.
+
+        Convenience wrapper around :meth:`add_groupby_aggregation_constraint`
+        without the continuity semantics of ``start_value``.
+        """
+        self.add_groupby_aggregation_constraint(
+            columns=columns,
+            aggregation_column=aggregation_column,
+            tolerance=tolerance,
+            condition=condition,
+            name=name,
+            cache_size=cache_size,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            target_aggregate=target_aggregate,
+            max_absolute_deviation=max_absolute_deviation,
+            n_results=n_results,
+            allow_empty_groups=allow_empty_groups,
+            max_relative_deviation=max_relative_deviation,
+            min_value=min_value,
+            max_value=max_value,
+            max_deviation=max_deviation,
+            allowed_range=allowed_range,
+            allowed_ranges=allowed_ranges,
+            bounds=bounds,
+            aggregate_column=aggregate_column,
+            expected_sum=expected_sum,
+            min_sum=min_sum,
+            max_sum=max_sum,
+            relative_tolerance=relative_tolerance,
         )
+
+    add_groupby_aggregation_range_constraint = add_groupby_sum_range_constraint
+    add_groupby_sum_constraint = add_groupby_sum_range_constraint
+    add_groupby_aggregate_range_constraint = add_groupby_sum_range_constraint
 
 
 class BetweenRequirement(Requirement):
@@ -1901,6 +2036,87 @@ class BetweenRequirement(Requirement):
                 cache_size=cache_size,
             )
         )
+
+    def add_groupby_sum_range_constraint(
+        self,
+        columns1: Sequence[str],
+        columns2: Sequence[str],
+        aggregation_column1: str,
+        aggregation_column2: str | None = None,
+        tolerance: float = 0,
+        max_absolute_deviation: float | None = None,
+        condition1: Condition | None = None,
+        condition2: Condition | None = None,
+        name: str | None = None,
+        cache_size=None,
+        *,
+        n_results: int = 10,
+        allow_empty_groups: bool = False,
+        max_relative_deviation: float | None = None,
+        aggregate_column1: str | None = None,
+        aggregate_column2: str | None = None,
+        relative_tolerance: float | None = None,
+    ):
+        """Compare a ``SUM`` per group between two ``DataSource`` s.
+
+        Each group defined by ``columns1`` (e.g. store and day) is compared
+        against the group with the same key in the second ``DataSource``. The
+        grouping ensures that deviations in one group are not offset by
+        deviations in another group.
+
+        The first data source's aggregate may deviate from the reference
+        aggregate by ``tolerance`` relatively, or by ``max_absolute_deviation``
+        absolutely (which takes precedence). If both are zero, the aggregates
+        must match exactly.
+
+        Groups in the first data source containing rows but only ``NULL``
+        amounts are reported as having no amount samples. They are not treated
+        as groups whose genuine aggregate is zero; a real aggregate of zero is
+        compared like any other value. Failure messages list the number of
+        contributing sample rows and the allowed range per group.
+        """
+        if aggregate_column1 is not None:
+            if aggregation_column1 != aggregate_column1:
+                raise ValueError(
+                    "aggregation_column1 and aggregate_column1 are aliases; only "
+                    "one may be given."
+                )
+            aggregation_column1 = aggregate_column1
+        if aggregate_column2 is not None:
+            if (
+                aggregation_column2 is not None
+                and aggregation_column2 != aggregate_column2
+            ):
+                raise ValueError(
+                    "aggregation_column2 and aggregate_column2 are aliases; only "
+                    "one may be given."
+                )
+            aggregation_column2 = aggregate_column2
+        if aggregation_column2 is None:
+            aggregation_column2 = aggregation_column1
+        ref = DataReference(self._data_source, list(columns1), condition1)
+        ref2 = DataReference(self._data_source2, list(columns2), condition2)
+        self._constraints.append(
+            groupby_constraints.AggregateNumericRange(
+                ref,
+                aggregation_column1,
+                ref2=ref2,
+                aggregation_column2=aggregation_column2,
+                tolerance=tolerance,
+                max_absolute_deviation=max_absolute_deviation,
+                n_results=n_results,
+                allow_empty_groups=allow_empty_groups,
+                max_relative_deviation=max_relative_deviation,
+                relative_tolerance=relative_tolerance,
+                name=name,
+                cache_size=cache_size,
+            )
+        )
+
+    add_groupby_aggregation_constraint = add_groupby_sum_range_constraint
+    add_groupby_aggregation_between_constraint = add_groupby_sum_range_constraint
+    add_groupby_sum_between_constraint = add_groupby_sum_range_constraint
+    add_groupby_aggregate_range_constraint = add_groupby_sum_range_constraint
 
     def add_date_min_constraint(
         self,

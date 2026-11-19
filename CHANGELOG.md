@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.14.0 - 2026.11.20
+
+**New features**
+
+- Add per-group aggregate checks to
+  [`datajudge.WithinRequirement.add_groupby_aggregation_constraint`][datajudge.requirements.WithinRequirement.add_groupby_aggregation_constraint]
+  and
+  [`datajudge.BetweenRequirement.add_groupby_aggregation_constraint`][datajudge.requirements.BetweenRequirement.add_groupby_aggregation_constraint]
+  via `lower_bound`/`upper_bound` or a reference aggregate with `tolerance`.
+  Every group is checked individually, so deviations cannot cancel out across
+  groups.
+- Report the number of contributing sample rows and the allowed range for
+  failing groups.
+- Distinguish groups without amount samples from groups whose aggregate is
+  genuinely zero; the former can be tolerated with `allow_empty_groups`.
+
+**Bug fixes**
+
+- Respect the `DataReference` condition in `array_agg`-based aggregation
+  constraints.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.
