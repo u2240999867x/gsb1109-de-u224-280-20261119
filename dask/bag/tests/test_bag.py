@@ -674,6 +674,66 @@ def test_take_npartitions_warn():
         assert not record
 
 
+def test_take_auto():
+    # Empty leading partitions are skipped automatically and elements are
+    # returned in partition and record order
+    b2 = db.from_sequence([1, 2, 3], npartitions=5)
+    assert b2.take(2, npartitions="auto") == (1, 2)
+    assert list(b2.take(3, npartitions="auto")) == [1, 2, 3]
+    assert b.take(6, npartitions="auto") == (0, 1, 2, 3, 4, 0)
+    assert b.take(0, npartitions="auto") == ()
+    with pytest.raises(ValueError):
+        b.take(1, npartitions="auto", compute=False)
+
+
+def test_take_auto_reads_few_partitions():
+    # Partitions past the point where k elements are found are not computed
+    computed = []
+
+    def track(x):
+        computed.append(x)
+        return x
+
+    b2 = db.from_sequence(range(10), npartitions=10).map(track)
+    with dask.config.set(scheduler="sync"):
+        assert b2.take(3, npartitions="auto") == (0, 1, 2)
+    assert computed == [0, 1, 2]
+
+
+def test_take_auto_warn():
+    # Use single-threaded scheduler so warnings are properly captured in the
+    # same process
+    with dask.config.set(scheduler="sync"):
+        with pytest.warns(UserWarning):
+            b.take(100, npartitions="auto")
+
+        with warnings.catch_warnings(record=True) as record:
+            b.take(100, npartitions="auto", warn=False)
+        assert not record
+
+
+def test_take_auto_errors_not_masked():
+    # An error in a partition that has been started must propagate rather
+    # than being treated as the end of the bag
+    def fail(x):
+        raise ValueError("boom")
+
+    b2 = db.from_sequence([1, 2, 3], npartitions=3).map(fail)
+    with dask.config.set(scheduler="sync"):
+        with pytest.raises(ValueError, match="boom"):
+            b2.take(2, npartitions="auto")
+
+    # A failing partition that is never started does not affect the result
+    def fail_after_two(x):
+        if x >= 2:
+            raise ValueError("boom")
+        return x
+
+    b3 = db.from_sequence(range(10), npartitions=10).map(fail_after_two)
+    with dask.config.set(scheduler="sync"):
+        assert b3.take(2, npartitions="auto") == (0, 1)
+
+
 def test_map_is_lazy():
     assert isinstance(map(lambda x: x, [1, 2, 3]), Iterator)
 

@@ -1424,11 +1424,15 @@ class Bag(DaskMethodsMixin):
         ----------
         k : int
             The number of elements to return
-        npartitions : int, optional
+        npartitions : int or "auto", optional
             Elements are only taken from the first ``npartitions``, with a
             default of 1. If there are fewer than ``k`` rows in the first
             ``npartitions`` a warning will be raised and any found rows
-            returned. Pass -1 to use all partitions.
+            returned. Pass -1 to use all partitions. Pass ``"auto"`` to
+            compute as few partitions as possible: partitions are read one
+            at a time, in order, stopping as soon as ``k`` elements have
+            been collected or the bag is exhausted. ``"auto"`` requires
+            ``compute=True``.
         compute : bool, optional
             Whether to compute the result, default is True.
         warn : bool, optional
@@ -1440,6 +1444,11 @@ class Bag(DaskMethodsMixin):
         >>> b.take(3)
         (0, 1, 2)
         """
+
+        if npartitions == "auto":
+            if not compute:
+                raise ValueError("take with npartitions='auto' requires compute=True")
+            return self._take_adaptive(k, warn=warn)
 
         if npartitions <= -1:
             npartitions = self.npartitions
@@ -1470,6 +1479,31 @@ class Bag(DaskMethodsMixin):
             return tuple(b.compute())
         else:
             return b
+
+    def _take_adaptive(self, k, warn=True):
+        """Take the first k elements, computing as few partitions as possible.
+
+        Partitions are computed one at a time, in order, and elements are
+        collected until ``k`` are found or the bag is exhausted. Errors
+        raised while computing a partition propagate to the caller instead
+        of being mistaken for the end of the bag.
+        """
+        collected = []
+        token = tokenize(self, k, "auto")
+        for i in range(self.npartitions):
+            remaining = k - len(collected)
+            if remaining <= 0:
+                break
+            name = f"take-partial-{token}-{i}"
+            dsk = {(name, 0): (list, (take, remaining, (self.name, i)))}
+            graph = HighLevelGraph.from_collections(name, dsk, dependencies=[self])
+            collected.extend(Bag(graph, name, 1).compute())
+        if len(collected) < k and warn:
+            warnings.warn(
+                f"Insufficient elements for `take`. {k} elements requested, "
+                f"only {len(collected)} elements available."
+            )
+        return tuple(collected)
 
     def flatten(self):
         """Concatenate nested lists into one long list.
