@@ -427,8 +427,22 @@ print(d.dump())
 predicate = lambda k, v: v is not None
 f = d.filter(predicate)
 
-# Use deep=True to apply the predicate recursively to all nested dicts.
+# Use deep=True to apply the predicate recursively to all nested dicts,
+# lists and tuples. Ancestors containing any matching descendant are kept
+# automatically, while branches without a match are pruned.
 f = d.filter(predicate, deep=True)
+
+# A predicate declaring three arguments also receives the full path
+# (the list of dict keys and list indexes from the root).
+def predicate(path, key, value):
+    # keep only the "temperature" property of each device
+    return path[-1:] == ["attrs"] or key == "temperature"
+
+f = d.filter(predicate, deep=True)
+# list indexes in the path always refer to the original array, even though
+# unmatched items are compacted away in the returned structure:
+#   ["devices", 0, "attrs", "temperature"]
+#   ["devices", 3, "attrs", "temperature"]
 ```
 
 #### `find`

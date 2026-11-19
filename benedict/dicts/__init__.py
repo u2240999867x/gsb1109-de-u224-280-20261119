@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import (
-    Callable,
     Collection,
     ItemsView,
     Iterable,
@@ -43,6 +42,7 @@ from benedict.core import swap as _swap
 from benedict.core import traverse as _traverse
 from benedict.core import unflatten as _unflatten
 from benedict.core import unique as _unique
+from benedict.core.filter import DeepFilterPredicate
 from benedict.core.traverse import TraverseCallback
 from benedict.dicts.base import BaseDict
 from benedict.dicts.io import IODict
@@ -172,11 +172,14 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         """
         return _dump(data or self)
 
-    def filter(self, predicate: Callable[[_KPT, _V], bool], deep: bool = False) -> Self:
+    def filter(self, predicate: DeepFilterPredicate, deep: bool = False) -> Self:
         """
         Return a new filtered dict using the given predicate function.
         Predicate function receives key, value arguments and should return a bool value.
-        If deep is True, the predicate is applied recursively to nested dicts.
+        If deep is True, the predicate is applied recursively to nested dicts,
+        lists and tuples and ancestors containing any match are always kept.
+        A predicate declaring three arguments receives (path, key, value),
+        where path is the full list of dict keys and list indexes from the root.
         """
         return cast("Self", _filter(self, predicate, deep=deep))
 
