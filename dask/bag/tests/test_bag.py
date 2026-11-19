@@ -1250,6 +1250,62 @@ def test_from_delayed_iterator():
     ) == (25, 25, 50)
 
 
+def test_from_delayed_shared_delayed_read_once():
+    # Several partitions share a single lazily loaded dictionary while another
+    # partition consumes its own parameter. Building and optimizing the graph
+    # must not read anything, and the shared dictionary must be materialized
+    # exactly once for the whole computation.
+    from dask.delayed import delayed
+
+    shared_reads = []
+    own_reads = []
+
+    # `pure=False` so that reuse relies on the same `Delayed` object (and hence
+    # the same key) rather than on two calls tokenizing identically.
+    @delayed(pure=False)
+    def load_shared():
+        shared_reads.append(len(shared_reads))
+        return {"kind": "shared", "reads": len(shared_reads)}
+
+    @delayed(pure=True)
+    def load_own(value):
+        own_reads.append(value)
+        return {"kind": "own", "value": value}
+
+    @delayed(pure=True)
+    def make_partition(index, config):
+        return [(index, config), (index, config)]
+
+    shared = load_shared()
+    partitions = [make_partition(i, shared) for i in range(3)]
+    partitions.append(make_partition(3, load_own(3)))
+    bag = db.from_delayed(partitions)
+
+    # Neither graph construction nor optimization should evaluate any task
+    optimized = bag.__dask_optimize__(bag.dask, bag.__dask_keys__())
+    assert shared_reads == []
+    assert own_reads == []
+    # The shared dictionary appears as a single task in the optimized graph
+    shared_keys = [key for key in optimized if str(key).startswith("load_shared")]
+    assert len(shared_keys) == 1
+
+    result = bag.compute(scheduler="sync")
+
+    assert shared_reads == [0]
+    assert own_reads == [3]
+
+    elements = list(result)
+    assert [index for index, _ in elements] == [0, 0, 1, 1, 2, 2, 3, 3]
+
+    shared_config = elements[0][1]
+    assert shared_config == {"kind": "shared", "reads": 1}
+    # Every element in the shared partitions sees the same object
+    assert all(config is shared_config for _, config in elements[:6])
+    # The last partition gets its own parameter, not the shared dictionary
+    assert elements[6][1] == elements[7][1] == {"kind": "own", "value": 3}
+    assert elements[6][1] is not shared_config
+
+
 def test_range():
     for npartitions in [1, 7, 10, 28]:
         b = db.range(100, npartitions=npartitions)
