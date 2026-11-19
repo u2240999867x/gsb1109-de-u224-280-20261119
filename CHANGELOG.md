@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+**New features**
+
+- Add `compare_row_counts` flag to [`datajudge.BetweenRequirement.add_row_equality_constraint`][datajudge.requirements.BetweenRequirement.add_row_equality_constraint].
+  When enabled, rows are compared as multisets: the number of occurrences of every
+  distinct row, including rows containing `NULL` values, has to match between both
+  tables.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

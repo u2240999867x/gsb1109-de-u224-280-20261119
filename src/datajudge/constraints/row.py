@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 from functools import cache
+from typing import Any
 
 import sqlalchemy as sa
 
@@ -22,27 +23,61 @@ class Row(Constraint, abc.ABC):
         super().__init__(ref, ref2=ref2, name=name, cache_size=cache_size)
         self._max_missing_fraction_getter = max_missing_fraction_getter
 
+    def _get_row_difference_sample(
+        self, engine: sa.engine.Engine, ref: DataReference, ref2: DataReference
+    ) -> tuple[Any, list[sa.Select]]:
+        return db_access.get_row_difference_sample(engine, ref, ref2)
+
     def test(self, engine: sa.engine.Engine) -> TestResult:
         if self._ref is None or self._ref2 is None:
             raise ValueError()
         self._max_missing_fraction = self._max_missing_fraction_getter(engine)
-        self._ref1_minus_ref2_sample, _ = db_access.get_row_difference_sample(
+        self._ref1_minus_ref2_sample, _ = self._get_row_difference_sample(
             engine, self._ref, self._ref2
         )
-        self._ref2_minus_ref1_sample, _ = db_access.get_row_difference_sample(
+        self._ref2_minus_ref1_sample, _ = self._get_row_difference_sample(
             engine, self._ref2, self._ref
         )
         return super().test(engine)
 
 
 class RowEquality(Row):
+    def __init__(
+        self,
+        ref: DataReference,
+        ref2: DataReference,
+        max_missing_fraction_getter: _ToleranceGetter,
+        name: str | None = None,
+        cache_size=None,
+        compare_row_counts: bool = False,
+    ):
+        super().__init__(
+            ref,
+            ref2=ref2,
+            max_missing_fraction_getter=max_missing_fraction_getter,
+            name=name,
+            cache_size=cache_size,
+        )
+        self._compare_row_counts = compare_row_counts
+
+    def _get_row_difference_sample(
+        self, engine: sa.engine.Engine, ref: DataReference, ref2: DataReference
+    ) -> tuple[Any, list[sa.Select]]:
+        if self._compare_row_counts:
+            return db_access.get_row_count_difference_sample(engine, ref, ref2)
+        return super()._get_row_difference_sample(engine, ref, ref2)
+
     def _get_factual_value(self, engine: sa.engine.Engine) -> tuple[int, int]:
         if self._ref is None or self._ref2 is None:
             raise ValueError()
-        n_rows_missing_left, selections_left = db_access.get_row_difference_count(
+        if self._compare_row_counts:
+            row_difference_count = db_access.get_row_count_difference_count
+        else:
+            row_difference_count = db_access.get_row_difference_count
+        n_rows_missing_left, selections_left = row_difference_count(
             engine, self._ref, self._ref2
         )
-        n_rows_missing_right, selections_right = db_access.get_row_difference_count(
+        n_rows_missing_right, selections_right = row_difference_count(
             engine, self._ref2, self._ref
         )
         self._factual_selections = [*selections_left, *selections_right]
@@ -51,9 +86,14 @@ class RowEquality(Row):
     def _get_target_value(self, engine: sa.engine.Engine) -> int:
         if self._ref is None or self._ref2 is None:
             raise ValueError()
-        n_rows_total, selections = db_access.get_unique_count_union(
-            engine, self._ref, self._ref2
-        )
+        if self._compare_row_counts:
+            n_rows_total, selections = db_access.get_row_count_union_count(
+                engine, self._ref, self._ref2
+            )
+        else:
+            n_rows_total, selections = db_access.get_unique_count_union(
+                engine, self._ref, self._ref2
+            )
         self.target_selections = selections
         return n_rows_total
 

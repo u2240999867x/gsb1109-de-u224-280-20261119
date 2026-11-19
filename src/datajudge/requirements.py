@@ -2051,6 +2051,7 @@ class BetweenRequirement(Requirement):
         condition2: Condition | None = None,
         name: str | None = None,
         cache_size=None,
+        compare_row_counts: bool = False,
     ) -> None:
         """At most ``max_missing_fraction`` of rows in T1 and T2 are absent in either.
 
@@ -2059,6 +2060,13 @@ class BetweenRequirement(Requirement):
         $$\\frac{|T1 - T2| + |T2 - T1|}{|T1 \\cup T2|} \\leq \\text{mmf}$$
 
         Rows from T1 are indexed in ``columns1``, rows from T2 are indexed in ``columns2``.
+
+        By default, rows are compared as sets, i.e. duplicates are ignored.
+        When ``compare_row_counts`` is ``True``, rows are compared as multisets
+        instead: the number of occurrences of every distinct row has to match
+        between T1 and T2. If, e.g., a row occurs three times in T1 but only
+        twice in T2, one row is reported missing. Rows consisting of ``NULL``
+        values are grouped together, just as any other row.
         """  # noqa: D301
         ref = DataReference(self._data_source, columns1, condition1)
         ref2 = DataReference(self._data_source2, columns2, condition2)
@@ -2069,6 +2077,7 @@ class BetweenRequirement(Requirement):
                 lambda engine: max_missing_fraction,
                 name=name,
                 cache_size=cache_size,
+                compare_row_counts=compare_row_counts,
             )
         )
 

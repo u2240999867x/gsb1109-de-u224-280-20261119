@@ -784,6 +784,42 @@ def unique_table2(engine, metadata):
 
 
 @pytest.fixture(scope="module")
+def duplicate_table1(engine, metadata):
+    table_name = "duplicate_table1"
+    columns = [
+        sa.Column("col_int", sa.Integer()),
+        sa.Column("col_varchar", _string_column(engine)),
+    ]
+    data = [
+        {"col_int": 1, "col_varchar": "hi"},
+        {"col_int": 1, "col_varchar": "hi"},
+        {"col_int": 1, "col_varchar": "hi"},
+        {"col_int": 2, "col_varchar": "ho"},
+        {"col_int": None, "col_varchar": None},
+        {"col_int": None, "col_varchar": None},
+    ]
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
+def duplicate_table2(engine, metadata):
+    table_name = "duplicate_table2"
+    columns = [
+        sa.Column("col_int", sa.Integer()),
+        sa.Column("col_varchar", _string_column(engine)),
+    ]
+    data = [
+        {"col_int": 1, "col_varchar": "hi"},
+        {"col_int": 1, "col_varchar": "hi"},
+        {"col_int": 2, "col_varchar": "ho"},
+        {"col_int": None, "col_varchar": None},
+    ]
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
 def unique_table_extralong(engine, metadata):
     if is_bigquery(engine):
         pytest.skip(

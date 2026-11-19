@@ -2942,6 +2942,36 @@ def test_row_equality_between(engine, mix_table1, mix_table2, data):
 @pytest.mark.parametrize(
     "data",
     [
+        # Set-based comparison ignores duplicates and passes.
+        (identity, 0, False),
+        # Count-based comparison: duplicate_table1 has one excess
+        # (1, "hi") row and one excess (NULL, NULL) row, i.e. a missing
+        # fraction of 2 / 6.
+        (identity, 0.34, True),
+        (negation, 0.33, True),
+        (negation, 0, True),
+    ],
+)
+def test_row_equality_counts_between(
+    engine, duplicate_table1, duplicate_table2, data
+):
+    (operation, max_missing_fraction, compare_row_counts) = data
+    req = requirements.BetweenRequirement.from_tables(
+        *duplicate_table1, *duplicate_table2
+    )
+    req.add_row_equality_constraint(
+        ["col_int", "col_varchar"],
+        ["col_int", "col_varchar"],
+        max_missing_fraction,
+        compare_row_counts=compare_row_counts,
+    )
+    test_result = req[0].test(engine)
+    assert operation(test_result.outcome), test_result.failure_message
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
         (identity, ["col_int", "col_varchar"], 0.11, None, None, None),
         (negation, ["col_int", "col_varchar"], 0.10, None, None, None),
         (

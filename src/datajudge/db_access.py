@@ -1041,6 +1041,125 @@ def get_row_difference_count(
     return result, [selection]
 
 
+def _get_row_counts_by_source(
+    engine: sa.engine.Engine, ref: DataReference, ref2: DataReference
+) -> sa.Alias:
+    """Group rows of both refs, keeping per-source occurrence counts.
+
+    Rows are grouped by all selected columns. As ``GROUP BY`` treats
+    ``NULL`` values as equal, rows containing ``NULL`` s are grouped
+    together correctly. The resulting subquery has the columns of the
+    refs' selections, followed by the columns ``count1`` and ``count2``,
+    indicating how often the row occurs in ``ref`` and ``ref2``,
+    respectively.
+    """
+    subquery1 = ref.get_selection(engine).alias()
+    subquery2 = ref2.get_selection(engine).alias()
+    columns1 = list(subquery1.c)
+    columns2 = list(subquery2.c)
+    counts1 = (
+        sa.select(
+            *columns1,
+            sa.func.count().label("row_count"),
+            sa.literal(1).label("source"),
+        )
+        .select_from(subquery1)
+        .group_by(*columns1)
+    )
+    counts2 = (
+        sa.select(
+            *columns2,
+            sa.func.count().label("row_count"),
+            sa.literal(2).label("source"),
+        )
+        .select_from(subquery2)
+        .group_by(*columns2)
+    )
+    union = sa.union_all(counts1, counts2).alias()
+    row_columns = list(union.c)[:-2]
+    grouped = (
+        sa.select(
+            *row_columns,
+            sa.func.sum(
+                sa.case((union.c["source"] == 1, union.c["row_count"]), else_=0)
+            ).label("count1"),
+            sa.func.sum(
+                sa.case((union.c["source"] == 2, union.c["row_count"]), else_=0)
+            ).label("count2"),
+        )
+        .select_from(union)
+        .group_by(*row_columns)
+        .alias()
+    )
+    return grouped
+
+
+def get_row_count_difference_sample(
+    engine: sa.engine.Engine, ref: DataReference, ref2: DataReference
+) -> tuple[Any, list[sa.Select]]:
+    """Sample a row occurring more often in ref than in ref2."""
+    grouped = _get_row_counts_by_source(engine, ref, ref2)
+    row_columns = list(grouped.c)[:-2]
+    selection = (
+        sa.select(*row_columns)
+        .select_from(grouped)
+        .where(grouped.c["count1"] > grouped.c["count2"])
+    )
+    with engine.connect() as connection:
+        result = connection.execute(selection).first()
+    return result, [selection]
+
+
+def get_row_count_difference_count(
+    engine: sa.engine.Engine, ref: DataReference, ref2: DataReference
+) -> tuple[int, list[sa.Select]]:
+    """Count rows of ref missing in ref2, taking multiplicities into account.
+
+    For every group of identical rows, the excess of occurrences in
+    ``ref`` over ``ref2`` contributes to the count. In other words, this
+    is the cardinality of the multiset difference ``ref - ref2``.
+    """
+    grouped = _get_row_counts_by_source(engine, ref, ref2)
+    excess = grouped.c["count1"] - grouped.c["count2"]
+    selection = sa.select(
+        sa.func.coalesce(sa.func.sum(sa.case((excess > 0, excess), else_=0)), 0)
+    ).select_from(grouped)
+    with engine.connect() as connection:
+        result_intermediate = connection.execute(selection).scalar()
+    if result_intermediate is None:
+        raise ValueError("Could not get the row count difference.")
+    result = int(result_intermediate)
+    return result, [selection]
+
+
+def get_row_count_union_count(
+    engine: sa.engine.Engine, ref: DataReference, ref2: DataReference
+) -> tuple[int, list[sa.Select]]:
+    """Count rows in the multiset union of ref and ref2.
+
+    For every group of identical rows, the larger occurrence count of
+    either ``ref`` or ``ref2`` contributes to the union's cardinality.
+    """
+    grouped = _get_row_counts_by_source(engine, ref, ref2)
+    selection = sa.select(
+        sa.func.coalesce(
+            sa.func.sum(
+                sa.case(
+                    (grouped.c["count1"] > grouped.c["count2"], grouped.c["count1"]),
+                    else_=grouped.c["count2"],
+                )
+            ),
+            0,
+        )
+    ).select_from(grouped)
+    with engine.connect() as connection:
+        result_intermediate = connection.execute(selection).scalar()
+    if result_intermediate is None:
+        raise ValueError("Could not get the row count union.")
+    result = int(result_intermediate)
+    return result, [selection]
+
+
 def get_row_mismatch(
     engine: sa.engine.Engine,
     ref: DataReference,
