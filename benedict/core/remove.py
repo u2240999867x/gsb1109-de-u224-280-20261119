@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+from collections.abc import MutableMapping
+from typing import Any
+
+from benedict.utils import type_util
+
+
+def _remove_deep_value(value: Any, keys_list: list[Any]) -> None:
+    if type_util.is_dict(value):
+        _remove_deep(value, keys_list)
+    elif type_util.is_list_or_tuple(value):
+        for item in value:
+            _remove_deep_value(item, keys_list)
+
+
+def _remove_deep(d: MutableMapping[Any, Any], keys_list: list[Any]) -> None:
+    for key in keys_list:
+        d.pop(key, None)
+    for value in list(d.values()):
+        _remove_deep_value(value, keys_list)
+
+
+def remove(
+    d: MutableMapping[Any, Any], keys: Any, *args: Any, deep: bool = False
+) -> None:
+    if type_util.is_string(keys):
+        keys = [keys]
+    try:
+        keys_iter = iter(keys)
+    except TypeError:
+        keys_iter = iter((keys,))
+    keys_list: list[Any] = list(keys_iter) + list(args)
+    if deep:
+        # Apply at top level first; for benedict instances this resolves keypaths.
+        for key in keys_list:
+            d.pop(key, None)
+        # Then recurse into nested plain dicts (keys are matched literally).
+        for value in list(d.values()):
+            _remove_deep_value(value, keys_list)
+    else:
+        for key in keys_list:
+            d.pop(key, None)

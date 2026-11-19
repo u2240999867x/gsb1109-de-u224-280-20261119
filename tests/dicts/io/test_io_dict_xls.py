@@ -1,0 +1,367 @@
+from typing import Any
+from unittest.mock import patch
+
+from decouple import config
+
+from benedict.dicts.io import IODict
+from benedict.exceptions import ExtrasRequireModuleNotFoundError
+
+from .test_io_dict import io_dict_test_case
+
+
+class io_dict_xls_test_case(io_dict_test_case):
+    """
+    This class describes an IODict / xls test case.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._extensions = [
+            "xlsx",
+            "xlsm",
+            "xls",
+        ]
+
+    def test_from_xls_with_valid_file_valid_content(self) -> None:
+        expected_dict = {
+            "values": [
+                {
+                    "mon": 10,
+                    "tue": 11,
+                    "wed": 12,
+                    "thu": 13,
+                    "fri": 14,
+                    "sat": 15,
+                    "sun": 16,
+                },
+                {
+                    "mon": 20,
+                    "tue": 21,
+                    "wed": 22,
+                    "thu": 23,
+                    "fri": 24,
+                    "sat": 25,
+                    "sun": 26,
+                },
+                {
+                    "mon": 30,
+                    "tue": 31,
+                    "wed": 32,
+                    "thu": 33,
+                    "fri": 34,
+                    "sat": 35,
+                    "sun": 36,
+                },
+            ]
+        }
+        for extension in self._extensions:
+            with self.subTest(
+                msg=f"test_from_xls_({extension})_with_valid_file_valid_content"
+            ):
+                filepath = self.input_path(f"valid-content.{extension}")
+                # static method
+                d = IODict.from_xls(filepath)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+                # constructor explicit format
+                d = IODict(filepath, format=extension)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+                # constructor implicit format
+                d = IODict(filepath)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+
+    def test_from_xls_with_numeric_column_names(self) -> None:
+        expected = {
+            "values": [
+                {
+                    "date_created": "today",
+                    "2024": 10,
+                    "23_5": 20,
+                    "0": 30,
+                    "": 40,
+                }
+            ]
+        }
+        for extension in ["xls", "xlsx"]:
+            with self.subTest(extension=extension):
+                filepath = self.input_path(f"numeric-columns.{extension}")
+                self.assertEqual(IODict.from_xls(filepath), expected)
+
+    def test_from_xls_without_column_row(self) -> None:
+        expected = {
+            "values": [
+                dict(enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])),
+                dict(enumerate(range(10, 17))),
+                dict(enumerate(range(20, 27))),
+                dict(enumerate(range(30, 37))),
+            ]
+        }
+        for extension in self._extensions:
+            with self.subTest(extension=extension):
+                filepath = self.input_path(f"valid-content.{extension}")
+                self.assertEqual(IODict.from_xls(filepath, columns_row=False), expected)
+                self.assertEqual(
+                    IODict.from_xls(
+                        filepath, columns_row=False, columns_standardized=False
+                    ),
+                    expected,
+                )
+                self.assertEqual(
+                    IODict.from_xls(
+                        filepath,
+                        columns=[f"Column {index}" for index in range(7)],
+                        columns_row=False,
+                        columns_standardized=True,
+                    ),
+                    {
+                        "values": [
+                            {f"column_{key}": value for key, value in row.items()}
+                            for row in expected["values"]
+                        ]
+                    },
+                )
+
+    @patch("benedict.serializers.xls.xls_installed", False)
+    def test_from_xls_with_valid_file_valid_content_but_xls_extra_not_installed(
+        self,
+    ) -> None:
+        for extension in self._extensions:
+            with self.subTest(
+                msg=f"test_from_xls_({extension})_with_valid_file_valid_content_but_xls_extra_not_installed"
+            ):
+                filepath = self.input_path(f"valid-content.{extension}")
+                # static method
+                with self.assertRaises(ExtrasRequireModuleNotFoundError):
+                    _ = IODict.from_xls(filepath)
+                # constructor explicit format
+                with self.assertRaises(ExtrasRequireModuleNotFoundError):
+                    _ = IODict(filepath, format=extension)
+                # constructor implicit format
+                with self.assertRaises(ExtrasRequireModuleNotFoundError):
+                    _ = IODict(filepath)
+
+    @patch("benedict.serializers.xls.fsutil_installed", False)
+    def test_from_xls_with_valid_file_valid_content_but_io_extra_not_installed(
+        self,
+    ) -> None:
+        for extension in self._extensions:
+            with self.subTest(
+                msg=f"test_from_xls_({extension})_with_valid_file_valid_content_but_io_extra_not_installed"
+            ):
+                filepath = self.input_path(f"valid-content.{extension}")
+                # static method
+                with self.assertRaises(ExtrasRequireModuleNotFoundError):
+                    _ = IODict.from_xls(filepath)
+                # constructor explicit format
+                with self.assertRaises(ExtrasRequireModuleNotFoundError):
+                    _ = IODict(filepath, format=extension)
+                # constructor implicit format
+                with self.assertRaises(ExtrasRequireModuleNotFoundError):
+                    _ = IODict(filepath)
+
+    def test_from_xls_with_valid_url_valid_content(self) -> None:
+        expected_dict = {
+            "values": [
+                {
+                    "mon": 10,
+                    "tue": 11,
+                    "wed": 12,
+                    "thu": 13,
+                    "fri": 14,
+                    "sat": 15,
+                    "sun": 16,
+                },
+                {
+                    "mon": 20,
+                    "tue": 21,
+                    "wed": 22,
+                    "thu": 23,
+                    "fri": 24,
+                    "sat": 25,
+                    "sun": 26,
+                },
+                {
+                    "mon": 30,
+                    "tue": 31,
+                    "wed": 32,
+                    "thu": 33,
+                    "fri": 34,
+                    "sat": 35,
+                    "sun": 36,
+                },
+            ]
+        }
+        for extension in self._extensions:
+            with self.subTest(
+                msg=f"test_from_xls_({extension})_with_valid_url_valid_content"
+            ):
+                # url = f"https://github.com/fabiocaccamo/python-benedict/raw/s3/tests/dicts/io/input/valid-content.{extension}"
+                url = f"https://github.com/fabiocaccamo/python-benedict/raw/main/tests/dicts/io/input/valid-content.{extension}"
+                # static method
+                d = IODict.from_xls(url)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+                # constructor explicit format
+                d = IODict(url, format=extension)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+                # constructor implicit format
+                d = IODict(url)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+
+    def test_from_xls_with_valid_s3_url_valid_content(self) -> None:
+        aws_access_key_id = config("AWS_ACCESS_KEY_ID", default=None)
+        aws_secret_access_key = config("AWS_SECRET_ACCESS_KEY", default=None)
+        if not all([aws_access_key_id, aws_secret_access_key]):
+            # don't use s3 on GH CI
+            return
+        s3_options = {
+            "aws_access_key_id": aws_access_key_id,
+            "aws_secret_access_key": aws_secret_access_key,
+        }
+        expected_dict = {
+            "values": [
+                {
+                    "mon": 10,
+                    "tue": 11,
+                    "wed": 12,
+                    "thu": 13,
+                    "fri": 14,
+                    "sat": 15,
+                    "sun": 16,
+                },
+                {
+                    "mon": 20,
+                    "tue": 21,
+                    "wed": 22,
+                    "thu": 23,
+                    "fri": 24,
+                    "sat": 25,
+                    "sun": 26,
+                },
+                {
+                    "mon": 30,
+                    "tue": 31,
+                    "wed": 32,
+                    "thu": 33,
+                    "fri": 34,
+                    "sat": 35,
+                    "sun": 36,
+                },
+            ]
+        }
+        for extension in self._extensions:
+            with self.subTest(
+                msg=f"test_from_xls_({extension})_with_valid_s3_url_valid_content"
+            ):
+                url = f"s3://python-benedict/valid-content.{extension}"
+                # static method
+                d = IODict.from_xls(url, s3_options=s3_options)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+                # constructor explicit format
+                d = IODict(url, format=extension, s3_options=s3_options)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+                # constructor implicit format
+                d = IODict(url, s3_options=s3_options)
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+
+    def test_from_xls_with_valid_file_valid_content_custom_sheet_by_index_and_columns(
+        self,
+    ) -> None:
+        expected_dict = {
+            "values": [
+                {
+                    "name": "Red",
+                    "hex": "#FF0000",
+                },
+                {
+                    "name": "Green",
+                    "hex": "#00FF00",
+                },
+                {
+                    "name": "Blue",
+                    "hex": "#0000FF",
+                },
+            ]
+        }
+        for extension in self._extensions:
+            with self.subTest(
+                msg=f"test_from_xls_({extension})_with_valid_file_valid_content_custom_sheet_by_index_and_columns"
+            ):
+                filepath = self.input_path(f"valid-content.{extension}")
+                # static method
+                d = IODict.from_xls(
+                    filepath,
+                    sheet=1,
+                    columns=["name", "hex"],
+                    columns_row=False,
+                )
+                self.assertTrue(isinstance(d, dict))
+                self.assertEqual(d, expected_dict)
+
+    def test_from_xls_with_invalid_file(self) -> None:
+        for extension in self._extensions:
+            with self.subTest(
+                msg=f"test_from_xls_({extension})_with_valid_file_valid_content"
+            ):
+                filepath = self.input_path(f"invalid-file.{extension}")
+                # static method
+                with self.assertRaises(ValueError):
+                    IODict.from_xls(filepath)
+                # constructor explicit format
+                with self.assertRaises(ValueError):
+                    IODict(filepath, format=extension)
+                # constructor implicit format
+                with self.assertRaises(ValueError):
+                    IODict(filepath)
+
+    def test_from_xls_with_valid_url_invalid_content(self) -> None:
+        for extension in self._extensions:
+            with self.subTest(
+                msg=f"test_from_xls_({extension})_with_valid_url_invalid_content"
+            ):
+                url = "https://github.com/fabiocaccamo/python-benedict"
+                # static method
+                with self.assertRaises(ValueError):
+                    IODict.from_xls(url)
+                # constructor explicit format
+                with self.assertRaises(ValueError):
+                    IODict(url, format=extension)
+                # constructor implicit format
+                with self.assertRaises(ValueError):
+                    IODict(url)
+
+    def test_from_xls_with_invalid_url(self) -> None:
+        for extension in self._extensions:
+            with self.subTest(msg=f"test_from_xls_({extension})_with_invalid_url"):
+                url = "https://github.com/fabiocaccamo/python-benedict-invalid"
+                # static method
+                with self.assertRaises(ValueError):
+                    IODict.from_xls(url)
+                # constructor explicit format
+                with self.assertRaises(ValueError):
+                    IODict(url, format=extension)
+                # constructor implicit format
+                with self.assertRaises(ValueError):
+                    IODict(url)
+
+    def test_to_xls(self) -> None:
+        d = IODict(
+            {
+                "values": [
+                    {"x": "1"},
+                    {"x": "2"},
+                    {"x": "3"},
+                    {"x": "4"},
+                    {"x": "5"},
+                ],
+            }
+        )
+        with self.assertRaises(NotImplementedError):
+            _ = d.to_xls()

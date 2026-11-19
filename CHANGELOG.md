@@ -1,0 +1,440 @@
+# Changelog
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.40.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.40.1) - 2026-10-20
+-   Fix `items` and `values` returning generators instead of views (no `len`, single iteration), eg. with `toml-rs`. #636 (by [@Gabrieljr42](https://github.com/Gabrieljr42) in #637)
+-   Honor freezing when deleting or popping a keypath and when merging into a frozen `benedict` instance. (by [@helo060228](https://github.com/helo060228) in #635)
+-   Support empty and keyword arguments in `update` method (eg. `update(key=value)`). (by [@xiehuanyi](https://github.com/xiehuanyi) in #633)
+-   Fix `BaseDict.get` and `pop` type annotations with fallback values of a different type. (by [@xiehuanyi](https://github.com/xiehuanyi) in #632)
+-   Set minimum `setuptools` version in `[build-system]`.
+-   Bump requirements and GitHub actions.
+
+## [0.40.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.40.0) - 2026-10-13
+-   Add `Python 3.15` support.
+-   Drop `Python 3.10` support.
+-   Fix arbitrary code execution: exclude `pickle` from format auto-detection, it must be requested explicitly with `format="pickle"` or `from_pickle`. (GHSA-v3xm-c46x-phwc) (by [@Sengtocxoen](https://github.com/Sengtocxoen))
+-   Fix `match` string patterns: match special characters literally (only `*` is a wildcard) and prevent catastrophic backtracking (ReDoS). #624
+-   Fix `match` string patterns matching keys with a trailing newline. (by [@fhgffy](https://github.com/fhgffy) in #619)
+-   Include tuple indexes in `keypaths` discovery and `match`. (by [@xiehuanyi](https://github.com/xiehuanyi) in #620)
+-   Allow frozen dicts to use methods returning a new dict (`flatten`, `unflatten`, `subset`, `filter`, `invert`). (by [@itzzdev09](https://github.com/itzzdev09) in #614)
+-   Fix `flatten` quadratic time complexity (up to ~25x faster on nested data).
+-   Fix `flatten` with `indexes=True` on `benedict` instances: flattened keys (eg. `a[0]`) were parsed as keypaths.
+-   Fix `BaseDict.setdefault` raising `AssertionError` with omitted or `None` default. (by [@harbinresearcher](https://github.com/harbinresearcher) in #626)
+-   Fix keyword arguments ignored when constructing from a mapping (eg. `benedict(d, key=value)`), they are now set on the wrapped dict. (by [@sricharanreddycheruku](https://github.com/sricharanreddycheruku) in #627)
+-   Fix `remove` with a single non-string key (eg. `remove(0)`). (by [@xiehuanyi](https://github.com/xiehuanyi) in #628)
+-   Fix `BaseDict.dict` and union operator type annotations to return a plain `dict`. (by [@xiehuanyi](https://github.com/xiehuanyi) in #629)
+-   Fix `rename` and `remove` with `deep=True` to traverse nested lists and tuples. (by [@xiehuanyi](https://github.com/xiehuanyi) in #616)
+-   Fix `base64` serializer to keep the Base64 representation ASCII with non-UTF-8 payload encodings. (by [@xiehuanyi](https://github.com/xiehuanyi) in #615)
+-   Fix `ini` decoding of valueless options when using `allow_no_value=True`. (by [@ac1982](https://github.com/ac1982) in #618)
+-   Fix `ini` encoding of valueless `[DEFAULT]` options when using `allow_no_value=True`.
+-   Fix `csv` decoding of strings using carriage-return line endings. (by [@fhgffy](https://github.com/fhgffy) in #621)
+-   Fix `csv` encoding losing values of non-string keys. (by [@fhgffy](https://github.com/fhgffy) in #622)
+-   Fix `xls` decoding of sheets without columns row and with numeric column names. (by [@fhgffy](https://github.com/fhgffy) in #623)
+-   Bump requirements.
+
+## [0.39.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.39.0) - 2026-09-29
+-   Forward missing `overwrite` argument in `move` method. #602
+-   Fix `clean` recursive cleaning of nested collections (when `collections=True`). (by [@x0Lazarus](https://github.com/x0Lazarus))
+-   Fix query-string parsing: keep empty values instead of dropping the key. (by [@Master-Norna](https://github.com/Master-Norna) in #604)
+-   Read current wrapped keys when iterating in `reverse`. (by [@x0Lazarus](https://github.com/x0Lazarus) in #607)
+-   Honor dictionary wrappers and freezing in `popitem` method. (by [@vitalivo](https://github.com/vitalivo) in #601)
+-   Preserve falsy parent keys when flattening dictionaries. (by [@rastagan-git](https://github.com/rastagan-git) in #600)
+-   Compare current wrapped contents when checking inequality. (by [@x0Lazarus](https://github.com/x0Lazarus) in #606)
+-   Preserve wrapper identity during in-place dictionary union. (by [@Gonghan-Princess](https://github.com/Gonghan-Princess) in #598)
+-   Prevent `RecursionError` when a dict contains itself. #592 (by [@dualfroz](https://github.com/dualfroz) in #597)
+-   Bump requirements, GitHub actions and `pre-commit` hooks.
+
+## [0.38.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.38.0) - 2026-07-07
+-   Fix `keylists` / `keypaths` to handle non-string dict keys holding lists. (by [@Sanjays2402](https://github.com/Sanjays2402) in #583)
+-   Fix `match` to anchor string patterns and consume the full keypath. (by [@gaoflow](https://github.com/gaoflow) in #579)
+-   Fix `query-string` serializer to accept array/bracketed keys and trailing `&`. (#586)
+-   Reject empty `keypath_separator`. (by [@CodingFeng101](https://github.com/CodingFeng101) in #580)
+-   Fix `int` parsing to catch `OverflowError`. #578 (#584)
+-   Bump requirements and `pre-commit` hooks.
+
+## [0.37.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.37.0) - 2026-05-09
+-   Add optional `schema` kwarg support (`python-benedict[schema]` with `pydantic` v2) to all `from_*` and `to_*` I/O methods. (#565)
+-   Add `indexes=True` option to `flatten` / `unflatten` for list/tuple flattening with round-trip support. (#561)
+-   Add `deep` argument support to `filter` method to apply the predicate recursively to all nested dicts.
+-   Add `deep` argument support to `remove` method to remove the key(s) at every nesting level.
+-   Add `deep` argument support to `rename` method to rename the key at every nesting level.
+-   Reduce dependencies making the core installation super lightweight. #567
+-   Swap `uiri/toml` encoder for `tomli_w`. #439
+-   Fix `yaml` serializer to use `safe_dump` and add `pickle` security warning (CWE-502). (#563)
+-   Fix `orjson` and `requests` requirements to address CVE-2025-67221 and CVE-2024-27454. (#562)
+-   Add `CONTRIBUTING.md`.
+-   Bump requirements and `pre-commit` hooks.
+
+## [0.36.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.36.0) - 2026-04-12
+-   Add `Python 3.14` support.
+-   Add `freeze` / `unfreeze` / `frozen` support to make a `benedict` instance immutable. #71
+-   Add tab-completion support in VSCode and IPython/Jupyter via `keyattr`. #502
+-   Raise `ValueError` in `groupby` when key values contain the `keypath_separator`. #540
+-   Add SBOM, license report and OpenSSF Scorecard. #556
+-   Fix `ResourceWarning` in `xls` serializer by explicitly closing `vba_archive`.
+-   Bump requirements and `pre-commit` hooks.
+
+## [0.35.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.35.0) - 2025-10-01
+-   Add type annotations. #157 (by [@Tatsh](https://github.com/Tatsh) in #491)
+-   Bump requirements and `pre-commit` hooks.
+
+## [0.34.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.34.1) - 2025-01-18
+-   Add `sort` parameter to `keypaths` method. #404 (by [@kotfu](https://github.com/kotfu) in #467)
+-   Bump requirements and `pre-commit` hooks.
+
+## [0.34.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.34.0) - 2024-10-18
+-   Add `Python 3.13` support.
+-   Drop `Python 3.8` and `Python 3.9` support.
+-   Fix `dict` backward-compatibility making keylist feature working only with lists. #412 #413 #432
+-   Remove tests unnecessary output.
+-   Update `pyproject` Ruff config sections.
+-   Bump requirements and `pre-commit` hooks.
+
+## [0.33.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.33.2) - 2024-03-05
+-   Fix `clean` method not working on nested dicts. #383
+-   Enforce top level keys check in `merge` method. #367
+-   Bump requirements and `pre-commit` hooks.
+
+## [0.33.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.33.1) - 2023-12-27
+-   Fix calling `from_xls` passing custom options. #355
+-   Replace `Black` and `isort` with `Ruff-format`.
+-   Bump requirements and `pre-commit` hooks.
+
+## [0.33.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.33.0) - 2023-11-08
+-   Add `Python 3.12` support. (#342)
+-   Add possibility to restrict input data sources with `sources` argument (more info [here](https://github.com/fabiocaccamo/python-benedict#input-sources)). #287
+-   Add `from_html` method (available by installing the optional `[html]` dependency, more info [here](https://github.com/fabiocaccamo/python-benedict#optional-requirements)). #317
+-   Bump requirements.
+
+## [0.32.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.32.1) - 2023-09-18
+-   Fix `items` and `values` methods returned values type (cast to `benedict`). #333
+-   Fix union with assignment operator inconsistent results (compared to `dict`). #334
+-   Bump requirements.
+
+## [0.32.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.32.0) - 2023-07-16
+-   Add `CLISerializer` and `from_cli` method. (by [@Denperidge](https://github.com/Denperidge) in #311)
+-   Bump requirements.
+
+## [0.31.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.31.0) - 2023-06-17
+-   Add `parse` extra ([optional dependencies](https://github.com/fabiocaccamo/python-benedict#optional-requirements)). #300 (#303)
+-   Bump requirements.
+
+## [0.30.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.30.2) - 2023-06-02
+-   Allow `ini` format to support nested structures (encode to json only dicts). #284
+-   Prevent clearing dict instance when assigning value to itself. #294
+
+## [0.30.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.30.1) - 2023-05-16
+-   Allow `ini` format to support nested structures. #284 (#289)
+-   Switch from `setup.cfg` to `pyproject.toml`.
+-   Replace `flake8` with `Ruff`.
+-   Fix `tox` test command.
+-   Bump requirements.
+
+## [0.30.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.30.0) - 2023-03-22
+-   Add `keyattr_dynamic` property (`False` by default). #261 (#266)
+-   Make `ini` serializer case-sensitive by default and accept `optionxform` option. #263 (#265)
+-   Fix `TypeError` when decoding `.xls` with `None` columns.
+-   Improve decoding errors traceback.
+-   Bump requirements.
+
+## [0.29.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.29.1) - 2023-03-09
+-   Fix missing dependency on `pyyaml`. #260
+-   Fix protected keys in `json` items preventing automatic keys creation when getting `__protected__` attributes. #259
+
+## [0.29.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.29.0) - 2023-03-09
+-   `NEW` Add `keyattr` *(keys as attributes)* support. (#257)
+-   `NEW` Separate installation targets (extras requires). #200 (#258)
+-   Fix set state when loading from pickle.
+-   Improve tests coverage.
+-   Upgrade syntax for `Python >= 3.8`.
+-   Reformat and cleanup code.
+-   Move `flake8` config to `setup.cfg`.
+-   Increase `flake8` checks.
+-   Add `flake8-bugbear` to `pre-commit`.
+-   Run `flake8` also on tests files.
+-   Run `pre-commit` also with `tox`.
+-   Rename default branch from `master` to `main`.
+-   Bump requirements.
+
+## [0.28.3](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.28.3) - 2023-01-12
+-   Remove `tests/` from dist.
+-   Bump requirements.
+
+## [0.28.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.28.2) - 2023-01-11
+-   Fix `FileNotFoundError` if file is just the filename. #226
+-   Bump requirements.
+
+## [0.28.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.28.1) - 2023-01-02
+-   Add `pyupgrade` to `pre-commit` config.
+-   Add `setup.cfg` (`setuptools` declarative syntax) generated using `setuptools-py2cfg`.
+-   Add support for `pathlib.Path`. #144
+-   Bump requirements.
+
+## [0.28.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.28.0) - 2022-12-29
+-   Drop `Python 3.7 support`.
+-   Replace `str.format` with `f-strings`.
+-   Remove `python setup.py test` usage.
+-   Remove encoding pragma.
+-   Fix `s3_options` option forwarded to `json` decoder. #198 (#204)
+-   Bump requirements.
+
+## [0.27.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.27.1) - 2022-11-26
+-   Add `Python 3.11` support. #143
+-   Add `pre-commit` with `black`, `isort` and `flake8`.
+-   Read `toml` files using the standard `tomlib` (if available). #143
+-   Bump requirements (`boto3`, `python-slugify`, `orjson`) version.
+
+## [0.27.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.27.0) - 2022-10-12
+-   Add `s3` support to I/O operations. #17 (#126)
+-   Fix subclasses type. #115 (#124)
+
+## [0.26.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.26.0) - 2022-10-09
+-   Add `xls` files (`.xlsx`, `.xlsm`, `.xls`) support (read-only). #70 (#122)
+-   Drop `Python 3.6` support. (#123)
+
+## [0.25.4](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.25.4) - 2022-09-06
+-   Fix `toml` encoding circular reference error. #110
+
+## [0.25.3](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.25.3) - 2022-08-23
+-   Fix set dict item value in list. #109
+
+## [0.25.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.25.2) - 2022-07-15
+-   Fixed `orjson` compatibility. #102
+-   Fixed `swap` between dict items.
+-   Fixed `deepcopy` with pointer.
+-   Bumped requirements.
+
+## [0.25.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.25.1) - 2022-04-27
+-   Fixed broken `yaml` serialization with `benedict` attributes. #89
+-   Fixed `flatten` not working when separator is equal to `keypath_separator`. #88
+-   Bumped requirements.
+
+## [0.25.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.25.0) - 2022-02-18
+-   Added official `python 3.10` support.
+-   Dropped `python 2.7` and `python 3.5` support.
+-   Pinned requirements versions.
+-   Reformatted code with **Black**.
+
+## [0.24.3](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.24.3) - 2021-10-04
+-   Added tuple index support when getting items. #66
+-   Added `type_util.is_dict_or_list_or_tuple` method.
+-   Improved tests.
+
+## [0.24.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.24.2) - 2021-08-11
+-   Fixed `json.dumps()` when `benedict` is initialized with an empty dict. #57 #61
+-   Fixed `merge` not working with an empty dict. #59
+
+## [0.24.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.24.1) - 2021-08-01
+-   Fixed `json.dumps()` when `benedict` is initialized with an empty dict. #57
+
+## [0.24.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.24.0) - 2021-05-04
+-   Added `ini` format support. #36 #40
+-   Added `python 3.9` to CI (tox, travis and GitHub actions).
+-   Fixed `to_toml` circular reference error. #53
+-   Updated `ftfy` requirement version depending on `python` version.
+-   Updated (improved) `QueryStringSerializer` regex.
+
+## [0.23.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.23.2) - 2021-01-19
+-   Fixed `merge` method lists concat when merging nested dicts. #48
+-   Fixed `BaseDict` initialized with `BaseDict` subclass argument.
+
+## [0.23.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.23.1) - 2021-01-14
+-   Fixed `get_int_list` with single value.
+
+## [0.23.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.23.0) - 2020-12-24
+-   Added `get_date` and `get_date_list` methods.
+-   Added `python-fsutil` library for file-system operations.
+
+## [0.22.4](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.22.4) - 2020-12-22
+-   Removed `sort_keys=True` by default in `JSON` serializer.
+
+## [0.22.3](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.22.3) - 2020-12-22
+-   Added `concat` option to merge method. #45
+-   Added `sort_keys=True` by default in `JSON` serializer.
+-   Added `memo` option to clone core method.
+-   Fixed broken `json.dumps` using cloned instance. #46
+
+## [0.22.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.22.2) - 2020-11-30
+-   Fixed `benedict` `yaml` representer. #43
+
+## [0.22.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.22.1) - 2020-11-27
+-   Fixed dump `benedict` object to `yaml` not working correctly. #43
+
+## [0.22.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.22.0) - 2020-10-15
+-   Added `get_uuid` and `get_uuid_list` methods.
+
+## [0.21.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.21.1) - 2020-09-30
+-   Fixed performance issue. #39
+-   Fixed `to_json` returns empty dict from generator. #38
+-   Refactored `BaseDict` class and enforced tests.
+
+## [0.21.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.21.0) - 2020-09-22
+-   Added `match` utility method. #11 #16
+-   Added `indexes` option support to keypaths method. #13
+-   Updated `keypaths` method to use the default `keypath_separator` (`.`) instead of `None`.
+-   Fixed `keypath_separator` inheritance when init from another `benedict` instance. #35
+-   Fixed `json.dumps` no longer works directly with `benedict`. #34
+
+## [0.20.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.20.0) - 2020-09-20
+-   Added `BaseDict` as base class to keep pointer to the initial input dict. #32
+-   Added automatic `benedict` casting to all methods that return dict instances.
+-   Updated `flatten` method, now a `KeyError` is raised in case of existing key.
+
+## [0.19.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.19.0) - 2020-09-11
+-   Added `plist` format support.
+-   Enforced `IODict` initial check when using filepath or data-string.
+-   Improved `KeyError` messages. PR #28
+-   Added encoding optional argument to `io_util.read_file` and `io_util.write_file`.
+-   Fixed python 3.5/3.6 I/O encoding issue.
+
+## [0.18.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.18.2) - 2020-09-02
+-   Added `find` method. #23
+-   Added `overwrite` option support to merge method. #24
+-   Fixed format auto-detection with unexpected extensions. #19
+
+## [0.18.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.18.1) - 2020-03-13
+-   Added data format auto-detection when creating instance with data from filepath or url.
+-   Fixed `keypath_separator` support when using `from_{format}` methods.
+
+## [0.18.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.18.0) - 2020-02-21
+-   Added `from_pickle` and `to_pickle` methods.
+-   Added `PickleSerializer`.
+-   Added `datetime`, `Decimal` and `set` support to `JSONSerializer`.
+-   Updated `dump` method to use `JSONSerializer`.
+-   Refactored `Base64Serializer`.
+-   Fixed `type_util.is_json_serializable` with `set` objects.
+-   Fixed `search` method for int no results - #7
+-   Improved `invert` method to handles correctly lists and tuples.
+-   Improved `io_util.read_file` and `io_util.write_file methods`.
+-   Improved code quality and CI.
+
+## [0.17.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.17.0) - 2020-02-06
+-   Added `groupby` utility method.
+-   Added `nest` utility method.
+-   Added `keylists` core method.
+-   Reorganized lib and tests packages.
+-   Improved code quality and CI.
+
+## [0.16.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.16.0) - 2020-01-30
+-   Added `KeylistDict` with list indexes support. #1
+-   Added `benedict.utils.type_util` with many utility functions.
+-   Improved code quality and CI.
+
+## [0.15.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.15.0) - 2020-01-13
+-   Added `rename` method.
+-   Added `search` method.
+-   Added `unflatten` method.
+
+## [0.14.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.14.1) - 2020-01-07
+-   Fixed `keypath_separator` value in instances returned by `copy`, `clone`, `filter`, `flatten`, `invert`, `subset` methods. #4
+-   Fixed `get` doesn't work when the key is a list with one element. #5
+-   Fixed `pickle` `AttributeError`. #6
+
+## [0.14.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.14.0) - 2019-12-18
+-   Added docstrings to methods. #2
+-   Added test case for stackoverflow answered questions.
+-   Added possibility to run tests using only `unittest`.
+-   Improved code quality and CI.
+-   Improved keypath support in `fromkeys` method.
+-   Improved url, file, data autodetect in `io_util.read_content`.
+-   Refactored `standardize` utility method.
+-   Removed duplicated code and `benedicton` decorator.
+-   Renamed `options` arg to `choices` in `ParseDict` methods.
+-   Replaced unsafe `yaml.load` with `yaml.safe_load`.
+
+## [0.13.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.13.0) - 2019-11-07
+-   Added `csv` I/O support.
+-   Refactored I/O dict class and utils.
+-   Improved tests.
+
+## [0.12.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.12.0) - 2019-10-29
+-   Added `standardize` utility method.
+-   Added `traverse` utility method.
+-   Added `keypath_separator` getter/setter.
+-   Improved `base64` I/O support.
+-   Improved tests.
+-   Refactored `benedict` class and utilies.
+
+## [0.11.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.11.1) - 2019-10-14
+-   Added `io_util.decode_bytes` utility method.
+
+## [0.11.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.11.0) - 2019-10-14
+-   Added `query-string` I/O support.
+-   Added `unique` utility method.
+-   Added urldecode, padding fix and `format=None` support to `io_util.decode_base64` utility.
+-   Refactored `benedict` class and utilies.
+
+## [0.10.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.10.0) - 2019-10-03
+-   Added `base64` I/O support.
+-   Added `invert` utility method.
+-   Added `items_sorted_by_keys` utility method.
+-   Added `items_sorted_by_values` utility method.
+-   Refactored `benedict` class and utilies.
+
+## [0.9.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.9.0) - 2019-09-23
+-   Added `xml` I/O support.
+
+## [0.8.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.8.0) - 2019-09-20
+-   Added `toml` I/O support.
+
+## [0.7.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.7.0) - 2019-09-17
+-   Added `yaml` I/O support.
+
+## [0.6.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.6.0) - 2019-09-10
+-   Added `IODict` with `json` support.
+-   Added `clone` (`deepcopy` alias) and `merge` (`deepupdate` alias) methods.
+
+## [0.5.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.5.2) - 2019-07-19
+-   Refactored `KeypathDict`.
+-   Added `remove` utility method.
+-   Added `subset` utility method.
+-   Fixed string casting in parse functions on python 2.
+
+## [0.5.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.5.1) - 2019-07-10
+-   Added timestamp support to get_datetime parse method.
+
+## [0.5.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.5.0) - 2019-07-09
+-   Added custom or `None` keypath `separator` support.
+-   Added `filter` utility method.
+-   Improved tests and code quality.
+
+## [0.4.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.4.2) - 2019-06-19
+-   Fixed `parse_str` UnicodeEncodeError on python 2.
+
+## [0.4.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.4.1) - 2019-06-18
+-   Fixed `get_phonenumber` not working with numbers without country prefix.
+-   Renamed `country` arg to `country_code` in `get_phonenumber` method.
+
+## [0.4.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.4.0) - 2019-06-17
+-   Added `clean` method.
+-   Added `get_email` method.
+-   Added `get_phonenumber` method.
+
+## [0.3.2](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.3.2) - 2019-06-11
+-   Added support to key-list as key.
+-   Fixed `setup.py` requirements installation on Python 2.7.
+
+## [0.3.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.3.1) - 2019-06-11
+-   Added `dump` and `dump_items` utility methods.
+
+## [0.3.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.3.0) - 2019-06-10
+-   Added casting to `benedict` to all dicts returned by any public method.
+-   Renamed `get_keypaths` to `keypaths` according to keys and values existing methods.
+-   Reorganized lib structure to improve scalability.
+-   Added python 2.7 support.
+-   Improved code quality.
+
+## [0.2.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.2.0) - 2019-05-20
+-   Improved `parse_bool` method.
+-   Added keypath support to `pop` method and refactored core methods.
+-   Added `get_keypaths` method.
+-   Added keypath support to `fromkeys` method.
+-   Added `deepcopy` shortcut method.
+-   Added keypath support to `copy` method.
+-   Refactored `KeypathDict` core methods.
+
+## [0.1.0](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.1.0) - 2018-05-17
+-   Released package on pypi.

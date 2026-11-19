@@ -1,0 +1,329 @@
+from benedict.dicts.io import IODict
+
+from .test_io_dict import io_dict_test_case
+
+
+class io_dict_ini_test_case(io_dict_test_case):
+    """
+    This class describes an IODict / ini test case.
+    """
+
+    def test_from_ini_with_valueless_options(self) -> None:
+        s = "[app]\nflag\nempty =\ncount = 2\nratio = 1.5\nenabled = yes\n"
+        expected = {
+            "app": {
+                "flag": None,
+                "empty": "",
+                "count": 2,
+                "ratio": 1.5,
+                "enabled": True,
+            },
+        }
+        self.assertEqual(IODict.from_ini(s, allow_no_value=True), expected)
+        self.assertEqual(IODict(s, format="ini", allow_no_value=True), expected)
+
+    def test_from_ini_with_valueless_defaults(self) -> None:
+        s = "[DEFAULT]\nflag\n[app]\nname = demo\n"
+        expected = {"flag": None, "app": {"flag": None, "name": "demo"}}
+        self.assertEqual(IODict.from_ini(s, allow_no_value=True), expected)
+
+    def test_from_ini_rejects_valueless_options_by_default(self) -> None:
+        s = "[app]\nflag\n"
+        for options in ({}, {"allow_no_value": False}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                IODict.from_ini(s, **options)
+
+    def test_from_ini_with_valid_data(self) -> None:
+        s = """
+[DEFAULT]
+ServerAliveInterval = 45
+Compression = yes
+CompressionLevel = 9
+ForwardX11 = yes
+
+[bitbucket.org]
+User = hg
+
+[topsecret.server.com]
+Port = 50022
+ForwardX11 = no
+"""
+        # static method
+        r = {
+            "ServerAliveInterval": 45,
+            "Compression": True,
+            "CompressionLevel": 9,
+            "ForwardX11": True,
+            "bitbucket.org": {
+                "User": "hg",
+                "ServerAliveInterval": 45,
+                "Compression": True,
+                "CompressionLevel": 9,
+                "ForwardX11": True,
+            },
+            "topsecret.server.com": {
+                "Port": 50022,
+                "ForwardX11": False,
+                "ServerAliveInterval": 45,
+                "Compression": True,
+                "CompressionLevel": 9,
+            },
+        }
+
+        d = IODict.from_ini(s)
+        self.assertTrue(isinstance(d, dict))
+        self.assertEqual(d, r)
+        # constructor
+        d = IODict(s, format="ini")
+        self.assertTrue(isinstance(d, dict))
+        self.assertEqual(d, r)
+
+    def test_from_ini_with_valid_data_and_optionxform_custom(self) -> None:
+        s = """
+[DEFAULT]
+ServerAliveInterval = 45
+Compression = yes
+CompressionLevel = 9
+ForwardX11 = yes
+
+[bitbucket.org]
+User = hg
+
+[topsecret.server.com]
+Port = 50022
+ForwardX11 = no
+"""
+        # static method
+        r = {
+            "SERVERALIVEINTERVAL": 45,
+            "COMPRESSION": True,
+            "COMPRESSIONLEVEL": 9,
+            "FORWARDX11": True,
+            "bitbucket.org": {
+                "USER": "hg",
+                "SERVERALIVEINTERVAL": 45,
+                "COMPRESSION": True,
+                "COMPRESSIONLEVEL": 9,
+                "FORWARDX11": True,
+            },
+            "topsecret.server.com": {
+                "PORT": 50022,
+                "FORWARDX11": False,
+                "SERVERALIVEINTERVAL": 45,
+                "COMPRESSION": True,
+                "COMPRESSIONLEVEL": 9,
+            },
+        }
+
+        def optionxform(key: str) -> str:
+            return key.upper()
+
+        d = IODict.from_ini(s, optionxform=optionxform)
+        self.assertTrue(isinstance(d, dict))
+        self.assertEqual(d, r)
+        # constructor
+        d = IODict(s, format="ini", optionxform=optionxform)
+        self.assertTrue(isinstance(d, dict))
+        self.assertEqual(d, r)
+
+    def test_from_ini_with_valid_data_and_optionxform_none(self) -> None:
+        s = """
+[DEFAULT]
+ServerAliveInterval = 45
+Compression = yes
+CompressionLevel = 9
+ForwardX11 = yes
+
+[bitbucket.org]
+User = hg
+
+[topsecret.server.com]
+Port = 50022
+ForwardX11 = no
+"""
+        # static method
+        r = {
+            "serveraliveinterval": 45,
+            "compression": True,
+            "compressionlevel": 9,
+            "forwardx11": True,
+            "bitbucket.org": {
+                "user": "hg",
+                "serveraliveinterval": 45,
+                "compression": True,
+                "compressionlevel": 9,
+                "forwardx11": True,
+            },
+            "topsecret.server.com": {
+                "port": 50022,
+                "forwardx11": False,
+                "serveraliveinterval": 45,
+                "compression": True,
+                "compressionlevel": 9,
+            },
+        }
+
+        d = IODict.from_ini(s, optionxform=None)
+        self.assertTrue(isinstance(d, dict))
+        self.assertEqual(d, r)
+        # constructor
+        d = IODict(s, format="ini", optionxform=None)
+        self.assertTrue(isinstance(d, dict))
+        self.assertEqual(d, r)
+
+    def test_from_ini_with_invalid_data(self) -> None:
+        s = "Lorem ipsum est in ea occaecat nisi officia."
+        # static method
+        with self.assertRaises(ValueError):
+            IODict.from_ini(s)
+        # constructor
+        with self.assertRaises(ValueError):
+            IODict(s, format="ini")
+
+    def test_from_ini_with_valid_file_valid_content(self) -> None:
+        filepath = self.input_path("valid-content.ini")
+        # static method
+        d = IODict.from_ini(filepath)
+        self.assertTrue(isinstance(d, dict))
+        # constructor
+        d = IODict(filepath, format="ini")
+        self.assertTrue(isinstance(d, dict))
+        # constructor with format autodetection
+        d = IODict(filepath)
+        self.assertTrue(isinstance(d, dict))
+
+    def test_from_ini_with_valid_file_valid_content_invalid_format(self) -> None:
+        filepath = self.input_path("valid-content.base64")
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+        filepath = self.input_path("valid-content.json")
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+        filepath = self.input_path("valid-content.plist")
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+        filepath = self.input_path("valid-content.qs")
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+        filepath = self.input_path("valid-content.toml")
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+        filepath = self.input_path("valid-content.xml")
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+        filepath = self.input_path("valid-content.yml")
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+
+    def test_from_ini_with_valid_file_invalid_content(self) -> None:
+        filepath = self.input_path("invalid-content.ini")
+        # static method
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+        # constructor
+        with self.assertRaises(ValueError):
+            IODict(filepath, format="ini")
+
+    def test_from_ini_with_invalid_file(self) -> None:
+        filepath = self.input_path("invalid-file.ini")
+        # static method
+        with self.assertRaises(ValueError):
+            IODict.from_ini(filepath)
+        # constructor
+        with self.assertRaises(ValueError):
+            IODict(filepath, format="ini")
+
+    # def test_from_ini_with_valid_url_valid_content(self):
+    #     url = self.input_url('valid-content.ini')
+    #     # static method
+    #     d = IODict.from_ini(url)
+    #     self.assertTrue(isinstance(d, dict))
+    #     # constructor
+    #     d = IODict(url, format='ini')
+    #     self.assertTrue(isinstance(d, dict))
+    #     # constructor with format autodetection
+    #     d = IODict(url)
+    #     self.assertTrue(isinstance(d, dict))
+
+    def test_from_ini_with_valid_url_invalid_content(self) -> None:
+        url = "https://github.com/fabiocaccamo/python-benedict"
+        # static method
+        with self.assertRaises(ValueError):
+            IODict.from_ini(url)
+        # constructor
+        with self.assertRaises(ValueError):
+            IODict(url, format="ini")
+
+    def test_from_ini_with_invalid_url(self) -> None:
+        url = "https://github.com/fabiocaccamo/python-benedict-invalid"
+        # static method
+        with self.assertRaises(ValueError):
+            IODict.from_ini(url)
+        # constructor
+        with self.assertRaises(ValueError):
+            IODict(url, format="ini")
+
+    def test_to_ini(self) -> None:
+        d = IODict(
+            {
+                "serveraliveinterval": 45,
+                "compression": True,
+                "compressionlevel": 9,
+                "forwardx11": True,
+                "bitbucket.org": {
+                    "user": "hg",
+                    "serveraliveinterval": 45,
+                    "compression": True,
+                    "compressionlevel": 9,
+                    "forwardx11": True,
+                },
+                "topsecret.server.com": {
+                    "port": 50022,
+                    "forwardx11": False,
+                    "serveraliveinterval": 45,
+                    "compression": True,
+                    "compressionlevel": 9,
+                },
+            }
+        )
+        s = d.to_ini()
+        self.assertEqual(d, IODict.from_ini(s))
+
+    def test_to_ini_with_valueless_options(self) -> None:
+        d = IODict({"flag": None, "app": {"flag": None, "empty": "", "count": 2}})
+        s = d.to_ini(allow_no_value=True)
+        self.assertEqual(IODict.from_ini(s, allow_no_value=True), d)
+
+    def test_to_ini_with_none_values_without_allow_no_value(self) -> None:
+        # unchanged: without allow_no_value, None is written as a string
+        d = IODict({"flag": None, "app": {"flag": None}})
+        s = d.to_ini()
+        self.assertEqual(IODict.from_ini(s), {"flag": "None", "app": {"flag": "None"}})
+
+    def test_to_ini_file(self) -> None:
+        d = IODict(
+            {
+                "serveraliveinterval": 45,
+                "compression": True,
+                "compressionlevel": 9,
+                "forwardx11": True,
+                "bitbucket.org": {
+                    "user": "hg",
+                    "serveraliveinterval": 45,
+                    "compression": True,
+                    "compressionlevel": 9,
+                    "forwardx11": True,
+                },
+                "topsecret.server.com": {
+                    "port": 50022,
+                    "forwardx11": False,
+                    "serveraliveinterval": 45,
+                    "compression": True,
+                    "compressionlevel": 9,
+                },
+            }
+        )
+        filepath = self.output_path("test_to_ini_file.ini")
+        d.to_ini(filepath=filepath)
+        self.assertFileExists(filepath)
+        self.assertEqual(d, IODict.from_ini(filepath))

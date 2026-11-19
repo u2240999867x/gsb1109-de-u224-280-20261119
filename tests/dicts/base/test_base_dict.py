@@ -1,0 +1,777 @@
+from __future__ import annotations
+
+import copy
+import unittest
+from collections import OrderedDict, UserDict
+from collections.abc import Iterable
+from types import MappingProxyType
+from typing import Any, assert_type
+
+from benedict.dicts.base import BaseDict
+
+
+class base_dict_test_case(unittest.TestCase):
+    """
+    This class describes a BaseDict test case.
+    """
+
+    def test_init_mapping_with_keywords(self) -> None:
+        for mapping_type in (dict, OrderedDict, UserDict):
+            with self.subTest(mapping_type=mapping_type):
+                source = mapping_type(existing=1)
+                wrapped = BaseDict(source, existing=2, added=3)
+                self.assertEqual(wrapped, {"existing": 2, "added": 3})
+                self.assertIs(wrapped.dict(), source)
+                self.assertEqual(source, {"existing": 2, "added": 3})
+
+    def test_init_keywords_without_mapping(self) -> None:
+        for args in ((), ([("existing", 1)],)):
+            with self.subTest(args=args):
+                self.assertEqual(
+                    BaseDict(*args, existing=2, added=3),
+                    dict(*args, existing=2, added=3),
+                )
+
+    def test_init_readonly_mapping_with_keywords(self) -> None:
+        source = MappingProxyType({"existing": 1})
+        wrapped = BaseDict(source, existing=2, added=3)
+        self.assertEqual(wrapped, dict(source, existing=2, added=3))
+        self.assertEqual(source, {"existing": 1})
+        self.assertIs(BaseDict(source).dict(), source)
+
+    def test_get_and_pop_preserve_default_types(self) -> None:
+        values = [BaseDict[str, int](found=3), BaseDict[str, int]({"found": 3})]
+        for value in values:
+            with self.subTest(wrapped=value._dict is not None):
+                assert_type(value.get("missing", "fallback"), int | str)
+                assert_type(value.get("missing"), int | None)
+                assert_type(value.get("found", 0), int)
+                self.assertEqual(value.get("missing", "fallback"), "fallback")
+                self.assertEqual(value.get("found", "fallback"), 3)
+                assert_type(value.pop("missing", "fallback"), int | str)
+                assert_type(value.pop("missing", None), int | None)
+                found = value.pop("found")
+                assert_type(found, int)
+                self.assertEqual(value.pop("missing", "fallback"), "fallback")
+                self.assertIsNone(value.pop("missing", None))
+                self.assertEqual(found, 3)
+
+    def test_popitem(self) -> None:
+        b = BaseDict(a=1, b=2)
+        self.assertEqual(b.popitem(), ("b", 2))
+        self.assertEqual(b, {"a": 1})
+        self.assertEqual(b.popitem(), ("a", 1))
+        with self.assertRaises(KeyError):
+            b.popitem()
+
+    def test_popitem_with_pointer(self) -> None:
+        d = {"a": 1}
+        b = BaseDict(d)
+        d["b"] = 2
+        self.assertEqual(b.popitem(), ("b", 2))
+        self.assertEqual(d, {"a": 1})
+        self.assertEqual(b.popitem(), ("a", 1))
+        self.assertEqual(d, {})
+        with self.assertRaises(KeyError):
+            b.popitem()
+
+    def test_popitem_frozen(self) -> None:
+        for b in (BaseDict(a=1), BaseDict({"a": 1}), BaseDict()):
+            with self.subTest(wrapped=b._dict is not None, empty=not b):
+                b.freeze()
+                original = dict(b.items())
+                with self.assertRaises(TypeError):
+                    b.popitem()
+                self.assertEqual(b, original)
+
+    def test_native_dict_result_types(self) -> None:
+        backing = {"a": 1}
+        wrapped = BaseDict[str, int](backing)
+        raw = wrapped.dict()
+        combined = wrapped | {"b": 2}
+        assert_type(raw, dict[str, int])
+        assert_type(combined, dict[str, int])
+        self.assertIs(raw, backing)
+        self.assertIs(type(combined), dict)
+        self.assertEqual(combined, {"a": 1, "b": 2})
+        self.assertEqual(backing, {"a": 1})
+
+    def test_native_dict_result_types_without_pointer(self) -> None:
+        original = BaseDict[str, int](a=1)
+        raw = original.dict()
+        combined = original | {"b": 2}
+        assert_type(raw, dict[str, int])
+        assert_type(combined, dict[str, int])
+        self.assertIs(raw, original)
+        self.assertIs(type(combined), dict)
+        self.assertEqual(combined, {"a": 1, "b": 2})
+        self.assertEqual(original, {"a": 1})
+        raw["a"] = 3
+        self.assertEqual(original, {"a": 3})
+        self.assertEqual(combined, {"a": 1, "b": 2})
+
+    def test__bool__(self) -> None:
+        b = BaseDict()
+        self.assertFalse(b)
+        self.assertFalse(bool(b))
+        self.assertEqual(b, b.dict())
+        b = BaseDict()
+        b["a"] = 1
+        self.assertTrue(b)
+        self.assertTrue(bool(b))
+        self.assertEqual(b, b.dict())
+
+    def test__bool__with_pointer(self) -> None:
+        d = {"a": 1}
+        b = BaseDict(d)
+        self.assertTrue(b)
+        self.assertTrue(bool(b))
+        self.assertEqual(b, b.dict())
+        b = BaseDict({})
+        self.assertFalse(b)
+        self.assertFalse(bool(b))
+        self.assertEqual(b, b.dict())
+
+    def test__contains__(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        self.assertTrue("a" in b)
+        self.assertFalse("b" in b)
+        self.assertEqual(b, b.dict())
+
+    def test__contains__with_pointer(self) -> None:
+        d = {"a": 1}
+        b = BaseDict(d)
+        self.assertTrue("a" in b)
+        self.assertFalse("b" in b)
+        self.assertEqual(b, b.dict())
+        del d["a"]
+        self.assertFalse("a" in b)
+
+    def test__deepcopy__(self) -> None:
+        b1 = BaseDict()
+        b1["a"] = {}
+        b1["a"]["b"] = {}
+        b1["a"]["b"]["c"] = True
+        b2 = copy.deepcopy(b1)
+        self.assertEqual(b1, b2)
+        self.assertEqual(type(b1), type(b2))
+        self.assertFalse(b1 is b2)
+
+    def test__deepcopy__with_pointer(self) -> None:
+        d: dict[str, Any] = {}
+        d["a"] = {}
+        d["a"]["b"] = {}
+        d["a"]["b"]["c"] = True
+        b1 = BaseDict(d)
+        b2 = copy.deepcopy(b1)
+        self.assertEqual(b1, b2)
+        self.assertEqual(type(b1), type(b2))
+        self.assertFalse(b1 is b2)
+
+    def test__delitem__(self) -> None:
+        b = BaseDict()
+        with self.assertRaises(KeyError):
+            del b["a"]
+        self.assertEqual(b, b.dict())
+
+    def test__delitem__with_pointer(self) -> None:
+        d: dict[str, Any] = {
+            "a": 1,
+        }
+        b = BaseDict(d)
+        self.assertTrue("a" in b)
+        del b["a"]
+        self.assertFalse("a" in b)
+        with self.assertRaises(KeyError):
+            del b["a"]
+        self.assertEqual(b, b.dict())
+
+    def test__equal__(self) -> None:
+        b = BaseDict()
+        o1: dict[str, Any] = {}
+        o2 = {
+            "a": 2,
+        }
+        self.assertTrue(b == o1)
+        self.assertFalse(b == o2)
+        self.assertEqual(b, b.dict())
+
+    def test__equal__with_pointer(self) -> None:
+        d = {
+            "a": 1,
+        }
+        b = BaseDict(d)
+        o1 = {
+            "a": 1,
+        }
+        o2 = {
+            "a": 2,
+        }
+        self.assertTrue(b == o1)
+        self.assertFalse(b == o2)
+        self.assertEqual(b, b.dict())
+
+    def test__getitem__(self) -> None:
+        b = BaseDict()
+        with self.assertRaises(KeyError):
+            b["a"]
+        self.assertEqual(b, b.dict())
+
+    def test__not_equal__with_pointer(self) -> None:
+        data = {"a": 1}
+        wrapped = BaseDict(data)
+        for value in (2, 3):
+            data["a"] = value
+            for other in ({"a": value}, BaseDict({"a": value})):
+                with self.subTest(value=value, other_type=type(other)):
+                    self.assertTrue(wrapped == other)
+                    self.assertFalse(wrapped != other)
+                    self.assertFalse(other != wrapped)
+                    self.assertTrue(wrapped != {"a": 1})
+                    self.assertTrue({"a": 1} != wrapped)
+        data.clear()
+        self.assertFalse(wrapped != {})
+        self.assertTrue(wrapped != {"a": 1})
+
+    def test__not_equal__without_pointer(self) -> None:
+        wrapped: BaseDict[str, int] = BaseDict()
+        wrapped["a"] = 1
+        self.assertFalse(wrapped != {"a": 1})
+        self.assertTrue(wrapped != {"a": 2})
+        self.assertTrue(wrapped != None)  # noqa: E711
+
+    def test__not_equal__reflected_comparison(self) -> None:
+        class Other:
+            def __ne__(self, other: object) -> bool:
+                return False
+
+        for wrapped in (BaseDict(), BaseDict({"a": 1})):
+            with self.subTest(wrapped=wrapped):
+                self.assertFalse(wrapped != Other())
+                self.assertTrue(wrapped != 1)
+
+    def test__getitem__with_pointer(self) -> None:
+        d = {
+            "a": 1,
+        }
+        b = BaseDict(d)
+        self.assertEqual(b["a"], 1)
+        self.assertEqual(b, b.dict())
+
+    def test__ior__preserves_identity(self) -> None:
+        for use_pointer in (False, True):
+            for other in ({"a": 2, "b": 3}, [("a", 2), ("b", 3)]):
+                with self.subTest(use_pointer=use_pointer, other=other):
+                    source = {"a": 1}
+                    b = BaseDict(source) if use_pointer else BaseDict(a=1)
+                    original = b
+                    b |= other
+                    self.assertIs(b, original)
+                    self.assertEqual(b, {"a": 2, "b": 3})
+                    if use_pointer:
+                        self.assertEqual(source, {"a": 2, "b": 3})
+
+    def test__iter__(self) -> None:
+        b = BaseDict()
+        i = iter(b)
+        self.assertTrue(isinstance(i, Iterable))
+        self.assertEqual(b, b.dict())
+
+    def test__iter__with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+        }
+        b = BaseDict(d)
+        i = iter(b)
+        self.assertTrue(isinstance(i, Iterable))
+        self.assertEqual(b, b.dict())
+
+    def test__len__(self) -> None:
+        b = BaseDict()
+        self.assertEqual(len(b), 0)
+        b["a"] = 1
+        self.assertEqual(len(b), 1)
+        self.assertEqual(b, b.dict())
+
+    def test__reversed__with_pointer(self) -> None:
+        data = {"a": 1, "b": 2}
+        wrapped = BaseDict(data)
+        data["c"] = 3
+        self.assertEqual(list(reversed(wrapped)), ["c", "b", "a"])
+        del wrapped["a"]
+        wrapped["a"] = 4
+        self.assertEqual(list(reversed(wrapped)), ["a", "c", "b"])
+        wrapped.freeze()
+        self.assertEqual(list(reversed(wrapped)), ["a", "c", "b"])
+        data.clear()
+        self.assertEqual(list(reversed(wrapped)), [])
+
+    def test__reversed__without_pointer(self) -> None:
+        wrapped: BaseDict[str, int] = BaseDict()
+        self.assertEqual(list(reversed(wrapped)), [])
+        wrapped.update({"a": 1, "b": 2})
+        self.assertEqual(list(reversed(wrapped)), ["b", "a"])
+        wrapped.freeze()
+        self.assertEqual(list(reversed(wrapped)), ["b", "a"])
+
+    def test__reversed__iterator_mutation(self) -> None:
+        data = {"a": 1, "b": 2}
+        wrapped = BaseDict(data)
+        iterator = reversed(wrapped)
+        self.assertIs(iter(iterator), iterator)
+        self.assertEqual(next(iterator), "b")
+        data["a"] = 3
+        self.assertEqual(next(iterator), "a")
+        with self.assertRaises(StopIteration):
+            next(iterator)
+        iterator = reversed(wrapped)
+        data["c"] = 4
+        with self.assertRaises(RuntimeError):
+            next(iterator)
+
+    def test__reversed__other_mappings(self) -> None:
+        ordered = OrderedDict({"a": 1, "b": 2})
+        wrapped = BaseDict(ordered)
+        ordered.move_to_end("a")
+        self.assertEqual(list(reversed(wrapped)), ["a", "b"])
+        data = {"a": 1}
+        proxy = BaseDict(MappingProxyType(data))
+        data["b"] = 2
+        self.assertEqual(list(reversed(proxy)), ["b", "a"])
+        # Mappings without reverse iteration keep the existing dict fallback.
+        self.assertEqual(list(reversed(BaseDict(UserDict({"a": 1})))), ["a"])
+
+    def test__len__with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        self.assertEqual(len(b), 3)
+        self.assertEqual(len(d), 3)
+        b["d"] = 4
+        self.assertEqual(len(b), 4)
+        self.assertEqual(len(d), 4)
+        self.assertEqual(b, b.dict())
+
+    def test__repr__(self) -> None:
+        d: dict[str, Any] = {}
+        b = BaseDict()
+        self.assertEqual(repr(d), repr(b))
+        self.assertEqual(b, b.dict())
+
+    def test__repr__with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        self.assertEqual(repr(d), repr(b))
+        self.assertEqual(b, b.dict())
+
+    def test__setitem__(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        self.assertEqual(b["a"], 1)
+        self.assertEqual(b, b.dict())
+
+    def test__setitem__with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        b["a"] = 2
+        self.assertEqual(b["a"], 2)
+        self.assertEqual(d["a"], 2)
+        self.assertEqual(b, b.dict())
+
+    def test__str__(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(
+            {
+                "a": 1,
+                "b": 2,
+                "c": 3,
+            }
+        )
+        self.assertEqual(str(d), str(b))
+        self.assertEqual(b, b.dict())
+
+    def test__str__with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        self.assertEqual(str(d), str(b))
+        self.assertEqual(b, b.dict())
+
+    def test_clear(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict()
+        b["a"] = 1
+        b["b"] = 2
+        b["c"] = 3
+        self.assertTrue(b == d)
+        b.clear()
+        self.assertTrue(b == {})
+        self.assertTrue(d != {})
+
+    def test_clear_with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        b.clear()
+        self.assertTrue(b == {})
+        self.assertTrue(d == {})
+        self.assertTrue(b == d)
+        self.assertEqual(b, b.dict())
+
+    def test_copy(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        b["b"] = 2
+        b["c"] = 3
+        c = b.copy()
+        c["a"] = -1
+        c["b"] = -2
+        c["c"] = -3
+        self.assertFalse(b == c)
+        # self.assertTrue(type(b) == type(c))
+        self.assertEqual(b, b.dict())
+
+    def test_copy_with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        c = b.copy()
+        c["a"] = -1
+        c["b"] = -2
+        c["c"] = -3
+        self.assertTrue(b == d)
+        self.assertFalse(b == c)
+        # self.assertTrue(type(b) == type(c))
+        self.assertEqual(b, b.dict())
+
+    def test_dict(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        self.assertFalse(b is d)
+        self.assertTrue(b.dict() is d)
+        self.assertEqual(b, b.dict())
+
+    def test_dict_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": {
+                "d": 3,
+                "e": {
+                    "f": 4,
+                },
+            },
+        }
+        b = BaseDict(d)
+        b["a"] = -1
+        b["b"] = -2
+        b["c"]["d"] = -3
+        b["c"]["e"]["f"] = -4
+        self.assertEqual(d, b)
+        self.assertEqual(b, b.dict())
+
+    def test_get(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        self.assertEqual(b.get("a"), 1)
+        self.assertEqual(b.get("b"), None)
+        self.assertEqual(b.get("b", 2), 2)
+        self.assertEqual(b, b.dict())
+
+    def test_get_with_pointer(self) -> None:
+        d = {
+            "a": 1,
+        }
+        b = BaseDict(d)
+        self.assertEqual(b.get("a"), 1)
+        d["a"] = 2
+        self.assertEqual(b.get("a"), 2)
+        self.assertEqual(b.get("b"), None)
+        self.assertEqual(b.get("b", 2), 2)
+        self.assertEqual(b, b.dict())
+
+    def test_items(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        b["b"] = 2
+        b["c"] = 3
+        i = list(b.items())
+        i.sort()
+        self.assertTrue(i, [("a", 1), ("b", 2), ("c", 3)])
+        self.assertEqual(b, b.dict())
+
+    def test_items_with_pointer(self) -> None:
+        d = {"a": 1, "b": 2, "c": 3}
+        b = BaseDict(d)
+        i = list(b.items())
+        i.sort()
+        self.assertTrue(i, [("a", 1), ("b", 2), ("c", 3)])
+        self.assertEqual(b, b.dict())
+
+    def test_keys(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        b["b"] = 2
+        b["c"] = 3
+        k = list(b.keys())
+        k.sort()
+        self.assertTrue(k, ["a", "b", "c"])
+        self.assertEqual(b, b.dict())
+
+    def test_keys_with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        k = list(b.keys())
+        k.sort()
+        self.assertTrue(k, ["a", "b", "c"])
+        self.assertEqual(b, b.dict())
+
+    def test_pop(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        b["b"] = 2
+        b["c"] = 3
+        v = b.pop("c")
+        self.assertEqual(v, 3)
+        with self.assertRaises(KeyError):
+            v = b.pop("d")
+        v = b.pop("e", 5)
+        self.assertEqual(v, 5)
+        self.assertEqual(b, b.dict())
+
+    def test_pop_with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        v = b.pop("c")
+        self.assertEqual(v, 3)
+        with self.assertRaises(KeyError):
+            v = b.pop("d")
+        v = b.pop("e", 5)
+        self.assertEqual(v, 5)
+        self.assertEqual(
+            d,
+            {
+                "a": 1,
+                "b": 2,
+            },
+        )
+        self.assertTrue(b == d)
+        self.assertEqual(b, b.dict())
+
+    def test_setdefault(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        b["b"] = 2
+        b["c"] = 3
+        v = b.setdefault("c", 4)
+        self.assertEqual(v, 3)
+        v = b.setdefault("d", 4)
+        self.assertEqual(v, 4)
+        self.assertEqual(b, b.dict())
+
+    def test_setdefault_none(self) -> None:
+        for wrapped in (False, True):
+            for existing in (False, True):
+                for explicit in (False, True):
+                    with self.subTest(
+                        wrapped=wrapped, existing=existing, explicit=explicit
+                    ):
+                        data = {"a": 1} if existing else {}
+                        expected = data.copy()
+                        b = BaseDict(data) if wrapped else BaseDict(**data)
+                        if explicit:
+                            value = b.setdefault("a", None)
+                        else:
+                            value = b.setdefault("a")
+                        self.assertEqual(value, expected.setdefault("a"))
+                        self.assertEqual(b.dict(), expected)
+                        if wrapped:
+                            self.assertEqual(data, expected)
+
+    def test_setdefault_none_when_frozen(self) -> None:
+        b = BaseDict(a=1)
+        b.freeze()
+        for key in ("a", "missing"):
+            with self.subTest(key=key):
+                with self.assertRaises(TypeError):
+                    b.setdefault(key)
+        self.assertEqual(b.dict(), {"a": 1})
+
+    def test_setdefault_with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        v = b.setdefault("c", 4)
+        self.assertEqual(v, 3)
+        v = b.setdefault("d", 4)
+        self.assertEqual(v, 4)
+        self.assertEqual(
+            d,
+            {
+                "a": 1,
+                "b": 2,
+                "c": 3,
+                "d": 4,
+            },
+        )
+        d["d"] = 4
+        self.assertTrue(b == d)
+        self.assertEqual(b, b.dict())
+
+    def test_update(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        b["b"] = 2
+        b["c"] = 3
+        b.update(
+            {
+                "d": 4,
+                "e": 5,
+            }
+        )
+        self.assertEqual(b, {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5})
+        self.assertEqual(b, b.dict())
+
+    def test_update_with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        b.update(
+            {
+                "d": 4,
+                "e": 5,
+            }
+        )
+        self.assertEqual(
+            d,
+            {
+                "a": 1,
+                "b": 2,
+                "c": 3,
+                "d": 4,
+                "e": 5,
+            },
+        )
+        d["a"] = -1
+        self.assertTrue(b == d)
+        self.assertEqual(b, b.dict())
+
+    def test_values(self) -> None:
+        b = BaseDict()
+        b["a"] = 1
+        b["b"] = 2
+        b["c"] = 3
+        v = list(b.values())
+        v.sort()
+        self.assertTrue(v, [1, 2, 3])
+        self.assertEqual(b, b.dict())
+
+    def test_values_with_pointer(self) -> None:
+        d = {
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        }
+        b = BaseDict(d)
+        v = list(b.values())
+        v.sort()
+        self.assertTrue(v, [1, 2, 3])
+        self.assertEqual(b, b.dict())
+
+
+class base_dict_update_keywords_test_case(unittest.TestCase):
+    def test_update_with_no_arguments(self) -> None:
+        for value in (BaseDict(a=1), BaseDict({"a": 1})):
+            with self.subTest(wrapped=value._dict is not None):
+                self.assertIsNone(value.update())
+                self.assertEqual(value, {"a": 1})
+
+    def test_update_with_keywords_and_positional_source(self) -> None:
+        for value in (BaseDict(a=1), BaseDict({"a": 1})):
+            with self.subTest(wrapped=value._dict is not None):
+                value.update(b=2)
+                self.assertEqual(value, {"a": 1, "b": 2})
+                value.update({"a": 3}, a=4, c=5)
+                self.assertEqual(value, {"a": 4, "b": 2, "c": 5})
+
+    def test_update_keywords_unwrap_nested_base_dict(self) -> None:
+        source = {"a": 1}
+        nested = BaseDict(source)
+        for value in (BaseDict(), BaseDict({})):
+            with self.subTest(wrapped=value._dict is not None):
+                value.update(nested=nested)
+                self.assertIs(value["nested"], source)
+
+    def test_frozen_update_with_keywords_or_no_arguments(self) -> None:
+        for value in (BaseDict(a=1), BaseDict({"a": 1})):
+            value.freeze()
+            with self.subTest(wrapped=value._dict is not None):
+                with self.assertRaises(TypeError):
+                    value.update(a=2)
+                with self.assertRaises(TypeError):
+                    value.update()
+                self.assertEqual(value, {"a": 1})
+
+    def test_update_treats_reserved_keyword_names_as_keys(self) -> None:
+        for wrapped in (False, True):
+            for positional in (False, True):
+                for keyword in ("self", "other"):
+                    with self.subTest(
+                        wrapped=wrapped, positional=positional, keyword=keyword
+                    ):
+                        original = {"a": 1}
+                        value = BaseDict(original) if wrapped else BaseDict(a=1)
+                        args = ({"b": 2},) if positional else ()
+                        kwargs = {keyword: 3}
+                        expected = {"a": 1}
+                        expected.update(*args, **kwargs)
+                        self.assertIsNone(value.update(*args, **kwargs))
+                        self.assertEqual(value, expected)
