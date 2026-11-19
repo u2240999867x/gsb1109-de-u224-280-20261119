@@ -1268,6 +1268,68 @@ def test_zip(npartitions, hi=1000):
     assert list(pairs) == list(zip(range(0, hi, 2), range(1, hi, 2)))
 
 
+@pytest.mark.parametrize(
+    "left_parts, right_parts",
+    [(1, 7), (7, 1), (3, 10), (10, 3), (4, 4)],
+)
+def test_zip_uneven_partitions(left_parts, right_parts):
+    values = list(range(37))
+    others = [f"value-{i}" for i in values]
+    left = db.from_sequence(values, npartitions=left_parts)
+    right = db.from_sequence(others, npartitions=right_parts)
+
+    assert list(db.zip(left, right)) == list(zip(values, others))
+    assert list(db.zip(right, left)) == list(zip(others, values))
+
+
+def test_zip_empty_partitions():
+    values = db.from_sequence(list(range(6)), npartitions=1)
+    with_empty = Bag(
+        {
+            ("with-empty", 0): [0, 1],
+            ("with-empty", 1): [],
+            ("with-empty", 2): [2, 3],
+            ("with-empty", 3): [],
+            ("with-empty", 4): [4, 5],
+        },
+        "with-empty",
+        5,
+    )
+
+    expected = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
+    assert list(db.zip(with_empty, values)) == expected
+    assert list(db.zip(values, with_empty)) == expected
+
+    # Empty partitions should not introduce records of their own.
+    all_empty = Bag({("empty", 0): [], ("empty", 1): []}, "empty", 2)
+    other_empty = Bag({("empty2", 0): []}, "empty2", 1)
+    assert db.zip(all_empty, other_empty).compute() == []
+    assert db.zip(all_empty, other_empty).npartitions == 2
+
+
+def test_zip_mismatched_length_is_an_error():
+    left = db.from_sequence(range(10), npartitions=3)
+    right = db.from_sequence(range(9), npartitions=4)
+
+    msg = "Bag lengths are 10, 9; the bags match for the first 9"
+    with pytest.raises(ValueError, match=msg):
+        db.zip(left, right).compute()
+    with pytest.raises(ValueError, match="Bag lengths are 9, 10; the bags match"):
+        db.zip(right, left).compute()
+
+    # A single missing record must never produce a partial pair.
+    almost = db.from_sequence(range(9), npartitions=1)
+    with pytest.raises(ValueError, match=msg):
+        db.zip(db.from_sequence(range(10), npartitions=2), almost).compute()
+
+
+def test_zip_requires_bags():
+    with pytest.raises(ValueError, match="at least one bag"):
+        db.zip()
+    with pytest.raises(TypeError, match="must be dask bags"):
+        db.zip(db.from_sequence([1, 2]), [1, 2])
+
+
 @pytest.mark.parametrize("nin", [1, 2, 7, 11, 23])
 @pytest.mark.parametrize("nout", [1, 2, 5, 12, 23])
 def test_repartition_npartitions(nin, nout):

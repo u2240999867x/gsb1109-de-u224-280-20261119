@@ -1986,54 +1986,148 @@ def bag_range(n, npartitions):
     return Bag(dsk, name, npartitions)
 
 
+def _bag_zip_bounds(driver, lengths):
+    """Validate the bag lengths and return the global partition boundaries.
+
+    Every output partition consumes the result of this task, so a length
+    mismatch fails the computation before any partition can emit a partial
+    pair.
+    """
+    totals = [sum(bag_lengths) for bag_lengths in lengths]
+    if len(set(totals)) > 1:
+        matched = min(totals)
+        lengths_text = ", ".join(str(total) for total in totals)
+        raise ValueError(
+            "Cannot zip bags with different lengths. "
+            f"Bag lengths are {lengths_text}; the bags match for the first "
+            f"{matched} element(s) in global order. No partial result is "
+            "returned."
+        )
+
+    bounds = [0]
+    for length in lengths[driver]:
+        bounds.append(bounds[-1] + length)
+    return bounds
+
+
+def _bag_zip_partition(index, bounds, lengths, partitions):
+    """Pair the globally aligned slice of ``partitions`` for one output part.
+
+    ``lengths`` contains the partition lengths of every input bag and
+    ``partitions`` contains the corresponding (reified) partitions, both in
+    input order.  ``bounds`` holds the global start and stop positions of
+    every output partition.
+    """
+    start, stop = bounds[index], bounds[index + 1]
+    if start == stop:
+        return []
+
+    slices = []
+    for bag_partitions, bag_lengths in zip(partitions, lengths):
+        offset = 0
+        values = []
+        for partition, length in zip(bag_partitions, bag_lengths):
+            if offset >= stop:
+                break
+            lo = max(start - offset, 0)
+            hi = min(stop - offset, length)
+            if lo < hi:
+                # Prefer positional slicing for sequence-like partitions.
+                # Iterators (and other non-subscriptable objects) fall back
+                # to islice so that no elements are skipped.
+                try:
+                    chunk = partition[lo:hi]
+                except TypeError:
+                    chunk = itertools.islice(partition, lo, hi)
+                values.extend(chunk)
+            offset += length
+        slices.append(values)
+    return list(zip(*slices))
+
+
 def bag_zip(*bags):
-    """Partition-wise bag zip
+    """Zip bags in global order
 
-    All passed bags must have the same number of partitions.
+    The elements of every bag are paired by their position in the
+    concatenation of all partitions, regardless of how the bags are
+    partitioned.  Empty partitions therefore do not produce empty records,
+    and corresponding partitions do not need to have the same length.
 
-    NOTE: corresponding partitions should have the same length; if they do not,
-    the "extra" elements from the longer partition(s) will be dropped.  If you
-    have this case chances are that what you really need is a data alignment
-    mechanism like pandas's, and not a missing value filler like zip_longest.
+    All bags must contain the same number of elements.  The total lengths are
+    verified before any pairs are produced; if they differ, a ``ValueError``
+    reports how many elements matched and no partial result is returned.
 
     Examples
     --------
-
-    Correct usage:
+    Bags may be partitioned differently:
 
     >>> import dask.bag as db
     >>> evens = db.from_sequence(range(0, 10, 2), partition_size=4)
-    >>> odds = db.from_sequence(range(1, 10, 2), partition_size=4)
+    >>> odds = db.from_sequence(range(1, 10, 2), partition_size=6)
     >>> pairs = db.zip(evens, odds)
     >>> list(pairs)
     [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
 
-    Incorrect usage:
+    Bags of different sizes are rejected instead of returning only the pairs
+    that happen to line up:
 
     >>> numbers = db.range(31, npartitions=1)
     >>> fizz = numbers.filter(lambda n: n % 3 == 0)
     >>> buzz = numbers.filter(lambda n: n % 5 == 0)
-    >>> fizzbuzz = db.zip(fizz, buzz)
-    >>> list(fizzbuzz)
-    [(0, 0), (3, 5), (6, 10), (9, 15), (12, 20), (15, 25), (18, 30)]
-
-    When what you really wanted was more along the lines of the following:
-
-    >>> list(fizzbuzz) # doctest: +SKIP
-    (0, 0), (3, None), (None, 5), (6, None), (9, None), (None, 10),
-    (12, None), (15, 15), (18, None), (None, 20),
-    (21, None), (24, None), (None, 25), (27, None), (30, 30)
+    >>> db.zip(fizz, buzz).compute()  # doctest: +SKIP
+    ValueError: Cannot zip bags with different lengths. Bag lengths are 11,
+    7; the bags match for the first 7 element(s) in global order. No partial
+    result is returned.
     """
-    npartitions = bags[0].npartitions
-    assert all(bag.npartitions == npartitions for bag in bags)
-    # TODO: do more checks
+    if not bags:
+        raise ValueError("zip requires at least one bag")
+    if not all(isinstance(bag, Bag) for bag in bags):
+        raise TypeError("All arguments to zip must be dask bags")
 
     token = tokenize(*bags)
     name = f"zip-{token}"
-    dsk = {
-        (name, i): (reify, (zip,) + tuple((bag.name, i) for bag in bags))
-        for i in range(npartitions)
-    }
+
+    # Reify each partition so it can be measured and sliced without consuming
+    # iterator-based partitions more than once.
+    partitions = {}
+    lengths = {}
+    for b, bag in enumerate(bags):
+        for i in range(bag.npartitions):
+            partitions[(b, i)] = (name, "partition", b, i)
+        lengths[b] = (name, "lengths", b)
+
+    dsk = {}
+    for b, bag in enumerate(bags):
+        for i in range(bag.npartitions):
+            dsk[partitions[(b, i)]] = (reify, (bag.name, i))
+        dsk[lengths[b]] = (
+            tuple,
+            [(len, partitions[(b, i)]) for i in range(bag.npartitions)],
+        )
+
+    # Use the bag with the most partitions to define the output partition
+    # boundaries.  This preserves the partition count when the inputs are
+    # partitioned alike and keeps the output as parallel as the inputs.
+    driver = max(range(len(bags)), key=lambda b: bags[b].npartitions)
+    npartitions = bags[driver].npartitions
+    all_lengths = [lengths[b] for b in range(len(bags))]
+    all_partitions = [
+        [partitions[(b, i)] for i in range(bags[b].npartitions)]
+        for b in range(len(bags))
+    ]
+
+    bounds = (name, "bounds")
+    dsk[bounds] = (_bag_zip_bounds, driver, all_lengths)
+
+    for i in range(npartitions):
+        dsk[(name, i)] = (
+            _bag_zip_partition,
+            i,
+            bounds,
+            all_lengths,
+            all_partitions,
+        )
+
     graph = HighLevelGraph.from_collections(name, dsk, dependencies=bags)
     return Bag(graph, name, npartitions)
 
