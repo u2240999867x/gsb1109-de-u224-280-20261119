@@ -1,7 +1,7 @@
 import os
 import asyncio
 import inspect
-from typing import ClassVar, List, Sequence
+from typing import Any, ClassVar, Dict, List, Sequence
 import time
 
 import pytest
@@ -9,6 +9,7 @@ import pytest
 import dlt
 from dlt.common import sleep
 from dlt.common.typing import TDataItems
+from dlt.extract import DltSource
 from dlt.extract.exceptions import CreatePipeException, ResourceExtractionError, UnclosablePipe
 from dlt.extract.items import DataItemWithMeta
 from dlt.extract.items_transform import FilterItem, MapItem, YieldMapItem
@@ -556,6 +557,103 @@ def test_pipe_copy_on_fork() -> None:
     assert doc is elems[0].item
     # second fork copies
     assert elems[0].item is not elems[1].item
+
+
+def test_forked_transformer_branches_share_parent_items() -> None:
+    """An upstream feeding two named transformers is traversed once and its items are shared."""
+    parent_opens: List[int] = []
+    parent_yields: List[int] = []
+    mapper_calls: List[str] = []
+
+    @dlt.resource(name="upstream", selected=False)
+    def upstream():
+        parent_opens.append(1)
+        for item_id in (1, 2):
+            parent_yields.append(item_id)
+            yield {"id": item_id}
+
+    @dlt.transformer(data_from=upstream, name="left")
+    def left(item: Dict[str, Any]) -> TDataItems:
+        yield item
+
+    @dlt.transformer(data_from=upstream, name="right")
+    def right(item: Dict[str, Any]) -> TDataItems:
+        yield item
+
+    def left_map(item: Dict[str, Any]) -> Dict[str, Any]:
+        mapper_calls.append(f"left:{item['id']}")
+        item["mapped_by"] = "left"
+        item["left_value"] = item["id"] * 10
+        return item
+
+    def right_map(item: Dict[str, Any]) -> Dict[str, Any]:
+        mapper_calls.append(f"right:{item['id']}")
+        item["mapped_by"] = "right"
+        item["right_value"] = item["id"] * 100
+        return item
+
+    left.add_map(left_map)
+    right.add_map(right_map)
+
+    source = DltSource(dlt.Schema("forked"), "module", [left, right])
+    assert list(source.selected_resources) == ["left", "right"]
+    assert source.resources.selected_dag == [("upstream", "left"), ("upstream", "right")]
+    # two distinct downstream pipes hang off a single parent pipe instance
+    left_pipe = source.resources["left"]._pipe
+    right_pipe = source.resources["right"]._pipe
+    assert left_pipe is not right_pipe
+    assert left_pipe.parent is right_pipe.parent
+
+    items: Dict[str, List[Dict[str, Any]]] = {"left": [], "right": []}
+    # a snapshot of each row at the moment its branch yields it, before the other branch runs
+    at_yield: Dict[str, List[Dict[str, Any]]] = {"left": [], "right": []}
+    for pipe_item in PipeIterator.from_pipes(
+        source.resources.selected_pipes,
+        yield_parents=False,
+        copy_on_fork=False,
+        next_item_mode="fifo",
+    ):
+        items[pipe_item.pipe.name].append(pipe_item.item)
+        at_yield[pipe_item.pipe.name].append(dict(pipe_item.item))
+
+    # the parent generator is opened once and each of its two items is yielded once,
+    # although both downstreams consume them
+    assert parent_opens == [1]
+    assert parent_yields == [1, 2]
+
+    # both mappings run for every item; the fork order decides which branch goes first
+    assert sorted(mapper_calls) == ["left:1", "left:2", "right:1", "right:2"]
+    first_branch, second_branch = (call.split(":")[0] for call in mapper_calls[:2])
+    assert {first_branch, second_branch} == {"left", "right"}
+    expected_order = [f"{branch}:{i}" for i in (1, 2) for branch in (first_branch, second_branch)]
+    assert mapper_calls == expected_order
+
+    # each downstream collected its own two records
+    assert [item["id"] for item in items["left"]] == [1, 2]
+    assert [item["id"] for item in items["right"]] == [1, 2]
+    # the conversion of each branch is present on its rows with its own values
+    assert [item["left_value"] for item in items["left"]] == [10, 20]
+    assert [item["right_value"] for item in items["right"]] == [100, 200]
+
+    first_key, second_key = f"{first_branch}_value", f"{second_branch}_value"
+    # when the first branch yielded, the second branch had not converted the item yet
+    assert all(second_key not in item for item in at_yield[first_branch])
+    # afterwards both branches hold the same dict and both conversions are in effect on it,
+    # so the mapping of either branch polluted the rows collected by the other branch
+    assert all(left_row is right_row for left_row, right_row in zip(items["left"], items["right"]))
+    assert all(first_key in item and second_key in item for item in items["left"])
+    assert all(first_key in item and second_key in item for item in items["right"])
+
+    # both maps write `mapped_by`, the branch that runs last owns the shared field, and the
+    # rows already yielded by the first branch are rewritten with it
+    assert all(item["mapped_by"] == first_branch for item in at_yield[first_branch])
+    assert all(item["mapped_by"] == second_branch for item in items["left"])
+    assert all(item["mapped_by"] == second_branch for item in items["right"])
+    assert items[first_branch][0]["mapped_by"] == second_branch
+
+    # the rows of the first branch changed after they were yielded, the second branch's did not
+    assert at_yield[first_branch] != items[first_branch]
+    assert at_yield[second_branch] == items[second_branch]
 
 
 def test_pipe_pass_empty_list() -> None:
