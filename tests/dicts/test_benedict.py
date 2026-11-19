@@ -2509,3 +2509,58 @@ b:
         ]
         self.assertEqual(len(b.keys()), len(rv))
         self.assertTrue(all(value in rv for value in b.values()))
+
+    def test_remove_consecutive_list_keypaths(self) -> None:
+        d = {
+            "items": [
+                {"note": "a", "keep": 1},
+                {"note": "b", "keep": 2},
+                {"keep": 3},
+            ],
+        }
+        b = benedict(d)
+        b.remove(["items[0].note", "items[1].note"])
+        self.assertEqual(
+            b,
+            {
+                "items": [
+                    {"keep": 1},
+                    {"keep": 2},
+                    {"keep": 3},
+                ],
+            },
+        )
+
+    def test_remove_manifest_preview_then_apply(self) -> None:
+        d = {
+            "sources": [
+                {"notes": [{"temp": "x"}, {"keep": 1}]},
+                {"notes": [{"temp": "y"}]},
+            ],
+        }
+        b = benedict(d)
+        manifest = b.match_items("sources[*].notes[*].temp")
+        self.assertEqual(
+            manifest,
+            {
+                "sources[0].notes[0].temp": "x",
+                "sources[1].notes[0].temp": "y",
+            },
+        )
+        b.remove_manifest(manifest)
+        self.assertEqual(
+            b,
+            {
+                "sources": [
+                    {"notes": [{}, {"keep": 1}]},
+                    {"notes": [{}]},
+                ],
+            },
+        )
+
+    def test_remove_manifest_mismatch_stops_before_mutation(self) -> None:
+        d = {"items": [{"note": "a"}, {"note": "b"}]}
+        b = benedict(d)
+        with self.assertRaises(KeyError):
+            b.remove_manifest({"items[0].note": "a", "items[1].note": "stale"})
+        self.assertEqual(b, {"items": [{"note": "a"}, {"note": "b"}]})

@@ -2,6 +2,8 @@ import unittest
 from collections.abc import Iterator
 
 from benedict.core import remove as _remove
+from benedict.core import remove_keypaths as _remove_keypaths
+from benedict.core import remove_manifest as _remove_manifest
 
 
 class remove_test_case(unittest.TestCase):
@@ -210,3 +212,94 @@ class remove_test_case(unittest.TestCase):
         d = {"users": ([({"name": "Alice", "password": "abc"},)],)}
         _remove(d, "password", deep=True)
         self.assertEqual(d, {"users": ([({"name": "Alice"},)],)})
+
+
+class remove_batch_test_case(unittest.TestCase):
+    """
+    This class describes a batch keypath removal test case.
+    """
+
+    def test_remove_consecutive_list_items_uses_original_indexes(self) -> None:
+        d = {"items": [{"note": "a"}, {"note": "b"}, {"note": "c"}]}
+        _remove_keypaths(d, ["items[0].note", "items[1].note"])
+        self.assertEqual(d, {"items": [{}, {}, {"note": "c"}]})
+
+    def test_remove_consecutive_list_items_deletes_each_item(self) -> None:
+        d = {"items": ["a", "b", "c"]}
+        _remove_keypaths(d, ["items[0]", "items[1]"])
+        self.assertEqual(d, {"items": ["c"]})
+
+    def test_remove_list_items_at_multiple_levels(self) -> None:
+        d = {
+            "sources": [
+                {"notes": [{"temp": 1}, {"temp": 2}], "temp": 3},
+                {"notes": [{"temp": 4}, {"temp": 5}], "temp": 6},
+            ]
+        }
+        _remove_keypaths(
+            d,
+            [
+                "sources[0].notes[0].temp",
+                "sources[0].notes[1].temp",
+                "sources[1].notes[0].temp",
+                "sources[1].notes[1].temp",
+            ],
+        )
+        self.assertEqual(
+            d,
+            {
+                "sources": [
+                    {"notes": [{}, {}], "temp": 3},
+                    {"notes": [{}, {}], "temp": 6},
+                ]
+            },
+        )
+
+    def test_remove_negative_indexes(self) -> None:
+        d = {"items": [{"note": "a"}, {"note": "b"}]}
+        _remove_keypaths(d, ["items[-1].note", "items[-2].note"])
+        self.assertEqual(d, {"items": [{}, {}]})
+
+    def test_remove_strict_stops_before_touching_anything(self) -> None:
+        d = {"items": [{"note": "a"}], "keep": 1}
+        with self.assertRaises(KeyError):
+            _remove_keypaths(d, ["items[0].note", "missing.note"])
+        self.assertEqual(d, {"items": [{"note": "a"}], "keep": 1})
+
+    def test_remove_non_strict_keeps_removing_valid_items(self) -> None:
+        d = {"a": {"b": 1}, "c": 2}
+        _remove_keypaths(d, ["a.b", "missing"], strict=False)
+        self.assertEqual(d, {"a": {}, "c": 2})
+
+    def test_remove_manifest_removes_matching_items(self) -> None:
+        d = {"items": [{"note": "a"}, {"note": "b"}]}
+        _remove_manifest(d, {"items[0].note": "a", "items[1].note": "b"})
+        self.assertEqual(d, {"items": [{}, {}]})
+
+    def test_remove_manifest_mismatch_stops_whole_batch(self) -> None:
+        d = {"items": [{"note": "a"}, {"note": "b"}]}
+        with self.assertRaises(KeyError):
+            _remove_manifest(d, {"items[0].note": "a", "items[1].note": "wrong"})
+        self.assertEqual(d, {"items": [{"note": "a"}, {"note": "b"}]})
+
+    def test_remove_manifest_missing_item_stops_whole_batch(self) -> None:
+        d = {"items": [{"note": "a"}]}
+        with self.assertRaises(KeyError):
+            _remove_manifest(d, {"items[0].note": "a", "items[1].note": "b"})
+        self.assertEqual(d, {"items": [{"note": "a"}]})
+
+    def test_remove_manifest_removes_parent_with_children(self) -> None:
+        d = {"items": [{"note": "a"}, {"note": "b"}], "keep": 1}
+        _remove_manifest(d, {"items[0]": {"note": "a"}, "items[0].note": "a"})
+        self.assertEqual(d, {"items": [{"note": "b"}], "keep": 1})
+
+    def test_remove_tuple_item_raises(self) -> None:
+        d = {"items": ({"note": "a"}, {"note": "b"})}
+        with self.assertRaises(TypeError):
+            _remove_keypaths(d, ["items[0]"])
+        self.assertEqual(d, {"items": ({"note": "a"}, {"note": "b"})})
+
+    def test_remove_deep_ignores_strict(self) -> None:
+        d = {"password": "a", "user": {"password": "b"}}
+        _remove(d, "password", deep=True, strict=True)
+        self.assertEqual(d, {"user": {}})

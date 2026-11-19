@@ -31,10 +31,14 @@ from benedict.core import items_sorted_by_keys as _items_sorted_by_keys
 from benedict.core import items_sorted_by_values as _items_sorted_by_values
 from benedict.core import keypaths as _keypaths
 from benedict.core import match as _match
+from benedict.core import match_items as _match_items
+from benedict.core import match_keypaths as _match_keypaths
 from benedict.core import merge as _merge
 from benedict.core import move as _move
 from benedict.core import nest as _nest
 from benedict.core import remove as _remove
+from benedict.core import remove_keypaths as _remove_keypaths
+from benedict.core import remove_manifest as _remove_manifest
 from benedict.core import rename as _rename
 from benedict.core import search as _search
 from benedict.core import standardize as _standardize
@@ -253,15 +257,48 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
             self, separator=self._keypath_separator, indexes=indexes, sort=sort
         )
 
-    def match(self, pattern: str | re.Pattern[str], indexes: bool = True) -> list[Any]:
+    def match(
+        self,
+        pattern: str | re.Pattern[str],
+        indexes: bool = True,
+        keypaths: bool = False,
+    ) -> list[Any]:
         """
         Return a list of all values whose keypath
         matches the given pattern (a regex or string).
         If pattern is string, wildcard can be used
         (eg. [*] can be used to match all list indexes).
         If indexes is True, the pattern will be matched also against list values.
+        If keypaths is True, the matching keypaths are returned instead of values.
         """
-        return _match(self, pattern, separator=self._keypath_separator, indexes=indexes)
+        return _match(
+            self,
+            pattern,
+            separator=self._keypath_separator,
+            indexes=indexes,
+            keypaths=keypaths,
+        )
+
+    def match_items(
+        self, pattern: str | re.Pattern[str], indexes: bool = True
+    ) -> dict[str, Any]:
+        """
+        Return a preview dict of keypath/value items whose keypath
+        matches the given pattern.
+        """
+        return _match_items(
+            self, pattern, separator=self._keypath_separator, indexes=indexes
+        )
+
+    def match_keypaths(
+        self, pattern: str | re.Pattern[str], indexes: bool = True
+    ) -> list[str]:
+        """
+        Return the keypaths matching the given pattern.
+        """
+        return _match_keypaths(
+            self, pattern, separator=self._keypath_separator, indexes=indexes
+        )
 
     def merge(self, other: Mapping[str, _V], *args: Any, **kwargs: Any) -> None:
         """
@@ -301,14 +338,38 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         return cast("_V", self._cast(super().pop(key, *args)))
 
     def remove(
-        self, keys: _KPT | Iterable[_KPT], *args: Any, deep: bool = False
+        self,
+        keys: _KPT | Iterable[_KPT],
+        *args: Any,
+        deep: bool = False,
+        strict: bool = False,
     ) -> None:
         """
         Remove multiple keys from the current dict instance.
         It is possible to pass a single key or more keys (as list or *args).
+        All keypaths are resolved before removing anything, so list indexes
+        refer to the original data and consecutive items are all removed.
+        If strict is True, an invalid keypath raises and nothing is removed.
         If deep is True, the keys are removed at every nesting level.
         """
-        _remove(self, keys, *args, deep=deep)
+        _remove(self, keys, *args, deep=deep, strict=strict)
+
+    def remove_keypaths(self, keypaths: Iterable[_KPT]) -> None:
+        """
+        Remove all the given keypaths at once.
+        List indexes refer to the original data, so consecutive list items
+        are all removed; if any keypath is invalid, nothing is removed.
+        """
+        _remove_keypaths(self, keypaths, separator=self._keypath_separator)
+
+    def remove_manifest(self, manifest: Mapping[str, Any]) -> None:
+        """
+        Remove all the keypaths in the given manifest (keypath -> value).
+        The manifest is checked against the current data first;
+        if any item does not match, a KeypathMismatchError is raised
+        and nothing is removed.
+        """
+        _remove_manifest(self, manifest, separator=self._keypath_separator)
 
     def setdefault(self, key: _KPT, default: _V | None = None) -> _V:  # type: ignore[override]
         return cast("_V", self._cast(super().setdefault(key, default)))

@@ -108,3 +108,25 @@ class match_test_case(unittest.TestCase):
         data = benedict({"items": ({"value": 1}, {"value": 2})})
         self.assertEqual(data["items[0].value"], 1)
         self.assertEqual(data.match("items[*].value"), [1, 2])
+
+    def test_match_items_previews_keypaths_and_values(self) -> None:
+        data = benedict({"items": [{"note": "a"}, {"note": "b"}]})
+        items = data.match_items("items[*].note")
+        self.assertEqual(
+            items,
+            {"items[0].note": "a", "items[1].note": "b"},
+        )
+        self.assertEqual(
+            data.match_keypaths("items[*].note"),
+            ["items[0].note", "items[1].note"],
+        )
+        self.assertEqual(
+            data.match("items[*].note", keypaths=True),
+            ["items[0].note", "items[1].note"],
+        )
+
+    def test_match_items_snapshots_nested_values(self) -> None:
+        data = benedict({"items": [{"note": {"text": "a"}}]})
+        items = data.match_items("items[*]")
+        data["items"][0]["note"]["text"] = "changed"
+        self.assertEqual(items, {"items[0]": {"note": {"text": "a"}}})

@@ -317,10 +317,14 @@ Here are the details of the supported formats, operations and extra options docs
     -   [`items_sorted_by_values`](#items_sorted_by_values)
     -   [`keypaths`](#keypaths)
     -   [`match`](#match)
+    -   [`match_items`](#match_items)
+    -   [`match_keypaths`](#match_keypaths)
     -   [`merge`](#merge)
     -   [`move`](#move)
     -   [`nest`](#nest)
     -   [`remove`](#remove)
+    -   [`remove_keypaths`](#remove_keypaths)
+    -   [`remove_manifest`](#remove_manifest)
     -   [`rename`](#rename)
     -   [`search`](#search)
     -   [`standardize`](#standardize)
@@ -515,6 +519,25 @@ k = d.keypaths(indexes=False, sort=True)
 # all other characters are matched literally.
 # If indexes is True, the pattern will be matched also against list values.
 m = d.match(pattern, indexes=True)
+
+# Return the matching keypaths instead of the values.
+k = d.match(pattern, indexes=True, keypaths=True)
+```
+
+#### `match_items`
+
+```python
+# Return a preview dict of {keypath: current value} for all keypaths
+# matching the given pattern. Values are snapshots, so the preview can be
+# applied later with remove_manifest and stale data will be detected.
+items = d.match_items("sources[*].notes[*].temp")
+```
+
+#### `match_keypaths`
+
+```python
+# Return just the keypaths matching the given pattern.
+k = d.match_keypaths(pattern, indexes=True)
 ```
 
 #### `merge`
@@ -551,8 +574,34 @@ d.nest("values", id_key="id", parent_id_key="parent_id", children_key="children"
 # It is possible to pass a single key or more keys (as list or *args).
 d.remove(["firstname", "lastname", "email"])
 
+# All keypaths are resolved before anything is removed, so list indexes
+# refer to the original data: consecutive list items are all removed.
+d.remove(["items[0].note", "items[1].note"])
+
+# Use strict=True to raise and leave the dict untouched when a keypath is invalid.
+d.remove(["items[0].note", "items[5].note"], strict=True)
+
 # Use deep=True to remove the key(s) at every nesting level.
 d.remove("password", deep=True)
+```
+
+#### `remove_keypaths`
+
+```python
+# Remove all the given keypaths at once, resolving list indexes against
+# the original data. Invalid keypaths raise and nothing is removed.
+d.remove_keypaths(["sources[0].notes[0].temp", "sources[1].notes[1].temp"])
+```
+
+#### `remove_manifest`
+
+```python
+# Preview first, then apply the same manifest in one atomic step.
+manifest = d.match_items("sources[*].notes[*].temp")
+d.remove_manifest(manifest)
+
+# Every keypath and value is checked before mutating; if the data changed
+# since the preview, a KeypathMismatchError is raised and nothing is removed.
 ```
 
 #### `rename`

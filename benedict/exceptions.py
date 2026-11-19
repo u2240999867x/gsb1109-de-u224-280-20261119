@@ -6,3 +6,9 @@ class ExtrasRequireModuleNotFoundError(ModuleNotFoundError):
             f"'python -m pip install \"python-benedict[{target}]\"'"
         )
         super().__init__(message)
+
+
+class KeypathMismatchError(KeyError, ValueError):
+    """
+    Raised when a batch keypath removal manifest no longer matches the data.
+    """

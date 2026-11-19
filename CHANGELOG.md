@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+-   Add `match_items` / `match_keypaths` (and `match(..., keypaths=True)`) to preview the keypaths and values a pattern will affect.
+-   Add `remove_keypaths` / `remove_manifest` (and `remove(..., strict=True)`) to apply a batch of keypaths atomically; list indexes are resolved against the original data, so consecutive list items are all removed, and a stale or incomplete manifest raises without changing anything.
+
 ## [0.40.1](https://github.com/fabiocaccamo/python-benedict/releases/tag/0.40.1) - 2026-10-20
 -   Fix `items` and `values` returning generators instead of views (no `len`, single iteration), eg. with `toml-rs`. #636 (by [@Gabrieljr42](https://github.com/Gabrieljr42) in #637)
 -   Honor freezing when deleting or popping a keypath and when merging into a frozen `benedict` instance. (by [@helo060228](https://github.com/helo060228) in #635)
