@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import operator
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -320,29 +319,45 @@ def get_interval_overlaps_nd(
     start_columns: list[str],
     end_columns: list[str],
     end_included: bool,
-) -> tuple[selectable.CompoundSelect, selectable.Select]:
+) -> tuple[selectable.Select, selectable.Select]:
     r"""Create selectables for interval overlaps in n dimensions.
 
     We define the presence of 'overlap' as presence of a non-empty intersection
     between two intervals.
 
-    Given that we care about a single dimension and have two intervals :math:`t1` and :math:`t2`,
-    we define an overlap follows:
+    Given that we care about a single dimension and have two intervals :math:`t_1` and :math:`t_2`,
+    with :math:`t_1` being the interval starting no later than :math:`t_2`, we define an overlap as
+    follows:
 
      .. math::
-        \\begin{align} \\text{overlap}(t_1, t_2) \\Leftrightarrow
-            &(min(t_1) \\leq min(t_2) \\land max(t_1) \\geq min(t_2)) \\\\
-            &\\lor \\\\
-            &(min(t_2) \\leq min(t_1) \\land max(t_2) \\geq min(t_1))
-        \\end{align}
+        \text{overlap}(t_1, t_2) \Leftrightarrow
+            min(t_1) \leq min(t_2) \land max(t_1) \geq min(t_2)
 
-    We can drop the second clause of the above disjunction if we define :math:`t_1` to be the 'leftmost'
-    interval. We do so when building our query.
+    The second inequality is strict (``>``) if ``end_included=False``. Note that
+    an ``end_column`` is allowed to be ``NULL``: a ``NULL`` end denotes an
+    open-ended interval, i.e. one that never ends and therefore always satisfies
+    the upper-bound inequality. All comparisons involving an end column are
+    consequently ``NULL``-safe.
 
-    Note that the above equations are representative of ``end_included=True`` and the second clause
-    of the conjunction would use a strict inequality if ``end_included=False``.
+    Two intervals that merely share a boundary (e.g. ``[1, 10]`` and ``[10, 15]``)
+    are distinguished from intervals that are simultaneously valid on at least one
+    point:
 
-    We define an overlap in several dimensions as the conjunction of overlaps in every single dimension.
+    - if ``end_included=True``, a shared boundary is itself a valid point and the
+      pair is reported as a ``boundary_only`` overlap,
+    - if ``end_included=False``, the shared boundary does not count and the pair
+      does not violate the constraint.
+
+    In several dimensions, an overlap requires the conjunction of overlaps in
+    every single dimension while the pair is boundary-only only if it is
+    boundary-only in every single dimension.
+
+    The sample selection reports the first intersecting pair, ordered
+    deterministically by the start of its intersection together with the values
+    of the involved intervals, as well as the range of the intersection per
+    dimension. Exactly duplicated rows, including duplicates of open-ended
+    intervals, are represented as a pair of two identical intervals whose
+    intersection is the interval itself.
     """
     if is_snowflake(engine):
         if key_columns:
@@ -366,97 +381,170 @@ def get_interval_overlaps_nd(
     )
     table_key_columns = get_table_columns(table1, key_columns) if key_columns else []
 
-    end_operator = operator.ge if end_included else operator.gt
+    # t1 is defined as the interval starting no later than t2 in every dimension.
+    ordering_conditions = [
+        table1.c[start_columns[dimension]]
+        <= table2.c[start_columns[dimension]]
+        for dimension in range(dimensionality)
+    ]
+
+    overlap_conditions: list[sa.ColumnElement[bool]] = []
+    boundary_only_conditions: list[sa.ColumnElement[bool]] = []
+    overlap_start_labels: list[str] = []
+    interval1_columns: list[sa.ColumnElement] = []
+    interval2_columns: list[sa.ColumnElement] = []
+    overlap_range_columns: list[sa.ColumnElement] = []
+    for dimension in range(dimensionality):
+        start_column = start_columns[dimension]
+        end_column = end_columns[dimension]
+        t1_start = table1.c[start_column]
+        t1_end = table1.c[end_column]
+        t2_start = table2.c[start_column]
+        t2_end = table2.c[end_column]
+
+        interval1_columns.extend(
+            [
+                t1_start.label(f"{start_column}_1"),
+                t1_end.label(f"{end_column}_1"),
+            ]
+        )
+        interval2_columns.extend(
+            [
+                t2_start.label(f"{start_column}_2"),
+                t2_end.label(f"{end_column}_2"),
+            ]
+        )
+
+        # As t1 starts no later than t2, the intersection starts at t2.start.
+        overlap_start_label = f"overlap_start_{dimension}"
+        overlap_end_label = f"overlap_end_{dimension}"
+        overlap_start_labels.append(overlap_start_label)
+        # The intersection ends at the smaller upper bound. A NULL upper bound
+        # denotes an open-ended interval and is simply ignored; if both upper
+        # bounds are NULL, the intersection is open-ended as well.
+        overlap_end = sa.case(
+            (t1_end.is_(None), t2_end),
+            (t2_end.is_(None), t1_end),
+            else_=sa.case((t1_end < t2_end, t1_end), else_=t2_end),
+        )
+        overlap_range_columns.extend(
+            [
+                t2_start.label(overlap_start_label),
+                overlap_end.label(overlap_end_label),
+            ]
+        )
+
+        # t1 must still be valid at the start of t2. A NULL end means the
+        # interval never ends, so the upper-bound check is vacuously satisfied.
+        end_comparison = (
+            t1_end >= t2_start if end_included else t1_end > t2_start
+        )
+        overlap_conditions.append(sa.or_(t1_end.is_(None), end_comparison))
+        # A pair merely touching at t1.end == t2.start has no common interior.
+        boundary_only_conditions.append(
+            sa.and_(t1_end.is_not(None), t1_end == t2_start)
+        )
 
     # We have a violation in two scenarios:
     # 1. At least two entries are exactly equal in key and interval columns
-    # 2. Two entries are not exactly equal in key and interval_columns and fuilfill violation_condition
+    # 2. Two entries are not exactly equal and fulfill the overlap condition
 
-    # Scenario 1
+    # Scenario 1: exact duplicates. GROUP BY treats NULL values as equal, so
+    # duplicates of open-ended intervals are detected as well.
     duplicate_selection = duplicates(table1)
     duplicate_subquery = duplicate_selection.subquery()
 
-    # scenario 2
-    naive_violation_condition = sa.and_(
+    # Scenario 2: distinct intervals with a non-empty intersection.
+    overlap_condition = sa.and_(
+        *key_conditions, *ordering_conditions, *overlap_conditions
+    )
+    # A pair that merely touches in every dimension has no common interior. It
+    # only violates the constraint when the shared boundary counts as a valid
+    # point, i.e. when end_included=True.
+    boundary_only_in_all_dimensions = sa.and_(*boundary_only_conditions)
+    if end_included:
+        violation_condition = overlap_condition
+    else:
+        violation_condition = sa.and_(
+            overlap_condition,
+            sa.not_(boundary_only_in_all_dimensions),
+        )
+
+    # Exclude exact duplicates (scenario 1) from the self-join. IS DISTINCT FROM
+    # is NULL-safe, which matters for open-ended intervals.
+    interval_inequality_condition = sa.or_(
         *[
-            sa.and_(
-                table1.c[start_columns[dimension]]
-                <= table2.c[start_columns[dimension]],
-                end_operator(
-                    table1.c[end_columns[dimension]], table2.c[start_columns[dimension]]
+            sa.or_(
+                table1.c[start_columns[dimension]].is_distinct_from(
+                    table2.c[start_columns[dimension]]
+                ),
+                table1.c[end_columns[dimension]].is_distinct_from(
+                    table2.c[end_columns[dimension]]
                 ),
             )
             for dimension in range(dimensionality)
         ]
     )
-
-    interval_inequality_condition = sa.or_(
-        *[
-            sa.or_(
-                table1.c[start_columns[dimension]]
-                != table2.c[start_columns[dimension]],
-                table2.c[end_columns[dimension]] != table2.c[end_columns[dimension]],
-            )
-            for dimension in range(dimensionality)
-        ]
+    distinct_join_condition = sa.and_(
+        violation_condition, interval_inequality_condition
     )
 
-    distinct_violation_condition = sa.and_(
-        naive_violation_condition,
-        interval_inequality_condition,
-    )
-
-    distinct_join_condition = sa.and_(*key_conditions, distinct_violation_condition)
+    is_actual_overlap_label = "is_actual_overlap"
     distinct_violation_selection = sa.select(
         *table_key_columns,
-        *[
-            table.c[start_column]
-            for table in [table1, table2]
-            for start_column in start_columns
-        ],
-        *[
-            table.c[end_column]
-            for table in [table1, table2]
-            for end_column in end_columns
-        ],
+        *interval1_columns,
+        *interval2_columns,
+        *overlap_range_columns,
+        # 1: both intervals are simultaneously valid on at least one point;
+        # 0: the intervals merely share a boundary without any common interior.
+        sa.case(
+            (boundary_only_in_all_dimensions, 0), else_=1
+        ).label(is_actual_overlap_label),
     ).select_from(table1.join(table2, distinct_join_condition))
-    distinct_violation_subquery = distinct_violation_selection.subquery()
 
-    # Note, Kevin, 21/12/09
-    # The following approach would likely be preferable to the approach used
-    # subsequently. Sadly, it seems to not work for mssql. As of now, it is
-    # unclear to me why.
-
-    # distincter = (
-    #     sa.func.distinct(sa.tuple_(*get_table_columns(violation_subquery, key_columns)))
-    #     if key_columns
-    #     else sa.func.distinct("*")
-    # )
-
-    # n_violations_selection = sa.select([sa.func.count(distincter)]).select_from(
-    #     violation_subquery
-    # )
-
-    # Merge scenarios 1 and 2.
-    # We need to 'impute' the missing columns for the duplicate selection in order for the union between
-    # both selections to work.
-    duplicate_selection = sa.select(
-        *(
-            # Already existing columns
+    # Scenario 1 produces exactly duplicated rows. Normalize them into the same
+    # pair-shaped output as scenario 2: a duplicate is reported as a pair of two
+    # identical intervals whose intersection is the interval itself. This keeps
+    # the UNION typed and well-defined both with and without key columns and
+    # avoids imputing NULL columns.
+    duplicate_key_columns = (
+        get_table_columns(duplicate_subquery, key_columns) if key_columns else []
+    )
+    duplicate_interval1_columns: list[sa.ColumnElement] = []
+    duplicate_interval2_columns: list[sa.ColumnElement] = []
+    duplicate_overlap_columns: list[sa.ColumnElement] = []
+    for dimension in range(dimensionality):
+        start_column = start_columns[dimension]
+        end_column = end_columns[dimension]
+        start_value = duplicate_subquery.c[start_column]
+        end_value = duplicate_subquery.c[end_column]
+        duplicate_interval1_columns.extend(
             [
-                duplicate_subquery.c[column]
-                for column in distinct_violation_subquery.columns.keys()
-                if column in duplicate_subquery.columns.keys()
-            ]
-            # Fill all missing columns with NULLs.
-            + [
-                sa.null().label(column)
-                for column in distinct_violation_subquery.columns.keys()
-                if column not in duplicate_subquery.columns.keys()
+                start_value.label(f"{start_column}_1"),
+                end_value.label(f"{end_column}_1"),
             ]
         )
+        duplicate_interval2_columns.extend(
+            [
+                start_value.label(f"{start_column}_2"),
+                end_value.label(f"{end_column}_2"),
+            ]
+        )
+        duplicate_overlap_columns.extend(
+            [
+                start_value.label(f"overlap_start_{dimension}"),
+                end_value.label(f"overlap_end_{dimension}"),
+            ]
+        )
+    duplicate_pair_selection = sa.select(
+        *duplicate_key_columns,
+        *duplicate_interval1_columns,
+        *duplicate_interval2_columns,
+        *duplicate_overlap_columns,
+        # Two identical intervals are simultaneously valid on every point.
+        sa.literal(1).label(is_actual_overlap_label),
     )
-    violation_selection = duplicate_selection.union(distinct_violation_selection)
+    violation_selection = duplicate_pair_selection.union(distinct_violation_selection)
 
     violation_subquery = violation_selection.subquery()
 
@@ -465,11 +553,31 @@ def get_interval_overlaps_nd(
         if key_columns
         else violation_subquery.columns
     )
-    violation_subquery = sa.select(*keys).group_by(*keys).subquery()
+    grouped_violation_subquery = (
+        sa.select(*keys).group_by(*keys).subquery()
+    )
+    n_violations_selection = sa.select(sa.func.count()).select_from(
+        grouped_violation_subquery
+    )
 
-    n_violations_selection = sa.select(sa.func.count()).select_from(violation_subquery)
+    # Report the first intersecting pair, ordered deterministically by the start
+    # of its intersection and the values of the involved intervals.
+    sample_selection = (
+        sa.select(violation_subquery)
+        .order_by(
+            *[violation_subquery.c[label] for label in overlap_start_labels],
+            *[
+                violation_subquery.c[column]
+                for column in [
+                    f"{start_column}_1" for start_column in start_columns
+                ]
+            ],
+            *[violation_subquery.c[f"{end_column}_1"] for end_column in end_columns],
+        )
+        .limit(1)
+    )
 
-    return violation_selection, n_violations_selection
+    return sample_selection, n_violations_selection
 
 
 def _not_in_interval_condition(

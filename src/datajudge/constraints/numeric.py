@@ -7,7 +7,12 @@ import sqlalchemy as sa
 from .. import db_access
 from ..db_access import DataReference
 from .base import Constraint, TestResult, _OptionalSelections
-from .interval import NoGapConstraint, NoOverlapConstraint, _Selects
+from .interval import (
+    NoGapConstraint,
+    NoOverlapConstraint,
+    _Selects,
+    _format_overlap_sample,
+)
 
 
 class NumericMin(Constraint):
@@ -303,11 +308,17 @@ class NumericNoOverlap(NoOverlapConstraint):
         if n_distinct_key_values == 0:
             return True, "No key values found."
         violation_fraction = n_violation_keys / n_distinct_key_values
+        sample_string = _format_overlap_sample(
+            self.sample,
+            self._key_columns,
+            self._start_columns,
+            self._end_columns,
+        )
         assertion_text = (
             f"{self._ref} has a ratio of {violation_fraction} > "
             f"{self._max_relative_n_violations} keys in columns {self._key_columns} "
             f"with overlapping ranges in {self._start_columns[0]} and {self._end_columns[0]}."
-            f"E.g. for: {self.sample}."
+            f"First intersecting pair: {sample_string}."
         )
         result = violation_fraction <= self._max_relative_n_violations
         return result, assertion_text

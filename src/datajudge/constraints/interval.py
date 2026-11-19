@@ -13,6 +13,54 @@ from .base import Constraint, _OptionalSelections, _Select
 _Selects: TypeAlias = tuple[_Select, _Select]
 
 
+def _format_overlap_sample(
+    sample: sa.Row | None,
+    key_columns: list[str] | None,
+    start_columns: list[str],
+    end_columns: list[str],
+) -> str:
+    """Render the first intersecting pair reported by the overlap query.
+
+    The sample describes two intersecting intervals together with their
+    intersection per dimension. Exactly duplicated rows are represented as a
+    pair of two identical intervals intersecting on the whole interval.
+
+    Column lookups are case-insensitive because some dialects (e.g. Snowflake)
+    return result keys in a different case than the originating column names.
+    """
+    if sample is None:
+        return "no sample available"
+    values = {str(key).lower(): value for key, value in sample._mapping.items()}
+
+    def get(column_name: str):
+        return values[column_name.lower()]
+
+    parts = []
+    if key_columns:
+        key = ", ".join(f"{column} = {get(column)}" for column in key_columns)
+        parts.append(f"key ({key})")
+    for dimension, (start_column, end_column) in enumerate(
+        zip(start_columns, end_columns)
+    ):
+        interval1 = f"[{get(f'{start_column}_1')}, {get(f'{end_column}_1')}]"
+        interval2 = f"[{get(f'{start_column}_2')}, {get(f'{end_column}_2')}]"
+        intersection = (
+            f"[{get(f'overlap_start_{dimension}')}, "
+            f"{get(f'overlap_end_{dimension}')}]"
+        )
+        parts.append(
+            f"dimension {dimension} intervals {interval1} and {interval2} "
+            f"intersect on {intersection}"
+        )
+    kind = (
+        "boundary-only overlap"
+        if values["is_actual_overlap"] == 0
+        else "actual overlap on at least one common point"
+    )
+    parts.append(kind)
+    return "; ".join(parts)
+
+
 class IntervalConstraint(Constraint):
     _DIMENSIONS = 0
 

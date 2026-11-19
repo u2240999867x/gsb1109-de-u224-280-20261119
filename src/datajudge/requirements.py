@@ -789,13 +789,18 @@ class WithinRequirement(Requirement):
         ``end_column``.
 
         For a given row in this [`DataSource`][datajudge.DataSource], ``start_column`` and ``end_column`` indicate a
-        date range. Neither of those columns should contain NULL values. Also, it
+        date range. The ``start_column`` should not contain NULL values and it
         should hold that for a given row, the value of ``end_column`` is strictly greater
-        than the value of ``start_column``.
+        than the value of ``start_column`` whenever it is present. The ``end_column``
+        is allowed to be NULL, however: a NULL end denotes an open-ended range that
+        never ends and therefore takes part in overlap comparisons like any other
+        range.
 
         Note that the value of ``start_column`` is expected to be included in each date
         range. By default, the value of ``end_column`` is expected to be included as well -
-        this can however be changed by setting ``end_included`` to ``False``.
+        this can however be changed by setting ``end_included`` to ``False``. Two ranges
+        that merely share a boundary point are distinguished from ranges that are
+        simultaneously valid on that point.
 
         A 'key' is a fixed set of values in ``key_columns`` and represents an entity of
         interest. A priori, a key is not a primary key, i.e., a key can have and often
@@ -856,13 +861,17 @@ class WithinRequirement(Requirement):
         might indicate the timespan when this forceast was used, e.g. from the
         previous Monday to Wednesday.
 
-        Neither of those columns should contain ``NULL`` values. Also, the value of ``end_column_k``
-        should be strictly greater than the value of ``start_column_k``.
+        The start columns should not contain ``NULL`` values. Each end column is
+        allowed to contain ``NULL``: a NULL end denotes an open-ended range that
+        never ends and takes part in overlap comparisons like any other range.
+        Whenever an end value is present, the value of ``end_column_k`` should be
+        strictly greater than the value of ``start_column_k``.
 
         Note that the values of ``start_column1`` and ``start_column2`` are expected to be
         included in each date range. By default, the values of ``end_column1`` and
         ``end_column2`` are expected to be included as well - this can however be changed
-        by setting ``end_included`` to ``False``.
+        by setting ``end_included`` to ``False``. Two ranges that merely share a boundary
+        point are distinguished from ranges that are simultaneously valid on that point.
 
         A 'key' is a fixed set of values in key_columns and represents an entity of
         interest. A priori, a key is not a primary key, i.e., a key can have and often has
@@ -1067,13 +1076,17 @@ class WithinRequirement(Requirement):
         ``end_column``.
 
         For a given row in this ``DataSource``, ``start_column`` and ``end_column`` indicate a
-        numeric interval. Neither of those columns should contain NULL values. Also, it
+        numeric interval. The ``start_column`` should not contain NULL values and it
         should hold that for a given row, the value of ``end_column`` is strictly greater
-        than the value of ``start_column``.
+        than the value of ``start_column`` whenever it is present. The ``end_column`` is
+        allowed to be NULL, however: a NULL end denotes an open-ended interval that
+        never ends and takes part in overlap comparisons like any other interval.
 
         Note that the value of ``start_column`` is expected to be included in each interval.
         By default, the value of ``end_column`` is expected to be included as well -
-        this can however be changed by setting ``end_included`` to ``False``.
+        this can however be changed by setting ``end_included`` to ``False``. Two intervals
+        that merely share a boundary point are distinguished from intervals that are
+        simultaneously valid on that point.
 
         A 'key' is a fixed set of values in ``key_columns`` and represents an entity of
         interest. A priori, a key is not a primary key, i.e., a key can have and often

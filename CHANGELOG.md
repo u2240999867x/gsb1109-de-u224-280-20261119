@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- The no-overlap constraints (`add_date_no_overlap_constraint`,
+  `add_date_no_overlap_2d_constraint` and `add_numeric_no_overlap_constraint`)
+  now accept `NULL` values in end columns. A `NULL` end denotes an open-ended
+  interval that never ends and participates in overlap comparisons like any
+  other interval.
+- The failure sample now reports the first actually intersecting pair of rows
+  together with the range of their intersection. Pairs that merely share a
+  boundary are distinguished from pairs that are simultaneously valid on at
+  least one point, honoring the `end_included` configuration.
+- Fix a bug in the overlap detection where the self-join inequality compared
+  an end column to itself instead of to the corresponding column of the joined
+  row.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.
