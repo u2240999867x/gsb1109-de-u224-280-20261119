@@ -3,7 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dask.dataframe.dask_expr import Repartition, from_pandas, repartition
+from dask import delayed
+from dask.dataframe.dask_expr import (
+    Repartition,
+    from_delayed,
+    from_pandas,
+    repartition,
+)
 from dask.dataframe.dask_expr.tests._util import _backend_library, assert_eq
 
 pd = _backend_library()
@@ -91,6 +97,107 @@ def test_repartition_freq_errors():
     df = from_pandas(pdf, npartitions=1)
     with pytest.raises(TypeError, match="for timeseries"):
         df.repartition(freq="1s")
+
+
+def test_repartition_boundary_duplicates_not_lost():
+    # Duplicates that land on an output boundary must not be dropped, even when
+    # they physically live in the input partition that ends at that boundary.
+    left = pd.DataFrame(
+        {"x": [0, 1, 2, 3]},
+        index=pd.to_datetime(
+            [
+                "2020-01-01 00:10",
+                "2020-01-01 00:50",
+                "2020-01-01 01:00",
+                "2020-01-01 01:00",
+            ]
+        ),
+    )
+    right = pd.DataFrame(
+        {"x": [4, 5]},
+        index=pd.to_datetime(["2020-01-01 01:20", "2020-01-01 02:00"]),
+    )
+    pdf = pd.concat([left, right])
+    ddf = from_delayed(
+        [delayed(left), delayed(right)],
+        meta=pdf,
+        divisions=(
+            pd.Timestamp("2020-01-01 00:10"),
+            pd.Timestamp("2020-01-01 01:00"),
+            pd.Timestamp("2020-01-01 02:00"),
+        ),
+    )
+    divided = ddf.repartition(freq="1h")
+    # The hour-long periods are [00:10, 01:00], [01:00, 02:00] and [02:00, 02:00]
+    assert divided.divisions[:3] == (
+        pd.Timestamp("2020-01-01 00:10"),
+        pd.Timestamp("2020-01-01 01:00"),
+        pd.Timestamp("2020-01-01 02:00"),
+    )
+    assert_eq(divided, pdf)
+
+    boundary = divided.partitions[1].compute()
+    expected_boundary = pdf.loc["2020-01-01 01:00":"2020-01-01 01:00"]
+    assert boundary.index[: len(expected_boundary)].equals(expected_boundary.index)
+    assert boundary.x[: len(expected_boundary)].tolist() == expected_boundary.x.tolist()
+
+
+def test_repartition_boundary_duplicates_across_source_partitions():
+    # Source partitions may share their boundary label: partition 0 holds rows
+    # at 01:00 and partition 1 starts at 01:00 as well. Those rows must be
+    # routed to the 01:00 output partition once, in original order.
+    left = pd.DataFrame(
+        {"x": [0, 1, 2, 3]},
+        index=pd.to_datetime(
+            [
+                "2020-01-01 00:10",
+                "2020-01-01 00:50",
+                "2020-01-01 01:00",
+                "2020-01-01 01:00",
+            ]
+        ),
+    )
+    right = pd.DataFrame(
+        {"x": [4, 5, 6, 7]},
+        index=pd.to_datetime(
+            [
+                "2020-01-01 01:00",
+                "2020-01-01 01:00",
+                "2020-01-01 01:20",
+                "2020-01-01 02:00",
+            ]
+        ),
+    )
+    pdf = pd.concat([left, right])
+    ddf = from_delayed(
+        [delayed(left), delayed(right)],
+        meta=pdf,
+        divisions=(
+            pd.Timestamp("2020-01-01 00:10"),
+            pd.Timestamp("2020-01-01 01:00"),
+            pd.Timestamp("2020-01-01 02:00"),
+        ),
+    )
+    result = ddf.repartition(
+        divisions=[
+            pd.Timestamp("2020-01-01 00:10"),
+            pd.Timestamp("2020-01-01 00:45"),
+            pd.Timestamp("2020-01-01 01:00"),
+            pd.Timestamp("2020-01-01 01:30"),
+            pd.Timestamp("2020-01-01 02:00"),
+        ],
+        force=True,
+    )
+    assert result.npartitions == 4
+    assert_eq(result, pdf)
+
+    boundary = result.partitions[1].compute()
+    assert (boundary.index != pd.Timestamp("2020-01-01 01:00")).all()
+
+    boundary = result.partitions[2].compute()
+    expected_boundary = pdf.loc["2020-01-01 01:00":"2020-01-01 01:00"]
+    assert boundary.index[: len(expected_boundary)].equals(expected_boundary.index)
+    assert boundary.x[: len(expected_boundary)].tolist() == expected_boundary.x.tolist()
 
 
 def test_repartition_npartitions_numeric_edge_case():

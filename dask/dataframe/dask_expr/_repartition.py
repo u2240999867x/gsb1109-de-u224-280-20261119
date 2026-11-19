@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import bisect
 import functools
 from collections.abc import Callable
 from operator import getitem
-from pprint import pformat
 from typing import Any
 
 import numpy as np
@@ -252,7 +252,6 @@ class RepartitionDivisions(Repartition):
         return self.new_divisions
 
     def _layer(self):
-        # Simplify copy from dask.dataframe
         token = self._name.split("-")[-1]
         a = self.frame.divisions
         b = self.new_divisions
@@ -286,90 +285,47 @@ class RepartitionDivisions(Repartition):
                 msg = "right side of old and new divisions are different"
                 raise ValueError(msg)
 
-        def _is_single_last_div(x):
-            """Whether last division only contains single label"""
-            return len(x) >= 2 and x[-1] == x[-2]
-
-        c = [a[0]]
         d = dict()
-        low = a[0]
+        k = 0  # index for temp splits
+        nout = len(b) - 1
+        last_out = nout - 1
+        splits = [[] for _ in range(nout)]
 
-        i, j = 1, 1  # indices for old/new divisions
-        k = 0  # index for temp divisions
-
-        last_elem = _is_single_last_div(a)
-
-        # process through old division
-        # left part of new division can be processed in this loop
-        while i < len(a) and j < len(b):
-            if a[i] < b[j]:
-                # tuple is something like:
-                # (methods.boundary_slice, ('from_pandas-#', 0), 3, 4, False))
-                d[(out1, k)] = (methods.boundary_slice, (name, i - 1), low, a[i], False)
-                low = a[i]
-                i += 1
-            elif a[i] > b[j]:
-                d[(out1, k)] = (methods.boundary_slice, (name, i - 1), low, b[j], False)
-                low = b[j]
-                j += 1
-            else:
-                d[(out1, k)] = (methods.boundary_slice, (name, i - 1), low, b[j], False)
-                low = b[j]
-                if len(a) == i + 1 or a[i] < a[i + 1]:
-                    j += 1
-                i += 1
-            c.append(low)
-            k += 1
-
-        # right part of new division can remain
-        if a[-1] < b[-1] or b[-1] == b[-2]:
-            for _j in range(j, len(b)):
-                # always use right-most of old division
-                # because it may contain last element
-                m = len(a) - 2
-                d[(out1, k)] = (methods.boundary_slice, (name, m), low, b[_j], False)
-                low = b[_j]
-                c.append(low)
-                k += 1
-        else:
-            # even if new division is processed through,
-            # right-most element of old division can remain
-            if last_elem and i < len(a):
+        # Slice every input partition independently against the boundaries of
+        # the output partitions it overlaps. A partition covers ``[a[i],
+        # a[i + 1]]``, so rows equal to an output boundary are taken from the
+        # output partition that starts at that boundary. This keeps duplicate
+        # labels that sit on a boundary (possibly spread over both neighbouring
+        # input partitions) exactly once, and concatenating splits in input
+        # partition order preserves the original order of equal labels.
+        for i in range(self.frame.npartitions):
+            low, high = a[i], a[i + 1]
+            j = bisect.bisect_right(b, low) - 1
+            j = min(max(j, 0), last_out)
+            while j <= last_out and b[j] <= high:
+                # ``high`` is inclusive here: rows equal to the upper bound of
+                # an input partition may live in that partition. Include them
+                # when they are not the (exclusive) start of the next output
+                # partition.
+                right_boundary = j == last_out or high < b[j + 1]
                 d[(out1, k)] = (
                     methods.boundary_slice,
-                    (name, i - 1),
-                    a[i],
-                    a[i],
-                    False,
+                    (name, i),
+                    b[j],
+                    b[j + 1],
+                    right_boundary,
                 )
+                splits[j].append((out1, k))
                 k += 1
-            c.append(a[-1])
+                if j == last_out or high < b[j + 1]:
+                    break
+                j += 1
 
-        # replace last element of tuple with True
-        d[(out1, k - 1)] = d[(out1, k - 1)][:-1] + (True,)
-
-        i, j = 0, 1
-
-        last_elem = _is_single_last_div(c)
-
-        while j < len(b):
-            tmp = []
-            while c[i] < b[j]:
-                tmp.append((out1, i))
-                i += 1
-            while (
-                last_elem
-                and c[i] == b[-1]
-                and (b[-1] != b[-2] or j == len(b) - 1)
-                and i < k
-            ):
-                # append if last split is not included
-                tmp.append((out1, i))
-                i += 1
+        for j, tmp in enumerate(splits):
             if len(tmp) == 0:
                 # dummy slice to return empty DataFrame or Series,
                 # which retain original data attributes (columns / name)
-                d[(out2, j - 1)] = (
+                d[(out2, j)] = (
                     methods.boundary_slice,
                     (name, 0),
                     a[0],
@@ -377,15 +333,9 @@ class RepartitionDivisions(Repartition):
                     False,
                 )
             elif len(tmp) == 1:
-                d[(out2, j - 1)] = tmp[0]
+                d[(out2, j)] = tmp[0]
             else:
-                if not tmp:
-                    raise ValueError(
-                        f"check for duplicate partitions\nold:\n{pformat(a)}\n\n"
-                        f"new:\n{pformat(b)}\n\ncombined:\n{pformat(c)}"
-                    )
-                d[(out2, j - 1)] = (methods.concat, tmp)
-            j += 1
+                d[(out2, j)] = (methods.concat, tmp)
         return d
 
 
