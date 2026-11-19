@@ -445,22 +445,28 @@ class DltResource(Iterable[TDataItem], DltResourceHints):
         return self
 
     def add_filter(
-        self, item_filter: ItemTransformFunc[bool], insert_at: int = None
+        self, item_filter: ItemTransformFunc[bool], insert_at: int = None, name: str = None
     ) -> Self:  # noqa: A003
         """Adds filter defined in `item_filter` to the resource pipe at position `inserted_at`
 
         `item_filter` receives single data items, `dlt` will enumerate any lists of data items automatically
 
+        Each filter keeps a named counter of the items it received and let through. The counters are
+        exposed in the extract metrics under `custom_metrics["filters"][name]` and tell how many items
+        each filter actually dropped. Items rejected by an earlier filter never reach the later ones so
+        their counters are not affected.
+
         Args:
             item_filter (ItemTransformFunc[bool]): A function taking a single data item and optional meta argument. Returns bool. If True, item is kept
             insert_at (int, optional): At which step in pipe to insert the filter. Defaults to None which inserts after last step
+            name (str, optional): Name of the filter counter in the extract metrics. Defaults to the name of `item_filter`
         Returns:
             "DltResource": returns self
         """
         if insert_at is None:
-            self._pipe.append_step(FilterItem(item_filter))
+            self._pipe.append_step(FilterItem(item_filter, name))
         else:
-            self._pipe.insert_step(FilterItem(item_filter), insert_at)
+            self._pipe.insert_step(FilterItem(item_filter, name), insert_at)
         return self
 
     def add_limit(

@@ -905,6 +905,30 @@ resource_metrics = trace.last_extract_info.metrics[load_id][0]["resource_metrics
 print(f"Custom metrics: {resource_metrics.custom_metrics}")
 ```
 
+### Filter counters
+
+Every filter added with `add_filter` automatically counts the data items it received and the items it let
+through. The counters are exposed in the extract metrics under `custom_metrics["filters"]`, keyed by the
+filter name:
+
+```py
+@dlt.resource
+def orders():
+    yield [{"id": i} for i in range(10)]
+
+# name the filters to tell their counters apart
+orders.add_filter(lambda o: o["id"] % 2 == 0, name="even").add_filter(lambda o: o["id"] > 7, name="gt_7")
+
+pipeline.run(orders)
+resource_metrics = pipeline.last_trace.last_extract_info.metrics[load_id][0]["resource_metrics"]["orders"]  # ty: ignore
+print(resource_metrics.custom_metrics["filters"])
+# {'even': {'received': 10, 'passed': 5}, 'gt_7': {'received': 5, 'passed': 1}}
+```
+
+The name defaults to the name of the filter function (duplicated names get a suffix). A filter only counts
+the items that actually reach it: items rejected by an earlier filter are never seen - and never counted -
+by the later ones, which lets you pinpoint exactly which filter dropped your data.
+
 ## Load resources
 
 You can pass individual resources or a list of resources to the `dlt.pipeline` object. The resources loaded outside the source context will be added to the [default schema](schema.md) of the pipeline.

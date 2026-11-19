@@ -1047,6 +1047,7 @@ def test_add_metrics(extract_step: Extract, as_single_batch: bool) -> None:
     assert source.resources["some_data"].custom_metrics == {
         "early_count": 1 if as_single_batch else 6,
         "late_count": 1 if as_single_batch else 3,
+        "filters": {"<lambda>": {"received": 6, "passed": 3}},
     }
     assert source.resources["multi_table_data"].custom_metrics == {
         "count_users": 2,
@@ -1072,6 +1073,7 @@ def test_add_metrics(extract_step: Extract, as_single_batch: bool) -> None:
     assert all_resource_metrics["some_data"].custom_metrics == {
         "early_count": 1 if as_single_batch else 6,
         "late_count": 1 if as_single_batch else 3,
+        "filters": {"<lambda>": {"received": 6, "passed": 3}},
     }
     assert all_resource_metrics["multi_table_data"].custom_metrics == {
         "count_users": 2,
@@ -1134,7 +1136,47 @@ def test_custom_metrics_preserved_when_all_items_filtered(extract_step: Extract)
     assert "all_filtered" in all_resource_metrics
     rm = all_resource_metrics["all_filtered"]
     assert rm.items_count == 0
-    assert rm.custom_metrics == {"early_count": 1, "seen_via_current": True}
+    assert rm.custom_metrics == {
+        "early_count": 1,
+        "seen_via_current": True,
+        "filters": {"<lambda>": {"received": 3, "passed": 0}},
+    }
+
+
+def test_filter_named_counters(extract_step: Extract) -> None:
+    """Each filter stage counts the items it actually received and passed."""
+
+    @dlt.resource
+    def orders():
+        yield [{"id": i} for i in range(10)]
+
+    calls = {"keep_even": 0, "keep_all": 0}
+
+    def keep_even(item: Dict[str, int]) -> bool:
+        calls["keep_even"] += 1
+        return item["id"] % 2 == 0
+
+    def keep_all(item: Dict[str, int]) -> bool:
+        calls["keep_all"] += 1
+        # would also accept the items rejected by `keep_even`
+        return True
+
+    orders.add_filter(keep_even).add_filter(keep_all, name="all_pass")
+
+    source = DltSource(dlt.Schema("filters"), "module", [orders])
+    load_id = extract_step.extract(source, 20, 1)
+
+    # `keep_all` never sees the items rejected upstream so they are not added back to its counters
+    filters = source.resources["orders"].custom_metrics["filters"]
+    assert filters["keep_even"] == {"received": 10, "passed": 5}
+    assert filters["all_pass"] == {"received": 5, "passed": 5}
+    # business callbacks ran exactly once per received item, never re-run to compute metrics
+    assert calls == {"keep_even": 10, "keep_all": 5}
+
+    # counters are part of the extract metrics of the resource
+    step_info = extract_step.get_step_info(MockPipeline("buba", first_run=False))  # type: ignore[abstract]
+    all_resource_metrics = step_info.metrics[load_id][0]["resource_metrics"]
+    assert all_resource_metrics["orders"].custom_metrics["filters"] == filters
 
 
 def test_object_mixed_case_columns_normalized(extract_step: Extract) -> None:

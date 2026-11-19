@@ -18,6 +18,7 @@ from typing import (
 from dlt.common.data_writers.writers import count_rows_in_items
 from dlt.common.schema.typing import TTableSchema
 from dlt.common.typing import TAny, TDataItem, TDataItems, TypeVar
+from dlt.common.utils import get_callable_name
 
 from dlt.extract.utils import (
     wrap_iterator,
@@ -79,25 +80,69 @@ class FilterItem(ItemTransform[bool, Dict[str, Any]]):
     _f_meta: ItemTransformFunctionWithMeta[bool]
     _f: ItemTransformFunctionNoMeta[bool]
 
+    def __init__(self, transform_f: ItemTransformFunc[bool], name: str = None) -> None:
+        super().__init__(transform_f)
+        self._base_name = name or get_callable_name(transform_f) or "filter"
+        self.filter_name = self._base_name
+        """Name under which this filter reports its counters in `custom_metrics`"""
+        self.received_count = 0
+        """Number of data items that reached this filter"""
+        self.passed_count = 0
+        """Number of data items that this filter let through"""
+
+    @property
+    def custom_metrics(self) -> Dict[str, Any]:
+        return {
+            "filters": {
+                self.filter_name: {
+                    "received": self.received_count,
+                    "passed": self.passed_count,
+                }
+            }
+        }
+
+    def bind(self, pipe: SupportsPipe) -> "FilterItem":
+        # pipes are re-bound on each extraction run so the counters reflect a single run
+        self.received_count = 0
+        self.passed_count = 0
+        # make the name unique within the pipe so that counters of same-named filters
+        # (eg. lambdas) do not overwrite each other when step metrics get merged
+        ordinal = 0
+        for step_no in range(len(pipe)):
+            step = pipe[step_no]
+            if step is self:
+                break
+            if isinstance(step, FilterItem) and step._base_name == self._base_name:
+                ordinal += 1
+        self.filter_name = self._base_name if ordinal == 0 else f"{self._base_name}_{ordinal + 1}"
+        return self
+
     def __call__(self, item: TDataItems, meta: Any = None) -> Optional[TDataItems]:
         if isinstance(item, list):
             # preserve type of empty lists
             if len(item) == 0:
                 return item
 
+            self.received_count += len(item)
             if self._f_meta:
                 item = [i for i in item if self._f_meta(i, meta)]
             else:
                 item = [i for i in item if self._f(i)]
+            self.passed_count += len(item)
             if not item:
                 # item was fully consumed by the filter
                 return None
             return item
         else:
+            self.received_count += 1
             if self._f_meta:
-                return item if self._f_meta(item, meta) else None
+                if not self._f_meta(item, meta):
+                    return None
             else:
-                return item if self._f(item) else None
+                if not self._f(item):
+                    return None
+            self.passed_count += 1
+            return item
 
 
 class MapItem(ItemTransform[TDataItem, Dict[str, Any]]):

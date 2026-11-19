@@ -234,6 +234,54 @@ def test_insert_remove_step() -> None:
     assert [pi.item for pi in _l] == [4, 8, 12]
 
 
+def test_filter_item_counters() -> None:
+    # counts single items
+    filter_item = FilterItem(lambda x: x % 2 == 0, name="even")
+    assert filter_item.filter_name == "even"
+    assert [filter_item(i) for i in range(6)] == [0, None, 2, None, 4, None]
+    assert filter_item.received_count == 6
+    assert filter_item.passed_count == 3
+    assert filter_item.custom_metrics == {"filters": {"even": {"received": 6, "passed": 3}}}
+
+    # counts rows in lists, empty lists pass through uncounted
+    filter_item = FilterItem(lambda x: x > 1)
+    assert filter_item([1, 2, 3]) == [2, 3]
+    assert filter_item([1]) is None
+    assert filter_item([]) == []
+    assert filter_item.received_count == 4
+    assert filter_item.passed_count == 2
+    # default name is the callable name
+    assert filter_item.custom_metrics == {"filters": {"<lambda>": {"received": 4, "passed": 2}}}
+
+    # meta-aware filter
+    filter_item = FilterItem(lambda x, meta: x != meta["skip"])
+    assert filter_item(1, meta={"skip": 2}) == 1
+    assert filter_item(2, meta={"skip": 2}) is None
+    assert filter_item.received_count == 2
+    assert filter_item.passed_count == 1
+
+
+def test_filter_item_unique_names_on_bind() -> None:
+    p = Pipe.from_data("data", [1, 2, 3])
+    f_1 = FilterItem(lambda _: True)
+    f_2 = FilterItem(lambda _: True)
+    f_3 = FilterItem(lambda _: True, name="named")
+    p.append_step(f_1)
+    p.append_step(f_2)
+    p.append_step(f_3)
+    list(PipeIterator.from_pipe(p))
+    # same-named filters get unique names so their counters do not overwrite each other
+    assert f_1.filter_name == "<lambda>"
+    assert f_2.filter_name == "<lambda>_2"
+    assert f_3.filter_name == "named"
+    assert f_2.custom_metrics == {"filters": {"<lambda>_2": {"received": 3, "passed": 3}}}
+
+    # counters are reset when the pipe is bound again, not accumulated
+    list(PipeIterator.from_pipe(p))
+    assert f_1.received_count == 3
+    assert f_1.passed_count == 3
+
+
 def test_append_transform_with_placement_affinity() -> None:
     class FilterItemStart(FilterItem):
         placement_affinity: ClassVar[float] = -1
