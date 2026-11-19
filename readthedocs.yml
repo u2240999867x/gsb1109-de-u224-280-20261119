@@ -1,0 +1,24 @@
+version: 2
+sphinx:
+  # Path to your Sphinx configuration file.
+  configuration: doc/source/conf.py
+build:
+  os: ubuntu-24.04
+  tools:
+    python: mambaforge-latest
+  jobs:
+    post_checkout:
+      # we need the tags for version to work
+      - git fetch origin --depth 150
+      - git fetch --tags
+    post_build:
+      - mamba list
+    pre_install:
+      - git update-index --assume-unchanged doc/environment.yml
+python:
+  install:
+  - method: pip
+    path: .
+conda:
+  environment: doc/environment.yml
+formats: []
