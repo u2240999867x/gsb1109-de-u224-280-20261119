@@ -800,6 +800,31 @@ def get_max(
     return get_column(engine, ref, aggregate_operator=column_operator)
 
 
+def get_min_per_group(
+    engine: sa.engine.Engine, ref: DataReference
+) -> tuple[Any, list[sa.Select]]:
+    """Return the minimum of the value column for each group.
+
+    The `DataReference` is expected to have exactly two columns: the group
+    column and the value column to be aggregated. Returns a list of
+    `(group_value, min_value)` tuples.
+    """
+    columns = ref.get_columns(engine)
+    if columns is None or len(columns) != 2:
+        raise ValueError(
+            "DataReference is expected to have exactly two columns, "
+            f"a group column and a value column, but has: {columns}"
+        )
+    group_column, value_column = columns
+    subquery = ref.get_selection(engine).subquery()
+    selection = sa.select(
+        subquery.c[group_column], sa.func.min(subquery.c[value_column])
+    ).group_by(subquery.c[group_column])
+    with engine.connect() as connection:
+        result = connection.execute(selection).fetchall()
+    return result, [selection]
+
+
 def get_mean(
     engine: sa.engine.Engine, ref: DataReference
 ) -> tuple[Any, list[sa.Select]]:

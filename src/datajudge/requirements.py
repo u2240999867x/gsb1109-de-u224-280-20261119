@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import datetime as dt
 from abc import ABC
-from collections.abc import Callable, Collection, MutableSequence, Sequence
+from collections.abc import Callable, Collection, Mapping, MutableSequence, Sequence
 from typing import (
+    Any,
     TypeVar,
 )
 
@@ -714,6 +716,55 @@ class WithinRequirement(Requirement):
                 column_type=column_type,
                 name=name,
                 cache_size=cache_size,
+            )
+        )
+
+    def add_date_min_per_group_constraint(
+        self,
+        column: str,
+        group_column: str,
+        retention_rules: Mapping[Any, date_constraints.DateRetentionRule],
+        min_fraction: float = 1.0,
+        column_type: str = "date",
+        condition: Condition | None = None,
+        name: str | None = None,
+        cache_size=None,
+        *,
+        reference_datetime: dt.datetime | None = None,
+    ) -> None:
+        """Ensure each group's dates respect its own retention rule.
+
+        Groups are defined by the values of ``group_column``, e.g. a data
+        source identifier. For each group, the effective minimum date is
+        computed from its ``DateRetentionRule`` as ``today - retention_days``,
+        where "today" is evaluated in the timezone of the group's business
+        region. A group violates if the min of ``column`` within the group
+        is older than its effective minimum date.
+
+        The constraint passes if the fraction of passing groups among
+        configured groups with comparable data is at least ``min_fraction``.
+
+        Groups found in the data but missing from ``retention_rules`` do not
+        participate in the pass rate but are listed separately in the failure
+        message. Configured groups without any dates are reported as having
+        no comparable data and cause the constraint to fail.
+
+        ``reference_datetime`` pins the point in time from which "today" is
+        derived. It defaults to the current time. Naive datetimes are
+        interpreted as UTC.
+
+        For more information on ``column_type`` values, see ``add_column_type_constraint``.
+        """
+        ref = DataReference(self._data_source, [group_column, column], condition)
+        self._constraints.append(
+            date_constraints.DateMinPerGroup(
+                ref,
+                retention_rules=retention_rules,
+                min_fraction=min_fraction,
+                column_type=column_type,
+                name=name,
+                cache_size=cache_size,
+                reference_datetime=reference_datetime,
             )
         )
 

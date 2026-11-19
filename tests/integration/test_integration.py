@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import functools
 import textwrap
 
@@ -8,6 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy import event
 
 import datajudge.requirements as requirements
+from datajudge import DateRetentionRule
 from datajudge.db_access import (
     Condition,
     is_bigquery,
@@ -1932,6 +1934,133 @@ def test_date_min_between(engine, date_table1, date_table2, data):
     req = requirements.BetweenRequirement.from_tables(*date_table1, *date_table2)
     req.add_date_min_constraint(
         "col_date", "col_date", condition1=condition1, condition2=condition2
+    )
+    test_result = req[0].test(engine)
+    assert operation(test_result.outcome), test_result.failure_message
+
+
+RETENTION_REFERENCE_DATETIME = datetime.datetime(
+    2016, 1, 20, 12, 0, tzinfo=datetime.timezone.utc
+)
+
+
+def _source_condition(sources):
+    quoted_sources = ", ".join(f"'{source}'" for source in sources)
+    return Condition(raw_string=f"col_source IN ({quoted_sources})")
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        # Each configured source satisfies its own retention-based min date.
+        # d_unconfigured has ancient dates but no retention rule, so it does
+        # not participate in the pass rate.
+        (
+            identity,
+            ["a_short", "b_long", "d_unconfigured"],
+            {"a_short": 30, "b_long": 300},
+            1.0,
+        ),
+        # c_violating's min date 2016-01-05 is older than its effective min
+        # date 2016-01-13.
+        (
+            negation,
+            ["a_short", "c_violating"],
+            {"a_short": 30, "c_violating": 7},
+            1.0,
+        ),
+        # One of two configured groups violates, which a min_fraction of
+        # 0.5 tolerates.
+        (
+            identity,
+            ["a_short", "c_violating"],
+            {"a_short": 30, "c_violating": 7},
+            0.5,
+        ),
+        (
+            negation,
+            ["a_short", "c_violating"],
+            {"a_short": 30, "c_violating": 7},
+            0.51,
+        ),
+    ],
+)
+def test_date_min_per_group(engine, date_table_retention, data):
+    operation, sources, retention_days_per_source, min_fraction = data
+    req = requirements.WithinRequirement.from_table(*date_table_retention)
+    req.add_date_min_per_group_constraint(
+        "col_date",
+        "col_source",
+        retention_rules={
+            source: DateRetentionRule(retention_days=retention_days)
+            for source, retention_days in retention_days_per_source.items()
+        },
+        min_fraction=min_fraction,
+        condition=_source_condition(sources),
+        reference_datetime=RETENTION_REFERENCE_DATETIME,
+    )
+    test_result = req[0].test(engine)
+    assert operation(test_result.outcome), test_result.failure_message
+
+
+def test_date_min_per_group_failure_message(engine, date_table_retention):
+    req = requirements.WithinRequirement.from_table(*date_table_retention)
+    req.add_date_min_per_group_constraint(
+        "col_date",
+        "col_source",
+        retention_rules={
+            "a_short": DateRetentionRule(retention_days=30),
+            "c_violating": DateRetentionRule(retention_days=7),
+        },
+        condition=_source_condition(["a_short", "c_violating", "d_unconfigured"]),
+        reference_datetime=RETENTION_REFERENCE_DATETIME,
+    )
+    test_result = req[0].test(engine)
+    assert not test_result.outcome
+    # The violating group is reported.
+    assert "c_violating" in test_result.failure_message
+    # The unconfigured group is listed separately.
+    assert "d_unconfigured" in test_result.failure_message
+    assert "not participating" in test_result.failure_message
+
+
+@pytest.mark.parametrize("source", ["e_null_dates", "missing_source"])
+def test_date_min_per_group_no_comparable_data(engine, date_table_retention, source):
+    req = requirements.WithinRequirement.from_table(*date_table_retention)
+    req.add_date_min_per_group_constraint(
+        "col_date",
+        "col_source",
+        retention_rules={source: DateRetentionRule(retention_days=30)},
+        reference_datetime=RETENTION_REFERENCE_DATETIME,
+    )
+    test_result = req[0].test(engine)
+    assert not test_result.outcome
+    assert "no comparable data" in test_result.failure_message
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        # At 2016-01-20 01:00 UTC it is already 2016-01-20 in Sydney, so a
+        # 7-day retention requires dates >= 2016-01-13.
+        (negation, "Australia/Sydney"),
+        # In Los Angeles it is still 2016-01-19, requiring dates >= 2016-01-12.
+        (identity, "America/Los_Angeles"),
+    ],
+)
+def test_date_min_per_group_timezone(engine, date_table_retention, data):
+    operation, timezone = data
+    req = requirements.WithinRequirement.from_table(*date_table_retention)
+    req.add_date_min_per_group_constraint(
+        "col_date",
+        "col_source",
+        retention_rules={
+            "f_timezone": DateRetentionRule(retention_days=7, timezone=timezone)
+        },
+        condition=_source_condition(["f_timezone"]),
+        reference_datetime=datetime.datetime(
+            2016, 1, 20, 1, 0, tzinfo=datetime.timezone.utc
+        ),
     )
     test_result = req[0].test(engine)
     assert operation(test_result.outcome), test_result.failure_message

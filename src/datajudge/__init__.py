@@ -14,6 +14,7 @@ if sa.__version__.startswith("1."):
 
 from .condition import Condition
 from .constraints.base import Constraint
+from .constraints.date import DateRetentionRule
 from .data_source import DataSource
 from .requirements import BetweenRequirement, Requirement, WithinRequirement
 
@@ -22,6 +23,7 @@ __all__ = [
     "Condition",
     "Constraint",
     "DataSource",
+    "DateRetentionRule",
     "Requirement",
     "WithinRequirement",
 ]

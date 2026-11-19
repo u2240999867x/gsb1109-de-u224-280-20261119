@@ -224,6 +224,46 @@ def date_table2(engine, metadata):
 
 
 @pytest.fixture(scope="module")
+def date_table_retention(engine, metadata):
+    table_name = "date_table_retention"
+    columns = [
+        sa.Column("col_source", _string_column(engine)),
+        sa.Column("col_date", sa.DateTime()),
+    ]
+    data = []
+    # Source with a short retention period: min date 2016-01-10.
+    data += [
+        {"col_source": "a_short", "col_date": datetime.datetime(2016, 1, i)}
+        for i in range(10, 20)
+    ]
+    # Source with a long retention period: min date 2015-06-01.
+    data += [
+        {"col_source": "b_long", "col_date": datetime.datetime(2015, 6, i)}
+        for i in range(1, 10)
+    ]
+    # Source violating a 7-day retention w.r.t. 2016-01-20: min date 2016-01-05.
+    data += [
+        {"col_source": "c_violating", "col_date": datetime.datetime(2016, 1, i)}
+        for i in range(5, 10)
+    ]
+    # Source without retention rule: ancient dates that would fail any
+    # global lower bound.
+    data += [
+        {"col_source": "d_unconfigured", "col_date": datetime.datetime(2010, 1, i)}
+        for i in range(1, 5)
+    ]
+    # Source without any dates.
+    data += [{"col_source": "e_null_dates", "col_date": None}]
+    # Source for timezone-dependent "today": min date 2016-01-12.
+    data += [
+        {"col_source": "f_timezone", "col_date": datetime.datetime(2016, 1, i)}
+        for i in range(12, 16)
+    ]
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
 def date_table_overlap(engine, metadata):
     table_name = "date_table_overlap"
     columns = [
