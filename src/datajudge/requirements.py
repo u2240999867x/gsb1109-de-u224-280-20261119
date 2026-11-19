@@ -31,7 +31,7 @@ from .db_access import (
     DataReference,
     _get_date_growth_rate,
 )
-from .utils import OutputProcessor, output_processor_limit
+from .utils import ColumnMasker, OutputProcessor, output_processor_limit
 
 _T = TypeVar("_T")
 
@@ -159,6 +159,7 @@ class WithinRequirement(Requirement):
         max_absolute_n_duplicates: int = 0,
         infer_pk_columns: bool = False,
         name: str | None = None,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ) -> None:
         """Columns should uniquely identify row.
@@ -172,6 +173,9 @@ class WithinRequirement(Requirement):
         If ``infer_pk_columns`` is ``True``, ``columns`` will be retrieved from the primary keys.
         If ``columns`` is ``None`` and ``infer_pk_column`` is ``False``, the fallback is
         validating that all rows in a table are unique.
+
+        If a ``masker`` is given, values of its registered columns are pseudonymized
+        in the failing sample shown in the failure message.
         """
         ref = DataReference(self._data_source, columns, condition)
         self._constraints.append(
@@ -181,6 +185,7 @@ class WithinRequirement(Requirement):
                 max_absolute_n_duplicates=max_absolute_n_duplicates,
                 infer_pk_columns=infer_pk_columns,
                 name=name,
+                masker=masker,
                 cache_size=cache_size,
             )
         )
@@ -311,6 +316,7 @@ class WithinRequirement(Requirement):
         | None = output_processor_limit,
         condition: Condition | None = None,
         name: str | None = None,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ):
         """Check if the data's unique values are equal to a given set of values.
@@ -337,6 +343,9 @@ class WithinRequirement(Requirement):
 
         See the `Uniques` class for further parameter details on `map_func` and
         `reduce_func`, and `output_processors`.
+
+        If a ``masker`` is given, values of its registered columns are pseudonymized
+        in the failing samples shown in the failure message.
         """
         ref = DataReference(self._data_source, columns, condition)
         self._constraints.append(
@@ -348,6 +357,7 @@ class WithinRequirement(Requirement):
                 reduce_func=reduce_func,
                 output_processors=output_processors,
                 name=name,
+                masker=masker,
                 cache_size=cache_size,
             )
         )
@@ -365,6 +375,7 @@ class WithinRequirement(Requirement):
         output_processors: OutputProcessor
         | list[OutputProcessor]
         | None = output_processor_limit,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ):
         """Check if unique values of columns are contained in the reference data.
@@ -397,6 +408,9 @@ class WithinRequirement(Requirement):
 
         See ``Uniques`` for further details on ``map_func``, ``reduce_func``,
         and ``output_processors``.
+
+        If a ``masker`` is given, values of its registered columns are pseudonymized
+        in the failing samples shown in the failure message.
         """
         ref = DataReference(self._data_source, columns, condition)
         self._constraints.append(
@@ -409,6 +423,7 @@ class WithinRequirement(Requirement):
                 reduce_func=reduce_func,
                 output_processors=output_processors,
                 name=name,
+                masker=masker,
                 cache_size=cache_size,
             )
         )
@@ -427,6 +442,7 @@ class WithinRequirement(Requirement):
         output_processors: OutputProcessor
         | list[OutputProcessor]
         | None = output_processor_limit,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ):
         """Check if the data's unique values are contained in a given set of values.
@@ -462,6 +478,9 @@ class WithinRequirement(Requirement):
 
         See ``Uniques`` for further details on ``map_func``, ``reduce_func``,
         and ``output_processors``.
+
+        If a ``masker`` is given, values of its registered columns are pseudonymized
+        in the failing samples shown in the failure message.
         """
         ref = DataReference(self._data_source, columns, condition)
         self._constraints.append(
@@ -475,6 +494,7 @@ class WithinRequirement(Requirement):
                 reduce_func=reduce_func,
                 output_processors=output_processors,
                 name=name,
+                masker=masker,
                 cache_size=cache_size,
             )
         )
@@ -966,6 +986,7 @@ class WithinRequirement(Requirement):
         output_processors: OutputProcessor
         | list[OutputProcessor]
         | None = output_processor_limit,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ):
         """Expresses a functional dependency, a constraint where the `value_columns` are uniquely determined by the `key_columns`.
@@ -983,6 +1004,9 @@ class WithinRequirement(Requirement):
         on how the output is sorted and how many counterexamples are shown is available as ``output_processors``.
 
         For more information on functional dependencies, see https://en.wikipedia.org/wiki/Functional_dependency.
+
+        If a ``masker`` is given, values of its registered columns are pseudonymized
+        in the failing samples shown in the failure message.
         """
         relevant_columns = key_columns + value_columns
         ref = DataReference(self._data_source, relevant_columns, condition)
@@ -992,6 +1016,7 @@ class WithinRequirement(Requirement):
                 key_columns=key_columns,
                 output_processors=output_processors,
                 name=name,
+                masker=masker,
                 cache_size=cache_size,
             )
         )
@@ -2050,6 +2075,7 @@ class BetweenRequirement(Requirement):
         condition1: Condition | None = None,
         condition2: Condition | None = None,
         name: str | None = None,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ) -> None:
         """At most ``max_missing_fraction`` of rows in T1 and T2 are absent in either.
@@ -2059,6 +2085,9 @@ class BetweenRequirement(Requirement):
         $$\\frac{|T1 - T2| + |T2 - T1|}{|T1 \\cup T2|} \\leq \\text{mmf}$$
 
         Rows from T1 are indexed in ``columns1``, rows from T2 are indexed in ``columns2``.
+
+        If a ``masker`` is given, values of its registered columns are pseudonymized
+        in the failing sample shown in the failure message.
         """  # noqa: D301
         ref = DataReference(self._data_source, columns1, condition1)
         ref2 = DataReference(self._data_source2, columns2, condition2)
@@ -2068,6 +2097,7 @@ class BetweenRequirement(Requirement):
                 ref2,
                 lambda engine: max_missing_fraction,
                 name=name,
+                masker=masker,
                 cache_size=cache_size,
             )
         )
@@ -2081,6 +2111,7 @@ class BetweenRequirement(Requirement):
         condition1: Condition | None = None,
         condition2: Condition | None = None,
         name: str | None = None,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ) -> None:
         """At most ``max_missing_fraction`` of rows in T1 are not in T2.
@@ -2093,6 +2124,9 @@ class BetweenRequirement(Requirement):
         contrast to ``EXCEPT ALL``, this should lead to a set subtraction instead of
         a multiset subtraction. In other words, duplicates in T1 are treated as
         single occurrences.
+
+        If a ``masker`` is given, values of its registered columns are pseudonymized
+        in the failing sample shown in the failure message.
         """  # noqa: D301
         max_missing_fraction_getter = self._get_deviation_getter(
             constant_max_missing_fraction, date_range_loss_fraction
@@ -2105,6 +2139,7 @@ class BetweenRequirement(Requirement):
                 ref2,
                 max_missing_fraction_getter,
                 name=name,
+                masker=masker,
                 cache_size=cache_size,
             )
         )
@@ -2118,6 +2153,7 @@ class BetweenRequirement(Requirement):
         condition1: Condition | None = None,
         condition2: Condition | None = None,
         name: str | None = None,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ) -> None:
         """At most ``max_missing_fraction`` of rows in T2 are not in T1.
@@ -2125,6 +2161,9 @@ class BetweenRequirement(Requirement):
         In other words, $\\frac{|T2-T1|}{|T2|} \\leq$ ``max_missing_fraction``.
         Rows from T1 are indexed in ``columns1``, rows from T2 are indexed in
         ``columns2``.
+
+        If a ``masker`` is given, values of its registered columns are pseudonymized
+        in the failing sample shown in the failure message.
         """  # noqa: D301
         max_missing_fraction_getter = self._get_deviation_getter(
             constant_max_missing_fraction, date_range_loss_fraction
@@ -2137,6 +2176,7 @@ class BetweenRequirement(Requirement):
                 ref2,
                 max_missing_fraction_getter,
                 name=name,
+                masker=masker,
                 cache_size=cache_size,
             )
         )

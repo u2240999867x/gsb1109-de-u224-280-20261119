@@ -7,6 +7,7 @@ import sqlalchemy as sa
 
 from .. import db_access
 from ..db_access import DataReference, _MatchAndCompare
+from ..utils import ColumnMasker
 from .base import Constraint, TestResult, _format_sample, _ToleranceGetter
 
 
@@ -17,9 +18,12 @@ class Row(Constraint, abc.ABC):
         ref2: DataReference,
         max_missing_fraction_getter: _ToleranceGetter,
         name: str | None = None,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ):
-        super().__init__(ref, ref2=ref2, name=name, cache_size=cache_size)
+        super().__init__(
+            ref, ref2=ref2, name=name, masker=masker, cache_size=cache_size
+        )
         self._max_missing_fraction_getter = max_missing_fraction_getter
 
     def test(self, engine: sa.engine.Engine) -> TestResult:
@@ -73,9 +77,13 @@ class RowEquality(Row):
         if self._ref2 is None:
             raise ValueError("RowEquality constraint requires ref2.")
         if n_rows_missing_left > 0:
-            sample_string = _format_sample(self._ref1_minus_ref2_sample, self._ref2)
+            sample_string = _format_sample(
+                self._ref1_minus_ref2_sample, self._ref2, self._masker
+            )
         else:
-            sample_string = _format_sample(self._ref2_minus_ref1_sample, self._ref)
+            sample_string = _format_sample(
+                self._ref2_minus_ref1_sample, self._ref, self._masker
+            )
         assertion_message = (
             f"{missing_fraction} > "
             f"{self._max_missing_fraction} of rows differ "
@@ -117,7 +125,9 @@ class RowSubset(Row):
         result = missing_fraction <= self._max_missing_fraction
         if result:
             return result, None
-        sample_string = _format_sample(self._ref1_minus_ref2_sample, self._ref)
+        sample_string = _format_sample(
+            self._ref1_minus_ref2_sample, self._ref, self._masker
+        )
         assertion_message = (
             f"{missing_fraction} > "
             f"{self._max_missing_fraction} of rows of "
@@ -161,7 +171,9 @@ class RowSuperset(Row):
             return result, None
         if self._ref2 is None:
             raise ValueError("RowSuperset constraint requires ref2.")
-        sample_string = _format_sample(self._ref2_minus_ref1_sample, self._ref2)
+        sample_string = _format_sample(
+            self._ref2_minus_ref1_sample, self._ref2, self._masker
+        )
         assertion_message = (
             f"{missing_fraction} > "
             f"{self._max_missing_fraction} of rows of "

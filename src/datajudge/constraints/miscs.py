@@ -6,6 +6,7 @@ import sqlalchemy as sa
 
 from .. import db_access
 from ..db_access import DataReference
+from ..utils import ColumnMasker
 from .base import Constraint, TestResult, _format_sample, _OptionalSelections
 
 
@@ -57,6 +58,7 @@ class Uniqueness(Constraint):
         max_absolute_n_duplicates: int = 0,
         infer_pk_columns: bool = False,
         name: str | None = None,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ):
         if max_duplicate_fraction != 0 and max_absolute_n_duplicates != 0:
@@ -73,7 +75,9 @@ class Uniqueness(Constraint):
             ref_value = ("relative", 0)
 
         self.infer_pk_columns = infer_pk_columns
-        super().__init__(ref, ref_value=ref_value, name=name, cache_size=cache_size)
+        super().__init__(
+            ref, ref_value=ref_value, name=name, masker=masker, cache_size=cache_size
+        )
 
     def test(self, engine: sa.engine.Engine) -> TestResult:
         if self.infer_pk_columns and db_access.is_bigquery(engine):
@@ -111,7 +115,7 @@ class Uniqueness(Constraint):
         if result:
             return TestResult.success()
         sample, _ = db_access.get_duplicate_sample(engine, self._ref)
-        sample_string = _format_sample(sample, self._ref)
+        sample_string = _format_sample(sample, self._ref, self._masker)
         assertion_text = (
             f"{self._ref} has {row_count} rows > {unique_count} "
             f"uniques. This surpasses the max_duplicate_fraction of "

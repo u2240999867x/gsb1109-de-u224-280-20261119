@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import Protocol
+from typing import Any, Protocol
 
 
 def _fmt_diff_part(s, d):
@@ -57,6 +57,79 @@ class OutputProcessor(Protocol):
         collection: Collection,
         counts: Collection | None = None,
     ) -> Collection: ...
+
+
+class ColumnMasker:
+    """Pseudonymize values of sensitive columns when displaying failing samples.
+
+    A single instance is meant to be shared by all constraints contributing to
+    one report. Within that report, the same value of a masked column is always
+    replaced by the same placeholder, such that e.g. two conflicting records
+    can be attributed to the same identifier. Distinct values of a column are
+    mapped to distinct placeholders and hence remain distinguishable.
+
+    Masking is applied only when failure messages are rendered. All statistics
+    and constraint outcomes are computed on the original data and the original
+    values never appear in the resulting (machine-readable) failure messages.
+
+    The default placeholder looks like ``<email#1>`` for a column ``email``.
+    It can be customized via the ``placeholder`` argument, which may reference
+    the fields ``column`` and ``index``.
+    """
+
+    def __init__(
+        self,
+        columns: Collection[str],
+        placeholder: str = "<{column}#{index}>",
+    ):
+        self._columns = frozenset(columns)
+        self._placeholder = placeholder
+        self._mappings: dict[str, dict[Any, str]] = {
+            column: {} for column in self._columns
+        }
+
+    @property
+    def columns(self) -> frozenset:
+        return self._columns
+
+    def masks_column(self, column: str) -> bool:
+        return column in self._columns
+
+    @staticmethod
+    def _key(value: Any) -> Any:
+        try:
+            hash(value)
+        except TypeError:
+            return repr(value)
+        return value
+
+    def mask_value(self, column: str, value: Any) -> Any:
+        """Return the placeholder for ``value`` of ``column``, or ``value`` itself.
+
+        Values of columns not registered for masking, as well as ``None``,
+        are passed through unchanged.
+        """
+        if value is None or not self.masks_column(column):
+            return value
+        mapping = self._mappings[column]
+        key = self._key(value)
+        token = mapping.get(key)
+        if token is None:
+            token = self._placeholder.format(column=column, index=len(mapping) + 1)
+            mapping[key] = token
+        return token
+
+    def mask_row(self, columns: Collection[str], row: Collection) -> tuple:
+        """Mask the values of ``row`` belonging to masked columns, positionally.
+
+        The returned tuple always has the same length as ``row``; values
+        without a corresponding column name are passed through unchanged.
+        """
+        columns = list(columns)
+        return tuple(
+            self.mask_value(columns[index], value) if index < len(columns) else value
+            for index, value in enumerate(row)
+        )
 
 
 def output_processor_sort(

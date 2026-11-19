@@ -16,9 +16,11 @@ from .condition import Condition
 from .constraints.base import Constraint
 from .data_source import DataSource
 from .requirements import BetweenRequirement, Requirement, WithinRequirement
+from .utils import ColumnMasker
 
 __all__ = [
     "BetweenRequirement",
+    "ColumnMasker",
     "Condition",
     "Constraint",
     "DataSource",

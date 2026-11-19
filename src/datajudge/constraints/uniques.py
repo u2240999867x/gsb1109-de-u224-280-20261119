@@ -11,7 +11,12 @@ import sqlalchemy as sa
 
 from .. import db_access
 from ..db_access import DataReference
-from ..utils import OutputProcessor, filternull_element, output_processor_limit
+from ..utils import (
+    ColumnMasker,
+    OutputProcessor,
+    filternull_element,
+    output_processor_limit,
+)
 from .base import _T, Constraint, TestResult, _OptionalSelections, _ToleranceGetter
 
 
@@ -118,6 +123,7 @@ class Uniques(Constraint, abc.ABC):
         | list[OutputProcessor]
         | None = output_processor_limit,
         *,
+        masker: ColumnMasker | None = None,
         ref2: DataReference | None = None,
         uniques: Collection | None = None,
         filter_func: Callable[[list[_T]], list[_T]] | None = None,
@@ -135,6 +141,7 @@ class Uniques(Constraint, abc.ABC):
             name=name,
             cache_size=cache_size,
             output_processors=output_processors,
+            masker=masker,
         )
 
         if filter_func is None:
@@ -244,6 +251,7 @@ class UniquesSubset(Uniques):
                     output_elemes, output_counts = output_processor(
                         output_elemes, output_counts
                     )
+            output_elemes = self._mask_values(output_elemes)
 
             assertion_text = (
                 f"{self._ref} has a fraction of {relative_violations} > "

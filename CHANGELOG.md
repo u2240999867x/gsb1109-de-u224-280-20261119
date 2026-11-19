@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add [`datajudge.utils.ColumnMasker`][datajudge.utils.ColumnMasker] and a `masker`
+  argument to constraints displaying failing samples (uniqueness, uniques,
+  functional dependency and row constraints). Values of registered columns are
+  pseudonymized per column in failure messages - consistently within a report
+  and distinguishable across identifiers - while statistics and constraint
+  outcomes keep being computed on the original data.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

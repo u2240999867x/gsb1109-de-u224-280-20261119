@@ -9,7 +9,7 @@ from sqlalchemy.sql import selectable
 
 from ..db_access import DataReference
 from ..formatter import Formatter
-from ..utils import OutputProcessor, output_processor_limit
+from ..utils import ColumnMasker, OutputProcessor, output_processor_limit
 
 _T = TypeVar("_T")
 
@@ -133,6 +133,7 @@ class Constraint(abc.ABC):
         output_processors: OutputProcessor
         | list[OutputProcessor]
         | None = output_processor_limit,
+        masker: ColumnMasker | None = None,
         cache_size=None,
     ):
         self._check_if_valid_between_or_within(ref2, ref_value)
@@ -140,6 +141,7 @@ class Constraint(abc.ABC):
         self._ref2 = ref2
         self._ref_value = ref_value
         self.name = name
+        self._masker = masker
         self._factual_selections: _OptionalSelections = None
         self._target_selections: _OptionalSelections = None
         self._factual_queries: list[str] | None = None
@@ -296,13 +298,41 @@ class Constraint(abc.ABC):
         if self._output_processors is not None:
             for output_processor in self._output_processors:
                 values, _ = output_processor(values)
-        return values
+        return self._mask_values(values)
+
+    def _mask_values(self, values: Collection) -> Collection:
+        """Replace values of masked columns by their placeholders for display.
+
+        Masking happens after any ``output_processors`` and only affects the
+        values rendered into failure messages, never the data the constraint
+        outcome is computed on.
+        """
+        if self._masker is None:
+            return values
+        columns = self._ref.columns
+        if columns is None:
+            return values
+        masked_values = [
+            self._masker.mask_row(columns, value)
+            if isinstance(value, tuple)
+            else self._masker.mask_value(columns[0], value)
+            if len(columns) == 1
+            else value
+            for value in values
+        ]
+        if isinstance(values, (set, frozenset)):
+            return type(values)(masked_values)
+        return masked_values
 
 
-def _format_sample(sample, ref: DataReference) -> str:
+def _format_sample(
+    sample, ref: DataReference, masker: ColumnMasker | None = None
+) -> str:
     """Build a string from a database row indicating its column values."""
     if ref.columns is None:
         return str(sample)
+    if masker is not None:
+        sample = masker.mask_row(ref.columns, sample)
     sample_string = " , ".join(
         map(lambda x: f"{x[0]} = {x[1]}", zip(ref.columns, list(sample)))
     )
