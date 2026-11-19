@@ -359,6 +359,7 @@ Here are the details of the supported formats, operations and extra options docs
 
 -   **Parse methods**
 
+    -   [`check_parse`](#check_parse)
     -   [`get_bool`](#get_bool)
     -   [`get_bool_list`](#get_bool_list)
     -   [`get_date`](#get_date)
@@ -908,6 +909,20 @@ s = d.to_yaml(**kwargs)
 ### Parse methods
 
 These methods are wrappers of the `get` method, they parse data trying to return it in the expected type.
+
+#### `check_parse`
+
+```python
+# Check values at the keys or keypaths described in the given plan
+# trying to parse them in the expected types, and return a list of
+# ParseCheckResult (one per key) with raw value, parsed value and
+# status ("ok", "missing", "null" or "invalid").
+# The plan can be a dict or an iterable of (key, spec) pairs, where
+# spec is a type name (e.g. "int", "date") or a dict with a "type"
+# item and optional parser options (e.g. {"type": "date", "format": ...}).
+results = d.check_parse({"page": "int", "created_at": {"type": "date", "format": "%Y-%m-%d"}})
+errors = [r for r in results if not r.ok]
+```
 
 #### `get_bool`
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, cast
@@ -15,6 +16,53 @@ _K = TypeVar("_K", default=str)
 _V = TypeVar("_V", default=Any)
 
 ParserFunc = Callable[..., Any]
+
+PARSE_CHECK_STATUS_OK = "ok"
+PARSE_CHECK_STATUS_MISSING = "missing"
+PARSE_CHECK_STATUS_NULL = "null"
+PARSE_CHECK_STATUS_INVALID = "invalid"
+
+# type name -> (parser func, allowed option names)
+_PARSE_CHECKERS: dict[str, tuple[ParserFunc, tuple[str, ...]]] = {
+    "bool": (parse_util.parse_bool, ()),
+    "date": (parse_util.parse_date, ("format",)),
+    "datetime": (parse_util.parse_datetime, ("format",)),
+    "decimal": (parse_util.parse_decimal, ()),
+    "email": (parse_util.parse_email, ("check_blacklist",)),
+    "float": (parse_util.parse_float, ()),
+    "int": (parse_util.parse_int, ()),
+    "phonenumber": (parse_util.parse_phonenumber, ("country_code",)),
+    "slug": (parse_util.parse_slug, ()),
+    "str": (parse_util.parse_str, ()),
+    "uuid": (parse_util.parse_uuid, ()),
+}
+
+
+@dataclass
+class ParseCheckResult:
+    """
+    Result of a single parse check performed by `ParseDict.check_parse`.
+    `status` is one of: "ok", "missing", "null", "invalid".
+    """
+
+    key: Any
+    type: str
+    value: Any
+    parsed_value: Any
+    status: str
+
+    @property
+    def ok(self) -> bool:
+        return self.status == PARSE_CHECK_STATUS_OK
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "type": self.type,
+            "value": self.value,
+            "parsed_value": self.parsed_value,
+            "status": self.status,
+        }
 
 
 class ParseDict(BaseDict[_K, _V]):
@@ -75,6 +123,59 @@ class ParseDict(BaseDict[_K, _V]):
             return default or []
         values_list = self.get_list(key, [], separator)
         return [parser_func(value, **(parserstrwargs or {})) for value in values_list]
+
+    def _check_parse_value(
+        self,
+        key: Any,
+        type: str,
+        options: Mapping[str, Any],
+    ) -> ParseCheckResult:
+        """
+        Check the value at the given key or keypath against the given type
+        and return a ParseCheckResult describing the outcome.
+        """
+        try:
+            parser_func, allowed_options = _PARSE_CHECKERS[type]
+        except KeyError:
+            raise ValueError(f"Invalid parse check type: {type!r}") from None
+        parserkwargs = {
+            name: options[name] for name in allowed_options if name in options
+        }
+        if key not in self:
+            return ParseCheckResult(key, type, None, None, PARSE_CHECK_STATUS_MISSING)
+        value = self.get(key, None)
+        if value is None:
+            return ParseCheckResult(key, type, None, None, PARSE_CHECK_STATUS_NULL)
+        parsed_value = parser_func(value, **parserkwargs)
+        if parsed_value is None:
+            return ParseCheckResult(key, type, value, None, PARSE_CHECK_STATUS_INVALID)
+        return ParseCheckResult(key, type, value, parsed_value, PARSE_CHECK_STATUS_OK)
+
+    def check_parse(
+        self,
+        plan: Mapping[Any, Any] | Iterable[tuple[Any, Any]],
+    ) -> list[ParseCheckResult]:
+        """
+        Check values at the keys or keypaths described in the given plan
+        trying to parse them in the expected types, and return a list of
+        ParseCheckResult (one per key) with raw value, parsed value and
+        status ("ok", "missing", "null" or "invalid").
+
+        The plan can be a dict or an iterable of (key, spec) pairs, where
+        spec is a type name (e.g. "int", "date") or a dict with a "type"
+        item and optional parser options (e.g. {"type": "date", "format": ...}).
+        """
+        items = plan.items() if type_util.is_dict(plan) else plan
+        results = []
+        for key, spec in items:
+            if type_util.is_string(spec):
+                type, options = spec, {}
+            else:
+                spec = dict(spec)
+                type = spec.pop("type")
+                options = spec
+            results.append(self._check_parse_value(key, type, options))
+        return results
 
     def get_bool(self, key: _K, default: bool = False) -> bool:
         """
