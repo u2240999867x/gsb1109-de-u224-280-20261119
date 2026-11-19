@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import subprocess
+from typing import List
+
+import typer
+
+from ...resource import Resource
+from ...system import system
+from .. import common, helpers
+from ..console import console
+
+
+@console.command(name="explore")
+def console_explore(
+    # Resource
+    source: List[str] = common.source,
+    name: str = common.resource_name,
+    type: str = common.type,
+    path: str = common.path,
+    # System
+    debug: bool = common.debug,
+    trusted: bool = common.trusted,
+    standards: str = common.standards,
+):
+    """Explore dataset with Visidata
+
+    Please read the commands reference:
+    - https://www.visidata.org/man/
+    """
+    # Setup system
+    if trusted:
+        system.trusted = trusted
+    if standards:
+        system.standards = standards  # type: ignore
+
+    # Create source
+    source = helpers.create_source(source, path=path)
+    if not source and not path:
+        note = 'Providing "source" or "path" is required'
+        helpers.print_error(note=note)
+        raise typer.Exit(code=1)
+
+    # Get paths
+    try:
+        resource = Resource(
+            source=helpers.create_source(source),
+            name=name,
+            path=path,
+            datatype=type,
+        )
+        resources = resource.list(name=name)
+        paths = [resource.normpath for resource in resources if resource.normpath]
+    except Exception as exception:
+        helpers.print_exception(debug=debug, exception=exception)
+        raise typer.Exit(code=1)
+
+    # Enter editor
+    try:
+        completed = subprocess.run(["vd", "--", *paths], check=False)
+    except FileNotFoundError:
+        helpers.print_error(note='VisiData executable "vd" was not found')
+        raise typer.Exit(code=1)
+    if completed.returncode:
+        raise typer.Exit(code=completed.returncode)
