@@ -20,7 +20,12 @@ from dlt.common.data_types.type_helpers import (
     py_type_to_sc_type,
 )
 from dlt.common.data_types.typing import TDataType
-from dlt.common.normalizers.exceptions import InvalidJsonNormalizer
+from dlt.common.exceptions import DictValidationException
+from dlt.common.normalizers.exceptions import (
+    InvalidJsonNormalizer,
+    NestedRowIdConflictException,
+    NormalizerException,
+)
 from dlt.common.normalizers.typing import TJSONNormalizer
 from dlt.common.normalizers.utils import generate_dlt_id
 from dlt.common.typing import DictStrAny, TDataItem, StrAny
@@ -49,6 +54,7 @@ from dlt.common.normalizers.json.typing import (
 from dlt.common.normalizers.json import helpers as normalize_helpers
 from dlt.common.normalizers.json.helpers import (
     get_nested_row_hash,
+    get_nested_row_id,
     get_propagation_mapping,
     get_row_hash,
     requires_root_key,
@@ -107,6 +113,12 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         self.propagation_config = self.normalizer_config.get("propagation", None)
         self.max_nesting = self.normalizer_config.get("max_nesting", 1000)
         self._skip_primary_key = {}
+        # nested rows are identified by a business id instead of list position when configured
+        nested_row_id_config = self.normalizer_config.get("nested_row_id") or {}
+        self.nested_row_id_column: Optional[TColumnName] = nested_row_id_config.get("column")
+        # seen nested row ids per (nested table, parent row id) to detect duplicates
+        # within a single parent
+        self._seen_nested_row_ids: Dict[Tuple[str, str], set] = {}
         # create cached versions of helper functions
         self._get_root_row_id_type = lru_cache(maxsize=None)(
             partial(normalize_helpers.get_root_row_id_type, self.schema)
@@ -195,7 +207,19 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         is_root: bool,
     ) -> str:
         if not is_root:
-            row_id = get_nested_row_hash(parent_row_id, table, pos)
+            row_id_value = (
+                flattened_row.get(self.nested_row_id_column)
+                if self.nested_row_id_column is not None
+                else None
+            )
+            if row_id_value is not None:
+                # identify nested rows by their business id so reordering the list keeps
+                # the same row id; the parent id scopes uniqueness to a single parent row
+                self._assert_nested_row_id_unique(table, parent_row_id, row_id_value)
+                row_id = get_nested_row_id(parent_row_id, table, row_id_value)
+            else:
+                # rows without the configured id keep the standard positional identity
+                row_id = get_nested_row_hash(parent_row_id, table, pos)
             flattened_row[self.c_dlt_parent_id] = parent_row_id
             flattened_row[self.c_dlt_list_idx] = pos
         else:  # root table
@@ -215,6 +239,26 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
 
         flattened_row[self.c_dlt_id] = row_id
         return row_id
+
+    def _assert_nested_row_id_unique(
+        self, table: str, parent_row_id: str, row_id_value: Any
+    ) -> None:
+        scope = (table, parent_row_id)
+        seen = self._seen_nested_row_ids.setdefault(scope, set())
+        try:
+            is_duplicate = row_id_value in seen
+        except TypeError:
+            # json columns may hold dicts/lists which cannot identify a row
+            raise NormalizerException(
+                f"The nested row id value `{row_id_value}` of column"
+                f" `{self.nested_row_id_column}` in table `{table}` is not hashable; only"
+                " scalar values (e.g. text, int) can identify nested rows."
+            )
+        if is_duplicate:
+            raise NestedRowIdConflictException(
+                table, parent_row_id, self.nested_row_id_column, row_id_value
+            )
+        seen.add(row_id_value)
 
     def _get_propagated_values(
         self, table: str, row: DictStrAny, is_root: bool
@@ -285,6 +329,10 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         is_root: bool = False,
     ) -> TNormalizedRowIterator:
         table = self._shorten_fragments(*parent_path, *ident_path)
+        # duplicate detection is scoped to a single root item (e.g. one order), so the
+        # same business id remains valid across different root rows or separate files
+        if is_root:
+            self._seen_nested_row_ids.clear()
         # flatten current row and extract all lists to recur into
         flattened_row, lists = self._flatten(table, dict_row, _r_lvl)
         # only extend row if there's something to extend
@@ -292,7 +340,8 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
             flattened_row.update(extend)
 
         # identify load id if loaded data must be processed after loading incrementally
-        if is_root := is_root or not self._should_be_nested(table):
+        is_root = is_root or not self._should_be_nested(table)
+        if is_root:
             flattened_row[self.c_dlt_load_id] = self._load_id
 
         # infer record hash or leave existing primary key if present
@@ -486,6 +535,22 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                     propagation_config["tables"][table_name] = _normalize_prop(
                         propagation_config["tables"][table_name]
                     )
+
+        nested_row_id_config = config.get("nested_row_id")
+        if nested_row_id_config and nested_row_id_config.get("column"):
+            column = nested_row_id_config["column"]
+            if not isinstance(column, str):
+                raise DictValidationException(
+                    f"field `column` value `{column}` has invalid type"
+                    f" `{type(column).__name__}` while `str` is expected",
+                    "./normalizers/json/config/nested_row_id",
+                    TColumnName,
+                    "column",
+                    column,
+                )
+            nested_row_id_config["column"] = TColumnName(
+                schema.naming.normalize_identifier(column)
+            )
 
         validate_dict(
             cls.RELATIONAL_CONFIG_TYPE,

@@ -29,6 +29,8 @@ from dlt.normalize import Normalize
 from dlt.normalize.validate import validate_and_update_schema
 from dlt.common.storages.normalize_storage import group_worker_files
 from dlt.normalize.exceptions import NormalizeJobFailed
+from dlt.common.normalizers.json.relational import DataItemNormalizer
+from dlt.common.normalizers.exceptions import NestedRowIdConflictException
 
 from tests.cases import JSON_TYPED_DICT, JSON_TYPED_DICT_TYPES
 from tests.utils import (
@@ -505,6 +507,74 @@ def test_normalize_contract_discard_all_rows(
         # never-seen table is not materialized: no job is produced for it
         files = raw_normalize.load_storage.list_new_jobs(load_id) if load_id in normalized else []
         assert "items" not in [ParsedLoadJobFileName.parse(f).table_name for f in files]
+
+
+def _read_table_rows(normalize: Normalize, load_id: str, table_name: str) -> List[StrAny]:
+    rows: List[StrAny] = []
+    storage = normalize.load_storage.normalized_packages.storage
+    for file_name in normalize.load_storage.list_new_jobs(load_id):
+        if ParsedLoadJobFileName.parse(file_name).table_name != table_name:
+            continue
+        full_path = storage.make_full_path(file_name)
+        opener = gzip.open if file_name.endswith(".gz") else open
+        with opener(full_path, "rt") as f:
+            for line in f:
+                parsed = json.loads(line)
+                # jsonl writers emit one row per line, list payloads are tolerated as well
+                rows.extend(parsed if isinstance(parsed, list) else [parsed])
+    return rows
+
+
+@pytest.mark.parametrize("caps", JSONL_CAPS, indirect=True)
+def test_nested_row_id_stable_across_reordered_files(
+    caps: DestinationCapabilitiesContext, raw_normalize: Normalize
+) -> None:
+    schema = Schema("orders")
+    DataItemNormalizer.update_normalizer_config(schema, {"nested_row_id": {"column": "detail_id"}})
+    details = [
+        {"detail_id": "D-1", "name": "apple"},
+        {"detail_id": "D-2", "name": "pear"},
+        {"detail_id": "D-3", "name": "plum"},
+    ]
+    # two root rows share the fixed root id; the second one reorders the details list
+    items = [
+        {"_dlt_id": "order-1", "details": details},
+        {"_dlt_id": "order-1", "details": list(reversed(details))},
+    ]
+    load_id = extract_items(raw_normalize.normalize_storage, items, schema, "orders")
+    normalize_pending(raw_normalize)
+
+    rows = _read_table_rows(raw_normalize, load_id, "orders__details")
+    by_detail: Dict[str, List[StrAny]] = {}
+    for row in rows:
+        by_detail.setdefault(row["detail_id"], []).append(row)
+    # each business id appears twice (two root rows) but keeps the same _dlt_id
+    for detail_rows in by_detail.values():
+        assert len(detail_rows) == 2
+        assert detail_rows[0]["_dlt_id"] == detail_rows[1]["_dlt_id"]
+    # positions still reflect the actual list order
+    reordered = by_detail["D-1"]
+    assert {r["_dlt_list_idx"] for r in reordered} == {0, 2}
+
+
+def test_nested_row_id_conflict_fails_normalize_job(raw_normalize: Normalize) -> None:
+    schema = Schema("orders")
+    DataItemNormalizer.update_normalizer_config(schema, {"nested_row_id": {"column": "detail_id"}})
+    items = [
+        {
+            "_dlt_id": "order-1",
+            "details": [{"detail_id": "X", "name": "a"}, {"detail_id": "X", "name": "b"}],
+        }
+    ]
+    load_id = extract_items(raw_normalize.normalize_storage, items, schema, "orders")
+    with pytest.raises(NormalizeJobFailed) as job_ex:
+        normalize_pending(raw_normalize)
+    assert job_ex.value.load_id == load_id
+    cause = job_ex.value.__cause__
+    assert isinstance(cause, NestedRowIdConflictException)
+    assert cause.table_name == "orders__details"
+    assert cause.parent_row_id == "order-1"
+    assert cause.id_value == "X"
 
 
 @pytest.mark.parametrize("caps", INSERT_CAPS + JSONL_CAPS, indirect=True)

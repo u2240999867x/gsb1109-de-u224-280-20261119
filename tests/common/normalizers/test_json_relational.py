@@ -14,6 +14,10 @@ from dlt.common.normalizers.json.relational import (
     RelationalNormalizerConfigPropagation,
     DataItemNormalizer as RelationalNormalizer,
 )
+from dlt.common.normalizers.exceptions import (
+    NestedRowIdConflictException,
+    NormalizerException,
+)
 from dlt.common.normalizers.json import helpers as normalize_helpers
 
 from tests.utils import create_schema_with_name
@@ -1379,3 +1383,172 @@ def test_coerce_type(norm: RelationalNormalizer) -> None:
     # failure raises ValueError
     with pytest.raises(ValueError):
         norm.coerce_type("bigint", "text", "not_a_number")
+
+
+def configure_nested_row_id(norm: RelationalNormalizer, column: str) -> None:
+    RelationalNormalizer.update_normalizer_config(
+        norm.schema, {"nested_row_id": {"column": column}}
+    )
+    norm._reset()
+
+
+def rows_of(rows: list, table_name: str) -> list:
+    return [r[1] for r in rows if r[0][0] == table_name]
+
+
+def test_nested_row_id_disabled_by_default(norm: RelationalNormalizer) -> None:
+    assert norm.nested_row_id_column is None
+
+
+def test_nested_row_id_stable_when_list_reordered(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "detail_id")
+    row = {
+        "_dlt_id": "order-1",
+        "details": [
+            {"detail_id": "D-1", "name": "apple"},
+            {"detail_id": "D-2", "name": "pear"},
+            {"detail_id": "D-3", "name": "plum"},
+        ],
+    }
+    rows = list(norm._normalize_row(row, {}, ("orders",), _r_lvl=1000, is_root=True))
+    before = {r["detail_id"]: r for r in rows_of(rows, "orders__details")}
+
+    reordered = {**row, "details": list(reversed(row["details"]))}
+    rows = list(norm._normalize_row(reordered, {}, ("orders",), _r_lvl=1000, is_root=True))
+    after = {r["detail_id"]: r for r in rows_of(rows, "orders__details")}
+
+    # content unchanged rows keep the same _dlt_id even though their position changed
+    for detail_id in before:
+        assert before[detail_id]["_dlt_id"] == after[detail_id]["_dlt_id"]
+    assert {r["_dlt_list_idx"] for r in after.values()} == {0, 1, 2}
+    assert after["D-1"]["_dlt_list_idx"] == 2
+    assert after["D-3"]["_dlt_list_idx"] == 0
+    # ids are still derived deterministically from parent + table + business id
+    assert before["D-1"]["_dlt_id"] == normalize_helpers.get_nested_row_id(
+        "order-1", "orders__details", "D-1"
+    )
+
+
+def test_nested_row_id_scoped_to_parent(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "detail_id")
+    order_a = {"_dlt_id": "order-a", "details": [{"detail_id": "D-1"}]}
+    order_b = {"_dlt_id": "order-b", "details": [{"detail_id": "D-1"}]}
+    rows_a = list(norm.normalize_data_item(order_a, "load-1", "orders"))
+    rows_b = list(norm.normalize_data_item(order_b, "load-1", "orders"))
+    id_a = rows_of(rows_a, "orders__details")[0]["_dlt_id"]
+    id_b = rows_of(rows_b, "orders__details")[0]["_dlt_id"]
+    # same business id under two different parent rows is not a conflict
+    assert id_a != id_b
+
+
+def test_nested_row_id_conflict_within_one_parent(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "detail_id")
+    row = {
+        "_dlt_id": "order-1",
+        "details": [{"detail_id": "X", "name": "a"}, {"detail_id": "X", "name": "b"}],
+    }
+    with pytest.raises(NestedRowIdConflictException) as exc:
+        list(norm.normalize_data_item(row, "load-1", "orders"))
+    assert exc.value.table_name == "orders__details"
+    assert exc.value.parent_row_id == "order-1"
+    assert exc.value.id_column == "detail_id"
+    assert exc.value.id_value == "X"
+
+
+def test_nested_row_id_conflict_check_resets_per_root_item(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "detail_id")
+    duplicated = {"_dlt_id": "order-1", "details": [{"detail_id": "X"}, {"detail_id": "X"}]}
+    # the second independent root item must still detect its own duplicate
+    with pytest.raises(NestedRowIdConflictException):
+        list(norm.normalize_data_item(duplicated, "load-1", "orders"))
+    with pytest.raises(NestedRowIdConflictException):
+        list(norm.normalize_data_item(duplicated, "load-1", "orders"))
+
+
+def test_nested_row_id_falls_back_to_positional_hash(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "detail_id")
+    row = {
+        "_dlt_id": "order-1",
+        "details": [{"detail_id": "D-1", "name": "a"}, {"name": "no-id"}],
+    }
+    rows = list(norm.normalize_data_item(row, "load-1", "orders"))
+    details = rows_of(rows, "orders__details")
+    with_id, without_id = details
+    assert with_id["_dlt_id"] == normalize_helpers.get_nested_row_id(
+        "order-1", "orders__details", "D-1"
+    )
+    assert without_id["_dlt_id"] == normalize_helpers.get_nested_row_hash(
+        "order-1", "orders__details", 1
+    )
+
+
+def test_nested_row_id_applies_at_every_nesting_level(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "row_id")
+    row = {
+        "_dlt_id": "order-1",
+        "details": [
+            {"row_id": "D-1", "tags": [{"row_id": "t-1"}, {"row_id": "t-2"}]},
+        ],
+    }
+    rows = list(norm.normalize_data_item(row, "load-1", "orders"))
+    detail = rows_of(rows, "orders__details")[0]
+    tags = rows_of(rows, "orders__details__tags")
+    assert tags[0]["_dlt_id"] == normalize_helpers.get_nested_row_id(
+        detail["_dlt_id"], "orders__details__tags", "t-1"
+    )
+    assert tags[0]["_dlt_parent_id"] == detail["_dlt_id"]
+    assert tags[1]["_dlt_id"] == normalize_helpers.get_nested_row_id(
+        detail["_dlt_id"], "orders__details__tags", "t-2"
+    )
+
+
+def test_nested_row_id_column_identifier_normalized(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "detail-id")
+    assert norm.nested_row_id_column == "detail_id"
+    row = {"_dlt_id": "order-1", "details": [{"detail-id": "D-1"}]}
+    rows = list(norm.normalize_data_item(row, "load-1", "orders"))
+    detail = rows_of(rows, "orders__details")[0]
+    assert detail["_dlt_id"] == normalize_helpers.get_nested_row_id(
+        "order-1", "orders__details", "D-1"
+    )
+
+
+def test_nested_row_id_rejects_unhashable_value(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "detail_id")
+    # a json column can hold a dict, which cannot be used as a row identity
+    norm.schema.update_table(new_table("orders"))
+    norm.schema.update_table(
+        new_table(
+            "orders__details",
+            parent_table_name="orders",
+            columns=[{"name": "detail_id", "data_type": "json"}],
+        )
+    )
+    norm._reset()
+    row = {"_dlt_id": "order-1", "details": [{"detail_id": {"nested": "value"}}]}
+    with pytest.raises(NormalizerException):
+        list(norm.normalize_data_item(row, "load-1", "orders"))
+
+
+def test_nested_row_id_does_not_collide_with_positional_hash(norm: RelationalNormalizer) -> None:
+    configure_nested_row_id(norm, "detail_id")
+    # a numeric business id equal to a list position must not reuse the positional id
+    row = {
+        "_dlt_id": "order-1",
+        "details": [
+            {"detail_id": 2},  # business id "2" ...
+            {"detail_id": 3},
+            {"name": "positional"},  # ... falls back to positional hash at index 2
+        ],
+    }
+    rows = list(norm.normalize_data_item(row, "load-1", "orders"))
+    details = rows_of(rows, "orders__details")
+    business = details[0]
+    positional = details[2]
+    assert business["_dlt_id"] == normalize_helpers.get_nested_row_id(
+        "order-1", "orders__details", 2
+    )
+    assert positional["_dlt_id"] == normalize_helpers.get_nested_row_hash(
+        "order-1", "orders__details", 2
+    )
+    assert business["_dlt_id"] != positional["_dlt_id"]

@@ -646,6 +646,24 @@ for **nested** tables.
 
 You are able to bring your own `row_key` by adding a `_dlt_id` column/field to your data (both root and nested). All data types with an equal operator are supported.
 
+#### Stable nested row keys across list reordering
+
+The default nested `row_key` contains the list position, so reordering an upstream array makes every child row look new even when its content did not change. If your nested rows carry a business id, you can tell the normalizer to derive the `row_key` from that id instead of the list position. A row then keeps the same `_dlt_id` when it moves within the list, while `_dlt_list_idx` still reflects its current position.
+
+The id only needs to be unique **within a parent row**: the same id under two different parent rows (e.g. the same detail id in two different orders) is allowed, because the parent `row_key` is part of the hash. A duplicate id under the same parent raises an error.
+
+```py
+from dlt.common.normalizers.json.relational import DataItemNormalizer
+
+# `detail_id` is the business id column present in every nested row
+DataItemNormalizer.update_normalizer_config(
+    pipeline.default_schema,
+    {"nested_row_id": {"column": "detail_id"}},
+)
+```
+
+With the config above, a nested row's `_dlt_id` is a deterministic hash of the parent `_dlt_id`, the nested table name and the `detail_id` value. Rows that do not contain the configured column keep the default position-based `row_key`. The same config applies to every nesting level that has the column.
+
 `merge` write disposition requires an additional nested reference that goes from **nested** to **root** table, skipping all parent tables in between. This reference is created by [adding a column with a hint](merge-loading.md#forcing-root-key-propagation) `root_key` (named `_dlt_root_id` by default) to nested tables.
 
 ### Generate custom linking for nested tables

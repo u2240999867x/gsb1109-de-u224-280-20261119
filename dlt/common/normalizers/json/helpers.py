@@ -179,3 +179,15 @@ def get_nested_row_hash(parent_row_id: str, nested_table: str, list_idx: int) ->
     # create deterministic unique id of the nested row taking into account that all lists are ordered
     # and all nested tables must be lists
     return digest128(f"{parent_row_id}_{nested_table}_{list_idx}", DLT_ID_LENGTH_BYTES)
+
+
+def get_nested_row_id(parent_row_id: str, nested_table: str, row_id_value: Any) -> str:
+    """Deterministic id of a nested row derived from its business id instead of list position.
+
+    The id stays stable when the containing list is reordered, as long as the business id
+    and parent row do not change. The parent row id keeps the scope: the same business id
+    under different parent rows yields different row ids. The `id:` marker separates this
+    namespace from the positional `get_nested_row_hash`, whose trailing segment is an int,
+    so the two can never produce the same id for rows of one table and parent.
+    """
+    return digest128(f"{parent_row_id}_{nested_table}_id:{row_id_value}", DLT_ID_LENGTH_BYTES)
