@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**New features**
+
+- Add a `min_samples` parameter (default `35`) to
+  [`datajudge.BetweenRequirement.add_ks_2sample_constraint`][datajudge.requirements.BetweenRequirement.add_ks_2sample_constraint].
+  A KS test is now rejected with an explicit "insufficient sample size" message
+  when either sample is smaller than the threshold, instead of potentially
+  passing on the test statistic alone.
+- Expose the sample sizes behind a KS verdict as `TestResult.sample_sizes`.
+- Add a deterministic small-data example for location drift, shape drift and
+  insufficient samples under `docs/examples/distribution_drift`.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

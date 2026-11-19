@@ -39,6 +39,12 @@ class TestResult:
     _constraint_description: str | None = field(default=None, repr=False)
     _factual_queries: str | None = field(default=None, repr=False)
     _target_queries: str | None = field(default=None, repr=False)
+    _sample_sizes: tuple[int, int] | None = field(default=None, repr=False)
+
+    @property
+    def sample_sizes(self) -> tuple[int, int] | None:
+        """Sample sizes the result was based on, as ``(n_first, n_second)``."""
+        return self._sample_sizes
 
     def formatted_failure_message(self, formatter: Formatter) -> str | None:
         return (
@@ -93,12 +99,12 @@ class TestResult:
         )
 
     @classmethod
-    def success(cls):
-        return cls(True)
+    def success(cls, sample_sizes: tuple[int, int] | None = None):
+        return cls(True, _sample_sizes=sample_sizes)
 
     @classmethod
-    def failure(cls, *args, **kwargs):
-        return cls(False, *args, **kwargs)
+    def failure(cls, *args, sample_sizes: tuple[int, int] | None = None, **kwargs):
+        return cls(False, *args, _sample_sizes=sample_sizes, **kwargs)
 
 
 class Constraint(abc.ABC):

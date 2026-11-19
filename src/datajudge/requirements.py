@@ -2196,12 +2196,21 @@ class BetweenRequirement(Requirement):
         name: str | None = None,
         significance_level: float = 0.05,
         cache_size=None,
+        *,
+        min_samples: int = stats_constraints.DEFAULT_MIN_SAMPLES,
     ) -> None:
         """
         Apply the so-called two-sample Kolmogorov-Smirnov test to the distributions of the two given columns.
 
         The constraint is fulfilled, when the resulting p-value of the test is higher than the significance level
         (default is 0.05, i.e., 5%).
+
+        A test is only evaluated when both samples contain at least ``min_samples``
+        rows (default is 35, the smallest sample size at which the p-value
+        approximation is considered reliable). Smaller samples fail with an
+        explicit "insufficient sample size" message instead of passing merely
+        because the test statistic is small.
+
         The significance_level must be a value between 0.0 and 1.0.
         """
         if not column1 or not column2:
@@ -2214,6 +2223,9 @@ class BetweenRequirement(Requirement):
                 "The requested significance level has to be in ``(0.0, 1.0]``. Default is 0.05."
             )
 
+        if min_samples < 1:
+            raise ValueError("min_samples has to be at least 1.")
+
         ref = DataReference(self._data_source, [column1], condition=condition1)
         ref2 = DataReference(self._data_source2, [column2], condition=condition2)
         self._constraints.append(
@@ -2223,5 +2235,6 @@ class BetweenRequirement(Requirement):
                 significance_level,
                 name=name,
                 cache_size=cache_size,
+                min_samples=min_samples,
             )
         )

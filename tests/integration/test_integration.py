@@ -3150,6 +3150,9 @@ def test_ks_2sample_constraint_perfect_between(engine, int_table1, data):
         condition1=condition1,
         condition2=condition2,
         significance_level=significance_level,
+        # This fixture only has 19 (or 9, with a condition) rows, so the
+        # default sample-size gate is lowered to keep testing equality here.
+        min_samples=1,
     )
     test_result = req[0].test(engine)
     assert operation(test_result.outcome), test_result.failure_message
@@ -3190,6 +3193,9 @@ def test_ks_2sample_constraint_perfect_between_different_conditions(
         condition1=condition1,
         condition2=condition2,
         significance_level=1.0,
+        # The fixtures are small; keep the failure attributable to the
+        # distributions rather than to the sample-size gate.
+        min_samples=1,
     )
     test_result = req[0].test(engine)
     assert negation(test_result.outcome), test_result.failure_message
@@ -3211,7 +3217,12 @@ def test_ks_2sample_constraint_wrong_between(
     (operation, col_1, col_2, min_p_value) = data
     req = requirements.BetweenRequirement.from_tables(*int_table1, *int_square_table)
     req.add_ks_2sample_constraint(
-        column1=col_1, column2=col_2, significance_level=min_p_value
+        column1=col_1,
+        column2=col_2,
+        significance_level=min_p_value,
+        # The fixtures are small; keep the failure attributable to the
+        # distributions rather than to the sample-size gate.
+        min_samples=1,
     )
     test_result = req[0].test(engine)
     assert operation(test_result.outcome), test_result.failure_message

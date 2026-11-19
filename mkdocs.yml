@@ -68,6 +68,7 @@ nav:
       - examples/twitch.md
       - examples/dates.md
       - examples/exploration.md
+      - Distribution drift: examples/distribution_drift/README.md
   - development.md
   - api-documentation.md
   - Changelog: CHANGELOG.md
