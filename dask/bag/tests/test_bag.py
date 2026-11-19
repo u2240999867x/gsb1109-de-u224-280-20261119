@@ -20,6 +20,7 @@ from tlz import groupby, identity, join, merge, pluck, unique, valmap
 import dask
 import dask.bag as db
 from dask._task_spec import List, Task
+from dask.bag import chunk
 from dask.bag.core import (
     Bag,
     collect,
@@ -478,6 +479,118 @@ def test_foldby_tree_reduction():
     results = dask.compute(dsk)
     first = results[0]
     assert all([r == first for r in results])
+
+
+def _string_combine(left, right):
+    if not left:
+        return right
+    if not right:
+        return left
+    return left + "|" + right
+
+
+def _string_concat(acc, x):
+    # Without an initial, foldby seeds each key with its first item.
+    if isinstance(acc, tuple):
+        acc = acc[1]
+    return _string_combine(acc, x[1])
+
+
+def _append_event(acc, x):
+    acc.append(x[1])
+    return acc
+
+
+def _extend_events(left, right):
+    left.extend(right)
+    return left
+
+
+@pytest.mark.parametrize("npartitions", [1, 4, 17])
+@pytest.mark.parametrize(
+    "foldby_kwargs",
+    [
+        {"combine": _string_combine},
+        {"initial": "", "combine": _string_combine},
+        {"combine": _string_combine, "combine_initial": ""},
+        {"initial": "", "combine": _string_combine, "combine_initial": ""},
+    ],
+)
+def test_foldby_hot_key_preserves_order(npartitions, foldby_kwargs):
+    # 90% of the events belong to one device; the key is order sensitive.
+    events = [("hot", f"h{i:02d}") for i in range(90)]
+    events += [
+        (f"cold{device}", f"c{device}{i}") for device in range(3) for i in range(3)
+    ]
+    b = db.from_sequence(events, npartitions=npartitions)
+
+    expected = {}
+    for device, event in events:
+        expected[device] = (
+            _string_combine(expected[device], event) if device in expected else event
+        )
+
+    result = dict(
+        b.foldby(
+            lambda item: item[0], _string_concat, split_every=2, **foldby_kwargs
+        ).compute(scheduler="sync")
+    )
+
+    assert result["hot"] == expected["hot"]
+    assert {k: v for k, v in result.items() if k != "hot"} == {
+        k: v for k, v in expected.items() if k != "hot"
+    }
+
+
+@pytest.mark.parametrize("split_every", [2, 8, False])
+@pytest.mark.parametrize("use_combine_initial", [False, True])
+def test_foldby_mutable_initial_not_shared_between_keys(
+    split_every, use_combine_initial
+):
+    # Mutable initials must not make the hot key's accumulator leak into or
+    # silently absorb every other key.
+    events = [("hot", i) for i in range(90)]
+    events += [
+        (f"cold{device}", device * 10 + i) for device in range(5) for i in range(3)
+    ]
+    b = db.from_sequence(events, npartitions=10)
+
+    kwargs = {"split_every": split_every}
+    if use_combine_initial:
+        kwargs["combine_initial"] = []
+    result = dict(
+        b.foldby(
+            lambda item: item[0], _append_event, [], _extend_events, **kwargs
+        ).compute(scheduler="sync")
+    )
+
+    expected = {}
+    for device, value in events:
+        expected.setdefault(device, []).append(value)
+
+    assert result == expected
+    assert len({id(acc) for acc in result.values()}) == len(result)
+
+
+def test_chunk_reduceby_copies_mutable_initial_per_key():
+    seq = [("a", 1), ("a", 2), ("b", 3)]
+    result = chunk.reduceby(lambda item: item[0], _append_event, seq, [])
+    assert result == {"a": [1, 2], "b": [3]}
+    assert result["a"] is not result["b"]
+
+
+def test_chunk_foldby_merge_streams_in_order():
+    dicts = [{"a": [1], "b": [2]}, {"a": [3]}, {"b": [4], "a": [5]}]
+    result = chunk.foldby_merge(dicts, _extend_events)
+    assert result == {"a": [1, 3, 5], "b": [2, 4]}
+    assert len({id(acc) for acc in result.values()}) == len(result)
+
+
+def test_chunk_foldby_merge_copies_mutable_combine_initial():
+    dicts = [{"hot": [1]}, {"cold": [2]}]
+    result = chunk.foldby_merge(dicts, _extend_events, [])
+    assert result == {"hot": [1], "cold": [2]}
+    assert result["hot"] is not result["cold"]
 
 
 def test_map_partitions():

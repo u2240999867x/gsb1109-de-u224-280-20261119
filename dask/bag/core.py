@@ -24,11 +24,9 @@ from tlz import (
     groupby,
     join,
     merge,
-    merge_with,
     partition_all,
     peek,
     pluck,
-    reduceby,
     remove,
     second,
     take,
@@ -50,6 +48,7 @@ from dask._task_spec import (
 )
 from dask.bag import chunk
 from dask.bag.avro import to_avro
+from dask.bag.chunk import reduceby
 from dask.base import (
     DaskMethodsMixin,
     dont_optimize,
@@ -1369,27 +1368,24 @@ class Bag(DaskMethodsMixin):
                 for i in range(self.npartitions)
             }
 
-        combine2 = partial(chunk.foldby_combine2, combine)
         depth = 0
         k = self.npartitions
         b = a
         while k > split_every:
             c = b + str(depth)
-            if combine_initial is not no_default:
-                for i, inds in enumerate(partition_all(split_every, range(k))):
+            for i, inds in enumerate(partition_all(split_every, range(k))):
+                if combine_initial is not no_default:
                     dsk[(c, i)] = (
-                        reduceby,
-                        0,
-                        combine2,
-                        (toolz.concat, (map, dictitems, [(b, j) for j in inds])),
+                        chunk.foldby_merge,
+                        [(b, j) for j in inds],
+                        combine,
                         combine_initial,
                     )
-            else:
-                for i, inds in enumerate(partition_all(split_every, range(k))):
+                else:
                     dsk[(c, i)] = (
-                        merge_with,
-                        (partial, reduce, combine),
+                        chunk.foldby_merge,
                         [(b, j) for j in inds],
+                        combine,
                     )
 
             k = i + 1
@@ -1401,17 +1397,16 @@ class Bag(DaskMethodsMixin):
             dsk[(e, 0)] = (
                 dictitems,
                 (
-                    reduceby,
-                    0,
-                    combine2,
-                    (toolz.concat, (map, dictitems, [(b, j) for j in range(k)])),
+                    chunk.foldby_merge,
+                    [(b, j) for j in range(k)],
+                    combine,
                     combine_initial,
                 ),
             )
         else:
             dsk[(e, 0)] = (
                 dictitems,
-                (merge_with, (partial, reduce, combine), [(b, j) for j in range(k)]),
+                (chunk.foldby_merge, [(b, j) for j in range(k)], combine),
             )
 
         graph = HighLevelGraph.from_collections(e, dsk, dependencies=[self])
