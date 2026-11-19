@@ -195,7 +195,7 @@ class Table:
 
     def insert_many(
         self,
-        rows: Sequence[WriteRow],
+        rows: Iterable[WriteRow],
         chunk_size: int = 1000,
         ensure: bool | None = None,
         types: dict[str, ColumnType] | None = None,
@@ -206,6 +206,13 @@ class Table:
         the rows are processed in chunks of 1000 per commit, unless you specify
         a different ``chunk_size``.
 
+        ``rows`` may be any iterable, including a single-pass generator: it is
+        consumed exactly once while schema generation and inserts share the
+        same loop. For columns that are ``None`` in the first rows, the type
+        is guessed from the first non-null value instead of falling back to a
+        text column. Columns that already exist are never altered, while types
+        passed explicitly via ``types`` always take precedence for new columns.
+
         See :py:meth:`insert() <dataset.Table.insert>` for details on
         the other parameters.
         ::
@@ -213,29 +220,96 @@ class Table:
             rows = [dict(name='Dolly')] * 10000
             table.insert_many(rows)
         """
-        # Sync table before inputting rows.
-        sync_row: MutableRow = {}
-        for row in rows:
-            # Only get non-existing columns.
-            sync_keys = list(sync_row.keys())
-            for key in [k for k in row if k not in sync_keys]:
-                # Get a sample of the new column(s) from the row.
-                sync_row[key] = row[key]
-        self._sync_columns(sync_row, ensure, types=types)
+        # Ensure the table itself exists even when no rows are yielded.
+        self._sync_columns({}, ensure, types=types)
 
-        # Get columns name list to be used for padding later.
-        columns = sync_row.keys()
-
+        explicit_keys = {
+            normalize_column_key(normalize_column_name(name)) for name in (types or {})
+        }
+        # First value seen per normalized column. The first non-null value is
+        # kept so leading NULLs don't bias type guessing towards a text column.
+        samples: dict[str, SQLWriteValue] = {}
+        # Normalized column key -> column name used to create/look it up.
+        names: dict[str, str] = {}
+        # Columns seen in the rows but not yet present on the table.
+        pending: set[str] = set()
+        # Actual table column names available for inserts, first-seen order.
+        synced: list[str] = []
         chunk: list[MutableRow] = []
-        for index, row in enumerate(rows):
-            chunk.append(dict(row))
 
-            # Insert when chunk_size is fulfilled or this is the last row
-            if len(chunk) == chunk_size or index == len(rows) - 1:
-                chunk = pad_chunk_columns(chunk, columns)
-                self.db.executable.execute(self.table.insert(), chunk)
-                self.db._auto_commit()
+        for row in rows:
+            norm: MutableRow = {}
+            touched: list[str] = []
+            for raw_key, value in row.items():
+                col_name = normalize_column_name(raw_key)
+                key = normalize_column_key(col_name)
+                assert key is not None
+                norm[col_name] = value
+                if key not in samples:
+                    samples[key] = value
+                    names[key] = col_name
+                    pending.add(key)
+                    touched.append(key)
+                elif value is not None and samples[key] is None:
+                    samples[key] = value
+                    touched.append(key)
+
+            # A column becomes ready once a real value is available, or when
+            # the caller has pinned its type explicitly.
+            ready = [
+                key
+                for key in touched
+                if key in pending and (samples[key] is not None or key in explicit_keys)
+            ]
+            if ready:
+                self._sync_columns(
+                    {names[key]: samples[key] for key in ready},
+                    ensure,
+                    types=types,
+                )
+                for key in ready:
+                    actual = self._get_column_name(names[key])
+                    if self.has_column(actual) and actual not in synced:
+                        synced.append(actual)
+                pending.difference_update(ready)
+
+            chunk.append(norm)
+            if len(chunk) == chunk_size:
+                self._flush_insert_chunk(chunk, synced)
                 chunk = []
+
+        # Columns that only ever held NULLs still need to be created. An
+        # explicit type wins; otherwise the guesser defaults to text.
+        if pending:
+            self._sync_columns(
+                {names[key]: samples[key] for key in pending},
+                ensure,
+                types=types,
+            )
+            for key in pending:
+                actual = self._get_column_name(names[key])
+                if self.has_column(actual) and actual not in synced:
+                    synced.append(actual)
+            pending.clear()
+
+        if chunk:
+            self._flush_insert_chunk(chunk, synced)
+
+    def _flush_insert_chunk(
+        self, chunk: list[MutableRow], columns: Sequence[str]
+    ) -> None:
+        """Insert a buffered chunk, restricted to existing table columns."""
+        normalized: list[MutableRow] = []
+        for record in chunk:
+            out: MutableRow = {}
+            for key, value in record.items():
+                name = self._get_column_name(key)
+                if name in columns:
+                    out[name] = value
+            normalized.append(out)
+        pad_chunk_columns(normalized, columns)
+        self.db.executable.execute(self.table.insert(), normalized)
+        self.db._auto_commit()
 
     def update(
         self,

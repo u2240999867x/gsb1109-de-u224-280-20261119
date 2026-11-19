@@ -4,6 +4,9 @@
 changes must be reconstructed from revision history.*
 
 * **2.0.0**: Major modernization and type annotations
+  - **`insert_many`**: Now accepts any single-pass iterable (e.g. a generator) and consumes it exactly once, instead of iterating twice and silently inserting no rows from generators
+  - **`insert_many`**: New column types are guessed from the first non-null value, so leading `None` rows no longer force numeric/datetime columns to be created as text; columns that only ever contain `None` still default to text
+  - **`insert_many`**: Existing columns keep their type and explicit `types` still take precedence for newly created columns; case/space column-name variants are normalized to a single column
   - **Type annotations**: Full `mypy --strict` compliance across all modules
   - **PEP 561**: Added `py.typed` marker for downstream type checking
   - **New types**: Exported `OutRow`, `RowFactory`, `QueryError` for downstream use

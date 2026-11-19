@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 from sqlalchemy.exc import ArgumentError
-from sqlalchemy.types import BIGINT, TEXT
+from sqlalchemy.types import BIGINT, FLOAT, TEXT
 
 from dataset import chunked
 
@@ -287,6 +287,94 @@ def test_insert_many(table):
     data = TEST_DATA * 100
     table.insert_many(data, chunk_size=13)
     assert len(table) == len(data) + 6, (len(table), len(data))
+
+
+def test_insert_many_single_pass_generator(db):
+    # A generator can only be iterated once; no rows must be silently lost.
+    tbl = db["generator_rows"]
+    consumed = {"n": 0}
+
+    def rows():
+        for i in range(2500):
+            consumed["n"] += 1
+            yield {"value": i}
+
+    tbl.insert_many(rows(), chunk_size=1000)
+    assert consumed["n"] == 2500, consumed
+    assert tbl.count() == 2500, tbl.count()
+
+
+def test_insert_many_empty_generator(db):
+    tbl = db["empty_generator"]
+    tbl.insert_many(iter(()))
+    assert tbl.exists
+    assert tbl.count() == 0
+
+
+def test_insert_many_guesses_type_from_first_non_null(db):
+    # Leading NULLs must not force a new column to be created as text.
+    tbl = db["leading_nulls"]
+    tbl.insert_many(
+        [
+            {"reading": None, "ratio": None},
+            {"reading": None, "ratio": None},
+            {"reading": 42, "ratio": 0.5},
+        ]
+    )
+    assert isinstance(tbl.table.c["reading"].type, BIGINT), tbl.table.c["reading"].type
+    assert isinstance(tbl.table.c["ratio"].type, FLOAT), tbl.table.c["ratio"].type
+    stored = tbl.find_one(reading=42)
+    assert stored["reading"] == 42 and isinstance(stored["reading"], int), stored
+
+
+def test_insert_many_all_null_column_is_text(db):
+    tbl = db["all_nulls"]
+    tbl.insert_many([{"reading": None}, {"reading": None}])
+    assert isinstance(tbl.table.c["reading"].type, TEXT), tbl.table.c["reading"].type
+
+
+def test_insert_many_explicit_type_wins(db):
+    tbl = db["explicit_types"]
+    tbl.insert_many(
+        [{"reading": None}, {"reading": 42}],
+        types={"reading": db.types.float},
+    )
+    assert isinstance(tbl.table.c["reading"].type, FLOAT), tbl.table.c["reading"].type
+
+
+def test_insert_many_keeps_existing_column_type(db):
+    tbl = db["existing_column"]
+    tbl.insert_many([{"reading": "hello"}])
+    assert isinstance(tbl.table.c["reading"].type, TEXT)
+    # Later numeric values must not silently change the existing column.
+    tbl.insert_many([{"reading": None}, {"reading": 99}])
+    assert isinstance(tbl.table.c["reading"].type, TEXT), tbl.table.c["reading"].type
+
+
+def test_insert_many_normalizes_column_variants(db):
+    tbl = db["column_variants"]
+    tbl.insert_many([{"Reading": None}, {"READING ": 3}, {"reading": 4}])
+    assert len(tbl.columns) == 2, tbl.columns
+    assert isinstance(tbl.table.c["Reading"].type, BIGINT)
+    assert tbl.count() == 3
+
+
+def test_insert_many_late_column_across_chunks(db):
+    tbl = db["late_column"]
+    tbl.insert_many(
+        [
+            {"a": 1},
+            {"a": 2},
+            {"b": None},
+            {"b": 5},
+            {"a": 9, "b": 6},
+        ],
+        chunk_size=2,
+    )
+    assert isinstance(tbl.table.c["b"].type, BIGINT), tbl.table.c["b"].type
+    rows = list(tbl.find(order_by="id"))
+    assert len(rows) == 5
+    assert rows[0]["b"] is None and rows[3]["b"] == 5, rows
 
 
 def test_chunked_insert(table):
