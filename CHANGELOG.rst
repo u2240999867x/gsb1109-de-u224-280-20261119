@@ -1,6 +1,7 @@
 Unreleased
 ----------
 
+-  feat: :doc:`/scripts/sql2csv` adds a :code:`--null-value` option that writes SQL NULL as an explicit marker (default :code:`\N`), so that NULL, empty strings and literal values containing the marker remain distinguishable. Non-NULL values beginning with the marker are escaped by doubling it, making the export reversible, including across the batches of a streaming result set.
 -  fix: :doc:`/scripts/csvgrep` treats an empty :code:`--regex` or :code:`--match` pattern as matching every value. Previously, with an empty pattern, :code:`--any-match` matched no rows, and :code:`--any-match --invert-match` matched every row.
 -  feat: :doc:`/scripts/csvcut` adds an :code:`--ignore-unknown-columns` option to skip identifiers in :code:`-c/--columns` that do not match a column in the input.
 -  feat: :doc:`/scripts/csvclean` adds a :code:`--remove-empty-columns` option to remove empty columns from standard output.

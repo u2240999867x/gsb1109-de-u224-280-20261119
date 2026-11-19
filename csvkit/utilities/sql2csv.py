@@ -4,6 +4,27 @@ from sqlalchemy import create_engine
 
 from csvkit.cli import CSVKitUtility, parse_list
 
+# The default marker written in place of SQL NULL. "\N" is the same convention
+# used by MySQL's SELECT ... INTO OUTFILE and by PostgreSQL's COPY ... WITH NULL.
+DEFAULT_NULL_VALUE = '\\N'
+
+
+def encode_null(value, null_value):
+    """
+    Encode a single query result value for reversible CSV output.
+
+    NULL is written as ``null_value``. Any non-NULL value that begins with the
+    marker is prefixed with a second copy of the marker, so that the original
+    value can be read back even when it contains the marker (including values
+    that are literally equal to the marker). Values not beginning with the
+    marker are written unchanged.
+    """
+    if value is None:
+        return null_value
+    if isinstance(value, str) and value.startswith(null_value):
+        return null_value + value
+    return value
+
 
 class SQL2CSV(CSVKitUtility):
     description = 'Execute a SQL query on a database and output the result to a CSV file.'
@@ -38,6 +59,15 @@ class SQL2CSV(CSVKitUtility):
         self.argparser.add_argument(
             '-H', '--no-header-row', dest='no_header_row', action='store_true',
             help='Do not output column names.')
+        self.argparser.add_argument(
+            '--null-value', dest='null_value', nargs='?', const=DEFAULT_NULL_VALUE, default=None,
+            help='Write SQL NULL values as this marker, so that NULL is distinguishable from empty strings and '
+                 'from strings that literally contain the marker. If the option is given without a value, the '
+                 'default marker "%s" is used. Non-NULL values beginning with the marker are escaped by doubling '
+                 'the marker prefix, making the export reversible: a field equal to the marker reads back as NULL, '
+                 'a field beginning with two markers reads back as the text after the first marker, and every other '
+                 'field reads back as-is. The marker must be non-empty and must not contain line breaks. '
+                 'By default (without this option), NULL is written as an empty field.' % DEFAULT_NULL_VALUE)
 
         self.argparser.set_defaults(
             delimiter=None,
@@ -54,6 +84,13 @@ class SQL2CSV(CSVKitUtility):
     def main(self):
         if self.additional_input_expected() and not self.args.query:
             self.argparser.error('You must provide an input file or piped data.')
+
+        null_value = self.args.null_value
+        if null_value is not None and null_value == '':
+            self.argparser.error('The --null-value marker must not be an empty string, because an empty marker '
+                                 'cannot distinguish NULL from an empty string.')
+        if null_value is not None and any(char in null_value for char in ('\r', '\n')):
+            self.argparser.error('The --null-value marker must not contain line breaks.')
 
         try:
             engine = create_engine(self.args.connection_string, **parse_list(self.args.engine_option))
@@ -87,8 +124,13 @@ class SQL2CSV(CSVKitUtility):
             if not self.args.no_header_row:
                 output.writerow(rows._metadata.keys)
 
+            # The same encoding is applied to every row, in every batch fetched by
+            # the streaming cursor, so callers need not know which columns may be NULL.
             for row in rows:
-                output.writerow(row)
+                if null_value is None:
+                    output.writerow(row)
+                else:
+                    output.writerow([encode_null(value, null_value) for value in row])
 
         connection.close()
         engine.dispose()

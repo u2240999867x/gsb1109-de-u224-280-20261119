@@ -38,8 +38,11 @@ Executes arbitrary commands against a SQL database and outputs the results as a 
 .sp
 .nf
 .ft C
-usage: sql2csv [\-h] [\-v] [\-l] [\-V] [\-\-db CONNECTION_STRING] [\-\-query QUERY]
-               [\-e ENCODING] [\-H]
+usage: sql2csv [\-h] [\-v] [\-l] [\-V] [\-\-db CONNECTION_STRING]
+               [\-\-engine\-option ENGINE_OPTION ENGINE_OPTION]
+               [\-\-execution\-option EXECUTION_OPTION EXECUTION_OPTION]
+               [\-\-query QUERY] [\-e ENCODING] [\-H]
+               [\-\-null\-value [NULL_VALUE]]
                [FILE]
 
 Execute a SQL query on a database and output the result to a CSV file.
@@ -66,6 +69,20 @@ optional arguments:
   \-e ENCODING, \-\-encoding ENCODING
                         Specify the encoding of the input query file.
   \-H, \-\-no\-header\-row   Do not output column names.
+  \-\-null\-value [NULL_VALUE]
+                        Write SQL NULL values as this marker, so that NULL is
+                        distinguishable from empty strings and from strings
+                        that literally contain the marker. If the option is
+                        given without a value, the default marker "\eN" is
+                        used. Non\-NULL values beginning with the marker are
+                        escaped by doubling the marker prefix, making the
+                        export reversible: a field equal to the marker reads
+                        back as NULL, a field beginning with two markers reads
+                        back as the text after the first marker, and every
+                        other field reads back as\-is. The marker must be
+                        non\-empty and must not contain line breaks. By
+                        default (without this option), NULL is written as an
+                        empty field.
 .ft P
 .fi
 .UNINDENT
@@ -118,6 +135,55 @@ The connection string \fI\%accepts parameters\fP\&. For example, to set the enco
 .nf
 .ft C
 sql2csv \-\-db \(aqmysql://user:pass@host/database?charset=utf8\(aq \-\-query \(dqSELECT myfield FROM mytable\(dq
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.SS Distinguish NULL from empty strings
+.sp
+By default, a SQL NULL is written as an empty CSV field, which is indistinguishable from an empty string. Use the \fB\-\-null\-value\fP option to write NULL as an explicit marker instead:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+sql2csv \-\-db \(dqsqlite:///dummy.db\(dq \-\-null\-value \-\-query \(dqselect * from test\(dq
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.sp
+Without a value, the marker is \fB\eN\fP, the same convention used by MySQL\(aqs \fBSELECT ... INTO OUTFILE\fP and PostgreSQL\(aqs \fBCOPY ... WITH NULL\fP. A different marker can be given:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+sql2csv \-\-db \(dqsqlite:///dummy.db\(dq \-\-null\-value \(aq@NULL@\(aq \-\-query \(dqselect * from test\(dq
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.sp
+The export is reversible. The encoding rule, applied uniformly to every row of every batch (including streaming, multi\-batch result sets), is:
+.INDENT 0.0
+.IP \(bu 2
+A SQL NULL is written as the marker.
+.IP \(bu 2
+A non\-NULL value that begins with the marker is written with the marker doubled at the front, so that the marker can appear inside real values without ambiguity. For example, with the default marker, the text \fB\eN\fP is written \fB\eN\eN\fP, and \fB\eN suffix\fP is written \fB\eN\eN suffix\fP.
+.IP \(bu 2
+Every other value (including the empty string) is written unchanged.
+.UNINDENT
+.sp
+To read the data back, treat a field equal to the marker as NULL, remove one leading marker from a field that begins with two markers, and leave every other field as\-is. The empty string therefore stays an empty string, and the literal text \fBNULL\fP stays the text \fBNULL\fP.
+.sp
+When loading the CSV with \fI\%csvsql\fP or \fI\%in2csv\fP, the same marker can be passed to \fB\-\-null\-value\fP (with \fB\-\-blanks\fP to keep empty strings empty):
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+csvsql \-\-db \(dqsqlite:///dummy.db\(dq \-\-tables \(dqtest\(dq \-\-insert \-\-null\-value \(aq\eN\(aq \-\-blanks export.csv
 .ft P
 .fi
 .UNINDENT
