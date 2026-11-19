@@ -3,6 +3,9 @@
 *The changelog has only been started with version 0.3.12, previous
 changes must be reconstructed from revision history.*
 
+* **Unreleased**
+  - **Explicit column mapping**: `get_table()`, `create_table()` and `load_table()` accept a `column_mapping` parameter (also configurable via `Table.set_column_mapping()`) that maps source column names to database columns by exact, case-sensitive match. This allows source columns that only differ by case (e.g. `VendorID` and `vendorid`) to be stored in separate database columns, with filtering and updates by source column name resolving deterministically. Tables without a mapping keep the existing case-insensitive behaviour.
+
 * **2.0.0**: Major modernization and type annotations
   - **Type annotations**: Full `mypy --strict` compliance across all modules
   - **PEP 561**: Added `py.typed` marker for downstream type checking

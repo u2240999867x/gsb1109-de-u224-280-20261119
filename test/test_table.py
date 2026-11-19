@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.types import BIGINT, TEXT
 
+import dataset
 from dataset import chunked
 
 from .conftest import TEST_CITY_1, TEST_DATA
@@ -123,6 +124,90 @@ def test_cased_column_names(db):
     assert len(list(tbl.find(Place="Berlin"))) == 3
     assert len(list(tbl.find(place="Berlin"))) == 3
     assert len(list(tbl.find(PLACE="Berlin"))) == 3
+
+
+COLUMN_MAPPING = {
+    "VendorID": "vendor_id",
+    "vendorid": "legacy_vendor_id",
+}
+
+
+def test_column_mapping(db):
+    tbl = db.get_table("mapped_columns", column_mapping=COLUMN_MAPPING)
+    tbl.insert({"VendorID": "current", "vendorid": "legacy"})
+    assert set(tbl.columns) == {"id", "vendor_id", "legacy_vendor_id"}
+    assert tbl.has_column("VendorID")
+    assert tbl.has_column("vendorid")
+
+    row = tbl.find_one(VendorID="current")
+    assert row["vendor_id"] == "current"
+    assert row["legacy_vendor_id"] == "legacy"
+    row = tbl.find_one(vendorid="legacy")
+    assert row["vendor_id"] == "current"
+
+    tbl.update({"VendorID": "updated", "vendorid": "legacy"}, ["vendorid"])
+    row = tbl.find_one(vendorid="legacy")
+    assert row["vendor_id"] == "updated"
+    assert tbl.count(VendorID="updated") == 1
+
+    tbl.upsert({"VendorID": "other", "vendorid": "old"}, ["vendorid"])
+    assert tbl.count(VendorID="other") == 1
+    assert len(tbl) == 2
+    distinct = list(tbl.distinct("VendorID"))
+    assert {row["vendor_id"] for row in distinct} == {"updated", "other"}
+
+
+def test_column_mapping_insert_many(db):
+    tbl = db.get_table("mapped_many", column_mapping=COLUMN_MAPPING)
+    tbl.insert_many(
+        [
+            {"VendorID": "a", "vendorid": "b"},
+            {"VendorID": "c", "vendorid": "d"},
+        ]
+    )
+    assert set(tbl.columns) == {"id", "vendor_id", "legacy_vendor_id"}
+    assert tbl.count(VendorID="a") == 1
+    assert tbl.count(vendorid="d") == 1
+
+    tbl.update_many(
+        [
+            {"VendorID": "a2", "vendorid": "b"},
+            {"VendorID": "c2", "vendorid": "d"},
+        ],
+        ["vendorid"],
+    )
+    assert tbl.count(VendorID="a2") == 1
+    assert tbl.count(VendorID="c2") == 1
+
+
+def test_column_mapping_unmapped_columns(db):
+    tbl = db.get_table("mapped_partial", column_mapping=COLUMN_MAPPING)
+    tbl.insert({"VendorID": "current", "Place": "Berlin"})
+    assert set(tbl.columns) == {"id", "vendor_id", "Place"}
+    assert len(list(tbl.find(place="Berlin"))) == 1
+    assert len(list(tbl.find(PLACE="Berlin"))) == 1
+
+
+def test_column_mapping_reconnect(tmp_path):
+    url = f"sqlite:///{tmp_path / 'mapping.db'}"
+    db = dataset.connect(url)
+    tbl = db.get_table("channels", column_mapping=COLUMN_MAPPING)
+    tbl.insert({"VendorID": "current", "vendorid": "legacy"})
+    db.close()
+
+    # A new connection with the same mapping resolves source column names
+    # to the same database columns.
+    db = dataset.connect(url)
+    try:
+        tbl = db.get_table("channels", column_mapping=COLUMN_MAPPING)
+        assert set(tbl.columns) == {"id", "vendor_id", "legacy_vendor_id"}
+        row = tbl.find_one(VendorID="current")
+        assert row["legacy_vendor_id"] == "legacy"
+        tbl.update({"VendorID": "updated", "vendorid": "legacy"}, ["vendorid"])
+        assert tbl.count(vendorid="legacy") == 1
+        assert tbl.find_one(vendorid="legacy")["vendor_id"] == "updated"
+    finally:
+        db.close()
 
 
 def test_invalid_column_names(db):

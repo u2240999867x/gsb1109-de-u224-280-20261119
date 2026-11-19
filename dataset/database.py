@@ -253,6 +253,7 @@ class Database:
         primary_id: str | Literal[False] | None = None,
         primary_type: ColumnType | None = None,
         primary_increment: bool | None = None,
+        column_mapping: dict[str, str] | None = None,
     ) -> Table:
         """Create a new table.
 
@@ -263,6 +264,13 @@ class Database:
         The caller will be responsible for the uniqueness of ``primary_id`` if
         it is defined as a text type. You can disable auto-increment behaviour
         for numeric primary keys by setting `primary_increment` to `False`.
+
+        ``column_mapping`` can be used to explicitly map source column names
+        to database columns, see
+        :py:meth:`Table.set_column_mapping() <dataset.Table.set_column_mapping>`.
+        This is useful when a data source contains columns that only differ
+        by case (e.g. ``VendorID`` and ``vendorid``), which would otherwise
+        be conflated into a single column.
 
         Returns a :py:class:`Table <dataset.Table>` instance.
         ::
@@ -281,6 +289,10 @@ class Database:
             # no primary key
             table5 = db.create_table('population5',
                                      primary_id=False)
+            # explicit source-to-database column mapping
+            table6 = db.create_table('population6',
+                                     column_mapping={'Place': 'place',
+                                                     'PLACE': 'place_upper'})
         """
         assert not isinstance(primary_type, str), (
             "Text-based primary_type support is dropped, use db.types."
@@ -295,15 +307,24 @@ class Database:
                     primary_type=primary_type,
                     primary_increment=primary_increment,
                     auto_create=True,
+                    column_mapping=column_mapping,
                 )
+            elif column_mapping is not None:
+                self._tables[table_name].set_column_mapping(column_mapping)
             return self._tables[table_name]
 
-    def load_table(self, table_name: str) -> Table:
+    def load_table(
+        self, table_name: str, column_mapping: dict[str, str] | None = None
+    ) -> Table:
         """Load a table.
 
         This will fail if the tables does not already exist in the database. If
         the table exists, its columns will be reflected and are available on
         the :py:class:`Table <dataset.Table>` object.
+
+        ``column_mapping`` can be used to explicitly map source column names
+        to database columns, see
+        :py:meth:`Table.set_column_mapping() <dataset.Table.set_column_mapping>`.
 
         Returns a :py:class:`Table <dataset.Table>` instance.
         ::
@@ -313,7 +334,11 @@ class Database:
         table_name = normalize_table_name(table_name)
         with self.lock:
             if table_name not in self._tables:
-                self._tables[table_name] = Table(self, table_name)
+                self._tables[table_name] = Table(
+                    self, table_name, column_mapping=column_mapping
+                )
+            elif column_mapping is not None:
+                self._tables[table_name].set_column_mapping(column_mapping)
             return self._tables[table_name]
 
     def get_table(
@@ -322,6 +347,7 @@ class Database:
         primary_id: str | Literal[False] | None = None,
         primary_type: ColumnType | None = None,
         primary_increment: bool | None = None,
+        column_mapping: dict[str, str] | None = None,
     ) -> Table:
         """Load or create a table.
 
@@ -333,9 +359,13 @@ class Database:
             table = db['population']
         """
         if not self.ensure_schema:
-            return self.load_table(table_name)
+            return self.load_table(table_name, column_mapping=column_mapping)
         return self.create_table(
-            table_name, primary_id, primary_type, primary_increment
+            table_name,
+            primary_id,
+            primary_type,
+            primary_increment,
+            column_mapping=column_mapping,
         )
 
     def __getitem__(self, table_name: str) -> Table:

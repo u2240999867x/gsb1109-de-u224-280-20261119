@@ -53,6 +53,7 @@ class Table:
         primary_type: ColumnType | None = None,
         primary_increment: bool | None = None,
         auto_create: bool = False,
+        column_mapping: dict[str, str] | None = None,
     ):
         """Initialise the table from database schema."""
         self.db = database
@@ -70,6 +71,29 @@ class Table:
             primary_increment = self._primary_type in (Types.integer, Types.bigint)
         self._primary_increment = primary_increment
         self._auto_create = auto_create
+        self._column_mapping: dict[str, str] = {}
+        self.set_column_mapping(column_mapping)
+
+    def set_column_mapping(self, column_mapping: dict[str, str] | None) -> None:
+        """Set an explicit mapping of source column names to database columns.
+
+        This is useful when a data source contains columns that would
+        otherwise be conflated by case-insensitive matching, e.g. ``VendorID``
+        and ``vendorid``. Each source column name is mapped, by exact
+        (case-sensitive) match, to its own database column::
+
+            table = db.get_table('channels', column_mapping={
+                'VendorID': 'vendor_id',
+                'vendorid': 'legacy_vendor_id',
+            })
+
+        Columns not present in the mapping are matched case-insensitively
+        against the database schema, as before.
+        """
+        self._column_mapping = {}
+        for source, target in (column_mapping or {}).items():
+            source = normalize_column_name(source)
+            self._column_mapping[source] = normalize_column_name(target)
 
     @property
     def exists(self) -> bool:
@@ -120,12 +144,21 @@ class Table:
         """Check if a column with the given name exists on this table."""
         if column is None:
             return False
-        key = normalize_column_key(normalize_column_name(column))
+        column = self._get_column_name(column)
+        key = normalize_column_key(column)
         return key in self._column_keys
 
     def _get_column_name(self, name: str) -> str:
-        """Find the best column name with case-insensitive matching."""
+        """Find the best column name for a given source column name.
+
+        Explicitly mapped source columns are matched exactly
+        (case-sensitively); all other names fall back to case-insensitive
+        matching against the database schema.
+        """
         name = normalize_column_name(name)
+        mapped = self._column_mapping.get(name)
+        if mapped is not None:
+            return mapped
         key = normalize_column_key(name)
         if key is None:
             return name
@@ -224,11 +257,11 @@ class Table:
         self._sync_columns(sync_row, ensure, types=types)
 
         # Get columns name list to be used for padding later.
-        columns = sync_row.keys()
+        columns = [self._get_column_name(key) for key in sync_row]
 
         chunk: list[MutableRow] = []
         for index, row in enumerate(rows):
-            chunk.append(dict(row))
+            chunk.append({self._get_column_name(k): v for k, v in row.items()})
 
             # Insert when chunk_size is fulfilled or this is the last row
             if len(chunk) == chunk_size or index == len(rows) - 1:
@@ -292,17 +325,16 @@ class Table:
         See :py:meth:`update() <dataset.Table.update>` for details on
         the other parameters.
         """
-        keys = ensure_strings(keys)
+        keys = [self._get_column_name(k) for k in ensure_strings(keys)]
 
         chunk: list[MutableRow] = []
         columns: list[str] = []
         for index, row in enumerate(rows):
-            columns.extend(
-                col for col in row if (col not in columns) and (col not in keys)
-            )
-
             # bindparam requires names to not conflict (cannot be "id" for id)
-            row_ = dict(row)
+            row_ = {self._get_column_name(k): v for k, v in row.items()}
+            columns.extend(
+                col for col in row_ if (col not in columns) and (col not in keys)
+            )
             for key in keys:
                 row_[f"_{key}"] = row_[key]
                 row_.pop(key)
@@ -849,6 +881,7 @@ class Table:
             if isinstance(column, ClauseElement):
                 clauses.append(column)
             else:
+                column = self._get_column_name(column)
                 if not self.has_column(column):
                     raise DatasetError(f"No such column: {column}")
                 columns.append(self.table.c[column])
