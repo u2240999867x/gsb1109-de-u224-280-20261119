@@ -32,7 +32,8 @@ gt, >          Greater than
 lt, <          Less than
 gte, >=        Greater or equal
 lte, <=        Less or equal
-!=, <>, not    Not equal to a single value
+=, ==, is      Equal to a single value; ``None`` becomes ``IS NULL``
+!=, <>, not    Not equal to a single value; ``None`` becomes ``IS NOT NULL``
 in             Value is in the given sequence
 notin          Value is not in the given sequence
 like, ilike    Text search, ILIKE is case-insensitive. Use ``%`` as a wildcard
@@ -42,8 +43,54 @@ startswith     String starts with
 endswith       String ends with
 ============== ============================================================
 
+NULL values
+-----------
+
+``None`` is matched explicitly rather than relying on SQL's three-valued
+logic, so a NULL column can be selected directly::
+
+    # rows where status IS NULL
+    results = table.find(status=None)
+    # equivalent explicit forms
+    results = table.find(status={'is': None})
+    # rows where status IS NOT NULL
+    results = table.find(status={'!=': None})
+
+This makes it possible to combine a NULL check with another filter, and the
+same keyword arguments produce identical results for ``find()`` and
+``count()``::
+
+    from sqlalchemy import or_
+
+    unsettled = or_(table.table.c.status.is_(None),
+                    table.table.c.status.in_(['PENDING', 'REVIEW']))
+    # status is unsettled/candidate AND a counterparty number is present
+    table.find(unsettled, counterparty={'!=': None})
+    table.count(unsettled, counterparty={'!=': None})
+
+Empty candidate lists
+---------------------
+
+Sequence filters have a definite result for an empty list instead of relying
+on backend-specific handling of empty ``IN`` clauses::
+
+    table.find(status=[])                 # always matches nothing
+    table.find(status={'in': []})         # always matches nothing
+    table.find(status={'notin': []})      # always matches every row
+
+Missing columns
+---------------
+
 Querying for a specific value on a column that does not exist on the table
-will return no results.
+will return no results. When such a filter is combined with other, valid
+filters, the missing-column branch is ignored rather than silently discarding
+the other branches. This keeps queries working against older archived tables
+that predate a newly added column::
+
+    # 'status' does not exist on this archived table, but the counterparty
+    # filter still limits the results
+    results = table.find(status=['PENDING'], counterparty='C1')
+
 
 You can also pass `SQLAlchemy core expressions`_ directly into the
 :py:meth:`table.find() <dataset.Table.find>` method as positional arguments.

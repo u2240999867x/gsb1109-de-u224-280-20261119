@@ -4,6 +4,7 @@
 changes must be reconstructed from revision history.*
 
 * **2.0.0**: Major modernization and type annotations
+  - **Deterministic filter semantics**: `find()`/`count()`/`find_one()`/`delete()` now treat `None` as an explicit `IS NULL` (and `{'!=': None}` as `IS NOT NULL`), empty `in` lists as match-nothing, and empty `notin` lists as match-all. A filter on a missing column is ignored when combined with other valid filters instead of silently discarding them, so archived tables without a newly added column keep working.
   - **Type annotations**: Full `mypy --strict` compliance across all modules
   - **PEP 561**: Added `py.typed` marker for downstream type checking
   - **New types**: Exported `OutRow`, `RowFactory`, `QueryError` for downstream use

@@ -4,7 +4,7 @@ import warnings
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlalchemy import false, func, select
+from sqlalchemy import false, func, select, true
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.schema import Column, Index
 from sqlalchemy.schema import Table as SQLATable
@@ -507,18 +507,32 @@ class Table:
             return self.table.c[column] >= value
         if op in ("<=", "lte"):
             return self.table.c[column] <= value
+        column_obj = self.table.c[column]
         if op in ("=", "==", "is"):
-            return self.table.c[column] == value
+            # ``None`` must compare against NULL explicitly, otherwise SQL's
+            # three-valued logic would silently drop every row.
+            if value is None:
+                return column_obj.is_(None)
+            return column_obj == value
         if op in ("!=", "<>", "not"):
-            return self.table.c[column] != value
+            if value is None:
+                return column_obj.isnot(None)
+            return column_obj != value
         if op in ("in",):
             if not isinstance(value, (list, tuple, set)):
                 raise QueryError(f"'in' filter requires a list, got {type(value)}")
-            return self.table.c[column].in_(value)
+            # An empty candidate list is a definite match-nothing rather than
+            # relying on backend-specific handling of empty IN clauses.
+            if len(value) == 0:
+                return false()
+            return column_obj.in_(value)
         if op in ("notin",):
             if not isinstance(value, (list, tuple, set)):
                 raise QueryError(f"'notin' filter requires a list, got {type(value)}")
-            return self.table.c[column].notin_(value)
+            # Every row is outside an empty candidate list.
+            if len(value) == 0:
+                return true()
+            return column_obj.notin_(value)
         if op in ("between", ".."):
             if not isinstance(value, (list, tuple)) or len(value) != 2:
                 raise QueryError("'between' filter requires a list of two values")
@@ -540,17 +554,31 @@ class Table:
         clauses: Iterable[ColumnElement[bool]] = (),
     ) -> ColumnElement[bool]:
         clauses = list(clauses)
+        missing_column = False
         for column, value in args.items():
             column = self._get_column_name(column)
             if not self.has_column(column):
-                clauses.append(false())
-            elif isinstance(value, (list, tuple, set)):
+                # A filter on a column that does not exist (e.g. a status
+                # column absent from an old archived table) cannot exclude any
+                # row, so it is treated as a neutral branch rather than a
+                # false() that would silently discard every other, still
+                # valid branch of the combined filter.
+                missing_column = True
+                continue
+            if isinstance(value, (list, tuple, set)):
                 clauses.append(self._generate_clause(column, "in", value))
             elif isinstance(value, dict):
                 for op, op_value in value.items():
                     clauses.append(self._generate_clause(column, op, op_value))
+            elif value is None:
+                clauses.append(self._generate_clause(column, "is", value))
             else:
                 clauses.append(self._generate_clause(column, "=", value))
+        # If every keyword filter targeted missing columns (and no explicit
+        # clause constrains the query), keep the historical behaviour of
+        # matching nothing instead of silently returning the whole table.
+        if missing_column and not clauses:
+            clauses.append(false())
         return and_(True, *clauses)
 
     def _args_to_order_by(

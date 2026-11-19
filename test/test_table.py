@@ -449,3 +449,88 @@ def test_key_order(db, table):
 def test_empty_query(table):
     empty = list(table.find(place="not in data"))
     assert len(empty) == 0, empty
+
+
+def test_null_filter_is_explicit(db):
+    tbl = db["null_filter"]
+    tbl.insert_many(
+        [
+            {"status": None, "cp": "C1"},
+            {"status": "PENDING", "cp": None},
+            {"status": "DONE", "cp": "C3"},
+        ]
+    )
+    # NULL must be selectable explicitly, and find/count must agree.
+    assert [r["cp"] for r in tbl.find(status=None)] == ["C1"]
+    assert tbl.count(status=None) == 1
+    assert tbl.count(status={"is": None}) == 1
+    assert tbl.count(status={"=": None}) == 1
+    # IS NOT NULL through the not-equal operators.
+    assert tbl.count(status={"!=": None}) == 2
+    assert tbl.count(status={"not": None}) == 2
+    assert tbl.count(cp=None) == 1
+
+
+def test_empty_sequence_filter_is_deterministic(db):
+    tbl = db["empty_sequence"]
+    tbl.insert_many(
+        [
+            {"status": "PENDING", "cp": "C1"},
+            {"status": "DONE", "cp": None},
+            {"status": None, "cp": "C3"},
+        ]
+    )
+    # An empty IN list matches nothing, for both list shorthand and dict form.
+    assert list(tbl.find(status=[])) == []
+    assert tbl.count(status=[]) == 0
+    assert tbl.count(status={"in": []}) == 0
+    # An empty NOT IN list matches every row.
+    assert tbl.count(status={"notin": []}) == 3
+    # The neutral empty NOT IN must not interfere with a second, valid branch.
+    assert tbl.count(status={"notin": []}, cp="C1") == 1
+    # An empty IN still yields a definite no-match when combined.
+    assert tbl.count(status=[], cp="C1") == 0
+
+
+def test_combined_reconciliation_filters(db):
+    from sqlalchemy import or_
+
+    tbl = db["reconciliation"]
+    tbl.insert_many(
+        [
+            {"status": None, "cp": "C1"},  # unsettled + counterparty: include
+            {"status": "PENDING", "cp": "C2"},  # candidate + counterparty: include
+            {"status": "DONE", "cp": "C3"},  # not a candidate: exclude
+            {"status": None, "cp": None},  # unsettled but no counterparty
+            {"status": "PENDING", "cp": None},  # candidate but no counterparty
+        ]
+    )
+    candidates = ["PENDING", "REVIEW"]
+    unsettled_or_candidate = or_(
+        tbl.table.c.status.is_(None),
+        tbl.table.c.status.in_(candidates),
+    )
+    # Same combined filter must work identically for find and count.
+    found = list(tbl.find(unsettled_or_candidate, cp={"!=": None}))
+    assert sorted(row["id"] for row in found) == [1, 2]
+    assert tbl.count(unsettled_or_candidate, cp={"!=": None}) == 2
+    # A null counterparty can also be selected explicitly.
+    assert tbl.count(unsettled_or_candidate, cp=None) == 2
+
+
+def test_missing_column_keeps_other_branches(db):
+    # An old archived table that never received the new status column.
+    tbl = db["archive"]
+    tbl.insert_many([{"cp": "C1"}, {"cp": None}, {"cp": "C3"}])
+    assert "status" not in tbl.columns
+
+    # A filter that only targets a missing column still yields no rows.
+    assert list(tbl.find(status=["PENDING"])) == []
+    assert tbl.count(status=None) == 0
+
+    # But the missing column must not silently discard the other, valid branch.
+    rows = list(tbl.find(status=["PENDING"], cp="C1"))
+    assert len(rows) == 1
+    assert rows[0]["cp"] == "C1"
+    assert tbl.count(status=None, cp={"!=": None}) == 2
+    assert tbl.count(status=["PENDING"], cp={"!=": None}) == 2
