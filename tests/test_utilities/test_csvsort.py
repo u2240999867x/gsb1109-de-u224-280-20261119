@@ -98,3 +98,89 @@ class TestCSVSort(CSVKitTestCase, ColumnsTests, EmptyFileTests, NamesTests):
             ])
 
         input_file.close()
+
+    def test_max_rows(self):
+        self.assertRows(['--max-rows', '2', 'examples/test_utf8.csv'], [
+            ['foo', 'bar', 'baz'],
+            ['1', '2', '3'],
+            ['4', '5', 'ʤ'],
+        ])
+
+    def test_max_rows_matches_single_pass(self):
+        for args in ([], ['-r'], ['-i'], ['-c', '2'], ['--no-inference']):
+            single_pass = self.get_output(args + ['examples/testxls_converted.csv'])
+
+            for max_rows in (1, 2, 3, 100):
+                self.assertEqual(
+                    single_pass,
+                    self.get_output(args + ['--max-rows', str(max_rows), 'examples/testxls_converted.csv']),
+                )
+
+    def test_max_rows_stable(self):
+        input_file = io.BytesIO(b'a,b\n1,x\n2,y\n1,z\n2,w\n1,v\n')
+
+        with stdin_as_string(input_file):
+            self.assertLines(['--max-rows', '1', '-c', '1'], [
+                'a,b',
+                '1,x',
+                '1,z',
+                '1,v',
+                '2,y',
+                '2,w',
+            ])
+
+        input_file.close()
+
+    def test_max_rows_reverse_stable(self):
+        input_file = io.BytesIO(b'a,b\n1,x\n2,y\n1,z\n2,w\n1,v\n')
+
+        with stdin_as_string(input_file):
+            self.assertLines(['--max-rows', '1', '-c', '1', '-r'], [
+                'a,b',
+                '2,y',
+                '2,w',
+                '1,x',
+                '1,z',
+                '1,v',
+            ])
+
+        input_file.close()
+
+    def test_max_rows_type_inference_is_global(self):
+        # The "x" in a later chunk means column "a" is text, so the numbers in earlier
+        # chunks must be ordered as text too, not as numbers.
+        input_file = io.BytesIO(b'a\n1\n2\n3\nx\n10\n')
+
+        with stdin_as_string(input_file):
+            self.assertLines(['--max-rows', '2'], [
+                'a',
+                '1',
+                '10',
+                '2',
+                '3',
+                'x',
+            ])
+
+        input_file.close()
+
+    def test_max_rows_unseekable_stdin(self):
+        class UnseekableStdin(io.TextIOWrapper):
+            def seekable(self):
+                return False
+
+        input_file = UnseekableStdin(io.BufferedReader(io.BytesIO(b'a,b,c\n4,5,6\n1,2,3\n')))
+        stdin = sys.stdin
+        sys.stdin = input_file
+
+        try:
+            self.assertLines(['--max-rows', '1'], [
+                'a,b,c',
+                '1,2,3',
+                '4,5,6',
+            ])
+        finally:
+            sys.stdin = stdin
+            input_file.close()
+
+    def test_max_rows_invalid(self):
+        self.assertError(launch_new_instance, ['--max-rows', '0'], '--max-rows must be at least 1.')

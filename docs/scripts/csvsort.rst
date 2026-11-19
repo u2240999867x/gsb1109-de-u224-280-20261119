@@ -14,7 +14,7 @@ Sort CSV files. Like the Unix "sort" command, but for tabular data:
                   [-S] [--blanks] [--null-value NULL_VALUES [NULL_VALUES ...]]
                   [--date-format DATE_FORMAT] [--datetime-format DATETIME_FORMAT]
                   [-H] [-K SKIP_LINES] [-v] [-l] [--zero] [-V] [-n] [-c COLUMNS]
-                  [-r] [-i] [-y SNIFF_LIMIT] [-I]
+                  [-r] [-i] [-y SNIFF_LIMIT] [-I] [--max-rows MAX_ROWS]
                   [FILE]
 
    Sort CSV files. Like the Unix "sort" command, but for tabular data.
@@ -40,12 +40,18 @@ Sort CSV files. Like the Unix "sort" command, but for tabular data:
      -I, --no-inference    Disable type inference (and --locale, --date-format,
                            --datetime-format, --no-leading-zeroes) when parsing
                            the input.
+     --max-rows MAX_ROWS   The maximum number of rows to sort in memory at once.
+                           If the input contains more rows, it is sorted in
+                           chunks of this size which are spilled to temporary
+                           files and merged, so files too large to fit in memory
+                           can be sorted. The output is identical to sorting
+                           the entire file in a single pass.
 
 See also: :doc:`../common_arguments`.
 
 .. note::
 
-    If your file is large, try :code:`sort -t, file.csv` instead.
+    If your file is large, try :code:`csvsort --max-rows`, or :code:`sort -t, file.csv` instead.
 
 Examples
 ========
@@ -61,3 +67,9 @@ View the five states with the most individuals claiming veteran's education bene
 .. code-block:: bash
 
    csvcut -c 1,9 examples/realdata/FY09_EDU_Recipients_by_State.csv | csvsort -r -c 2 | head -n 5
+
+Sort a file that is too large to fit in memory, holding at most 100,000 rows in memory at a time:
+
+.. code-block:: bash
+
+   csvsort --max-rows 100000 -c 9 examples/realdata/FY09_EDU_Recipients_by_State.csv
