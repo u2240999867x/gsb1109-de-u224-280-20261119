@@ -19,6 +19,7 @@ from etlhelper.etl import (
     fetchone,
     fetchall,
     generate_insert_sql,
+    generate_mapped_insert_sql,
     iter_chunks,
     iter_rows,
     load,
@@ -29,6 +30,7 @@ from etlhelper.connect import (
     get_connection_string,
     get_sqlalchemy_connection_string,
 )
+from etlhelper.mapping import validate_column_mapping
 from etlhelper.utils import (
     table_info,
 )
@@ -92,6 +94,7 @@ __all__ = [
     "fetchall",
     "fetchone",
     "generate_insert_sql",
+    "generate_mapped_insert_sql",
     "get_connection_string",
     "get_sqlalchemy_connection_string",
     "iter_chunks",
@@ -100,4 +103,5 @@ __all__ = [
     "log_to_console",
     "row_factories",
     "table_info",
+    "validate_column_mapping",
 ]

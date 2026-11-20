@@ -30,6 +30,12 @@ from etlhelper.exceptions import (
     ETLHelperExtractError,
     ETLHelperInsertError,
     ETLHelperQueryError,
+    ETLHelperRequiredColumnError,
+)
+from etlhelper.mapping import (
+    ColumnMapping,
+    project_row,
+    validate_column_mapping,
 )
 from etlhelper.row_factories import dict_row_factory
 from etlhelper.types import (
@@ -43,6 +49,14 @@ from etlhelper.types import (
 
 logger = logging.getLogger('etlhelper')
 CHUNKSIZE = 5000
+
+_PARAMSTYLES = {
+    "qmark": "?",
+    "numeric": ":{number}",
+    "named": ":{name}",
+    "format": "%s",
+    "pyformat": "%({name})s"
+}
 
 
 class FailedRow(NamedTuple):
@@ -290,7 +304,7 @@ def executemany(
                 chunk = list(transform(chunk))
 
             # Show first row as example of data
-            if processed == 0:
+            if processed == 0 and chunk:
                 logger.debug(f"First row: {chunk[0]}")
 
             # Run query
@@ -514,6 +528,8 @@ def load(
         on_error: Optional[Callable] = None,
         commit_chunks: bool = True,
         chunk_size: int = CHUNKSIZE,
+        column_mapping: Optional[ColumnMapping] = None,
+        version_field: Optional[str] = None,
         ) -> tuple[int, int]:
     """
     Load data from iterable of named tuples or dictionaries into pre-existing
@@ -526,6 +542,16 @@ def load(
     tuples.  on_error is a function that is called at the end of each chunk,
     with the list as the only argument.
 
+    When ``column_mapping`` is given, each source dictionary is projected onto
+    the target table by position instead of binding its keys directly.  The
+    mapping maps target column names to the source field that supplies them;
+    a target column may instead map to a dictionary of source fields keyed by
+    the value of ``version_field`` on each record.  The version field itself
+    and any unmapped fields (e.g. diagnostic fields) are never bound to a
+    business column.  Records that do not provide a value for a required
+    (NOT NULL, no default) target column are rejected via ``on_error`` rather
+    than sent to the database.
+
     :param table: name of table
     :param conn: dbapi connection
     :param rows: iterable of named tuples or dictionaries of data
@@ -534,7 +560,14 @@ def load(
     :param on_error: function to be applied to failed rows in each chunk
     :param commit_chunks: commit after each chunk (see executemany)
     :param chunk_size: size of chunks to group data by
+    :param column_mapping: target column to source field(s) mapping; source
+                           records must be dictionaries when this is given
+    :param version_field: source field whose value selects between
+                          version-specific source fields
     :return: the number of rows processed and the number of rows failed
+    :raises ETLHelperMappingConflictError: if the mapping assigns multiple
+                                           source fields to one target column
+                                           without a way to choose
     """
     # Return early if rows is empty
     if not rows:
@@ -546,17 +579,21 @@ def load(
         rows = iter(rows)
         first_row = next(rows)  # This line throws an exception if empty
         rows = chain([first_row], rows)
-
-        if transform:
-            # next(iter(var)) is equivalent to var[0] but also works for generators,
-            # which may be returned by the transform.
-            # We need a deepcopy to stop the first row being transformed twice.
-            first_row_transformed = next(iter(transform([deepcopy(first_row)])))
-        else:
-            first_row_transformed = first_row
-
     except StopIteration:
         return 0, 0
+
+    if column_mapping:
+        return _load_with_mapping(
+            table, conn, rows, first_row, column_mapping, version_field,
+            transform, on_error, commit_chunks, chunk_size)
+
+    if transform:
+        # next(iter(var)) is equivalent to var[0] but also works for generators,
+        # which may be returned by the transform.
+        # We need a deepcopy to stop the first row being transformed twice.
+        first_row_transformed = next(iter(transform([deepcopy(first_row)])))
+    else:
+        first_row_transformed = first_row
 
     # Generate insert query
     query = generate_insert_sql(table, first_row_transformed, conn)
@@ -572,6 +609,63 @@ def load(
         chunk_size=chunk_size,
     )
     return processed, failed
+
+
+def _load_with_mapping(
+        table: str,
+        conn: Connection,
+        rows: Iterable[InputRow],
+        first_row: Row,
+        column_mapping: ColumnMapping,
+        version_field: Optional[str],
+        transform: Optional[Transform],
+        on_error: Optional[Callable],
+        commit_chunks: bool,
+        chunk_size: int,
+        ) -> tuple[int, int]:
+    """Load dictionary records through an explicit target-column mapping."""
+    if not hasattr(first_row, 'keys'):
+        msg = ("column_mapping requires input records to be dictionaries; "
+               f"got {type(first_row)} instead.")
+        raise ETLHelperInsertError(msg)
+
+    # Reject ambiguous mappings before any data are written
+    validate_column_mapping(column_mapping, version_field)
+
+    # Target columns are written in the fixed order of the mapping, so the
+    # order of keys inside each source dictionary is irrelevant.
+    target_columns = tuple(column_mapping.keys())
+    query = generate_mapped_insert_sql(table, target_columns, conn)
+    required_columns = _required_target_columns(table, target_columns, conn)
+
+    required_positions = [
+        (index, column) for index, column in enumerate(target_columns)
+        if column in required_columns
+    ]
+    mapping_transform, rejected_count = _make_mapped_transform(
+        column_mapping, target_columns, version_field,
+        required_positions, on_error)
+
+    if transform:
+        def combined_transform(chunk: Chunk) -> Chunk:
+            return mapping_transform(list(transform(chunk)))
+        final_transform = combined_transform
+    else:
+        final_transform = mapping_transform
+
+    processed, failed = executemany(
+        query,
+        conn,
+        rows,
+        transform=final_transform,
+        on_error=on_error,
+        commit_chunks=commit_chunks,
+        chunk_size=chunk_size,
+    )
+    # Rejected records never reached the database, so add them to both the
+    # processed total and the failure count.
+    rejected = rejected_count[0]
+    return processed + rejected, failed + rejected
 
 
 def generate_insert_sql(
@@ -593,13 +687,6 @@ def generate_insert_sql(
                                   parameter error
     """
     helper = DB_HELPER_FACTORY.from_conn(conn)
-    paramstyles = {
-        "qmark": "?",
-        "numeric": ":{number}",
-        "named": ":{name}",
-        "format": "%s",
-        "pyformat": "%({name})s"
-    }
 
     # Namedtuples use a query with positional placeholders
     if hasattr(row, '_asdict'):
@@ -608,11 +695,7 @@ def generate_insert_sql(
         # Convert namedtuple to dictionary to easily access keys
         row_dict = row._asdict()
         columns = row_dict.keys()
-        if paramstyle == "numeric":
-            placeholders = [paramstyles[paramstyle].format(number=i + 1)
-                            for i in range(len(columns))]
-        else:
-            placeholders = [paramstyles[paramstyle]] * len(columns)
+        placeholders = _positional_placeholders(paramstyle, len(columns))
 
     # Dictionaries use a query with named placeholders
     elif hasattr(row, 'keys'):
@@ -623,7 +706,7 @@ def generate_insert_sql(
             raise ETLHelperInsertError(msg)
 
         columns = row.keys()
-        placeholders = [paramstyles[paramstyle].format(name=c) for c in columns]
+        placeholders = [_PARAMSTYLES[paramstyle].format(name=c) for c in columns]
 
     else:
         msg = f"Row is not a dictionary or namedtuple ({type(row)})"
@@ -637,6 +720,104 @@ def generate_insert_sql(
     sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
 
     return sql
+
+
+def _positional_placeholders(paramstyle: str, count: int) -> list[str]:
+    """Return ``count`` positional placeholders for the given paramstyle."""
+    if paramstyle == "numeric":
+        return [_PARAMSTYLES[paramstyle].format(number=i + 1)
+                for i in range(count)]
+    return [_PARAMSTYLES[paramstyle]] * count
+
+
+def generate_mapped_insert_sql(
+        table: str,
+        target_columns: tuple[str, ...],
+        conn: Connection
+        ) -> str:
+    """
+    Generate an insert statement with positional placeholders for the
+    given target columns.  Mapped rows are bound by position, so this
+    works for every supported database helper.
+
+    :param table: name of table
+    :param target_columns: target columns in database column order
+    :param conn: dbapi connection
+    :return: SQL statement to insert data into the given table
+    """
+    helper = DB_HELPER_FACTORY.from_conn(conn)
+    paramstyle = helper.positional_paramstyle
+    placeholders = _positional_placeholders(paramstyle, len(target_columns))
+
+    # Validate identifiers to prevent malicious code injection
+    for identifier in (table, *target_columns):
+        validate_identifier(identifier)
+
+    sql = (f"INSERT INTO {table} ({', '.join(target_columns)}) "
+           f"VALUES ({', '.join(placeholders)})")
+    return sql
+
+
+def _required_target_columns(
+        table: str,
+        target_columns: tuple[str, ...],
+        conn: Connection
+        ) -> set[str]:
+    """
+    Return the subset of target columns that must be supplied by every
+    record: NOT NULL columns without a database default.
+    """
+    # Imported here to avoid a circular import at module load time
+    from etlhelper.utils import table_info
+
+    columns = table_info(table, conn)
+    return {
+        column.name for column in columns
+        if column.name in target_columns
+        and column.not_null and not column.has_default
+    }
+
+
+def _make_mapped_transform(
+        mapping: ColumnMapping,
+        target_columns: tuple[str, ...],
+        version_field: Optional[str],
+        required_positions: list[tuple[int, str]],
+        on_error: Optional[Callable]
+        ) -> tuple[Transform, list[int]]:
+    """
+    Build a transform that projects each source dictionary onto the
+    target columns using the mapping.  Records missing a required column
+    are rejected instead of being passed to the database.
+
+    :return: the transform and a one-element list holding the running
+             count of rejected records
+    """
+    rejected_count = [0]
+
+    def transform(chunk: Chunk) -> Chunk:
+        accepted: Chunk = []
+        for row in chunk:
+            values = project_row(row, mapping, target_columns, version_field)
+
+            missing = [
+                column for position, column in required_positions
+                if values[position] is None
+            ]
+            if missing:
+                exception = ETLHelperRequiredColumnError(
+                    f"Record is missing required target column(s) "
+                    f"{missing}: {row}")
+                logger.info("Rejecting row: %s", exception)
+                rejected_count[0] += 1
+                if on_error:
+                    on_error([FailedRow(row, exception)])
+                continue
+
+            accepted.append(values)
+        return accepted
+
+    return transform, rejected_count
 
 
 def validate_identifier(identifier: str) -> None:

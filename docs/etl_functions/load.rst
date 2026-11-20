@@ -18,6 +18,55 @@ list of column for the insert query. If later items in the data contain
 extra columns, those columns will not be inserted and no error will be
 raised.
 
+Column mappings
+---------------
+
+Source records do not have to use the same field names as the target
+table.  Pass a ``column_mapping`` that maps each target column to the
+source field that supplies it.  Values are bound by position in the
+order of the mapping, so the order of keys inside each source
+dictionary is irrelevant, and fields absent from the mapping (e.g.
+diagnostic fields) are never written to business columns.
+
+.. code-block:: python
+
+    mapping = {
+        "ReportCode": "code",
+        "Station": "station",
+        "Quality": "quality",
+    }
+    load("sensor_data", conn, rows, column_mapping=mapping)
+
+Records produced by different collector versions can use different
+source field names for the same target column.  In that case, map the
+target column to a dictionary of source fields keyed by version and
+pass the name of the field that identifies each record's version as
+``version_field``.  The value of the version field selects the source
+field declared by that record.
+
+.. code-block:: python
+
+    # Old collector uses `code`; the new collector uses `report_code`.
+    # On old records `report_code` is only a diagnostic field.
+    mapping = {
+        "ReportCode": {"v1": "code", "v2": "report_code"},
+        "Station": "station",
+        "Quality": "quality",
+    }
+    load("sensor_data", conn, rows,
+         column_mapping=mapping, version_field="collector_version")
+
+If two different source fields would assign the same target column and
+there is no way to choose between them, an
+``ETLHelperMappingConflictError`` is raised before any data are
+written.  Records missing a value for a required target column
+(``NOT NULL`` with no default) are rejected instead of being sent to
+the database; rejected records are included in the failure count and,
+when ``on_error`` is set, passed to it as ``(row, exception)`` tuples.
+Nullable columns receive SQL ``NULL`` when their source field is
+missing or explicitly ``None``.  Each ``load`` call validates and uses
+only its own mapping.
+
 - :func:`executemany() <etlhelper.executemany>`: Applies SQL query with parameters
   supplied by iterable of data.  Customising the SQL query allows fine control.
 

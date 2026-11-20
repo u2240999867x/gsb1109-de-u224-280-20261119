@@ -15,6 +15,13 @@ etlhelper.row_factories
     :members:
 
 
+etlhelper.mapping
+^^^^^^^^^^^^^^^^^
+
+.. automodule:: etlhelper.mapping
+    :members:
+
+
 .. _db_helpers:
 
 DB Helpers
@@ -40,6 +47,8 @@ Exceptions
 .. autoclass:: etlhelper.exceptions.ETLHelperDbParamsError
 .. autoclass:: etlhelper.exceptions.ETLHelperExtractError
 .. autoclass:: etlhelper.exceptions.ETLHelperInsertError
+.. autoclass:: etlhelper.exceptions.ETLHelperMappingConflictError
+.. autoclass:: etlhelper.exceptions.ETLHelperRequiredColumnError
 .. autoclass:: etlhelper.exceptions.ETLHelperAbort
 .. autoclass:: etlhelper.exceptions.ETLHelperHelperError
 .. autoclass:: etlhelper.exceptions.ETLHelperBadIdentifierError

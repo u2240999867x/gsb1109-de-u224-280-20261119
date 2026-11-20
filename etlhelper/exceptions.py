@@ -28,6 +28,21 @@ class ETLHelperInsertError(ETLHelperError):
     """Exception raised when inserting data."""
 
 
+class ETLHelperMappingConflictError(ETLHelperError):
+    """
+    Exception raised when a column mapping assigns two different source
+    fields to the same target column without an explicit way to choose
+    between them.
+    """
+
+
+class ETLHelperRequiredColumnError(ETLHelperInsertError):
+    """
+    Exception raised when a record does not provide a value for a target
+    column that the database requires (and which has no default).
+    """
+
+
 class ETLHelperAbort(ETLHelperError):
     """Exception raised when `abort` is called."""
 
