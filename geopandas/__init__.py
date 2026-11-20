@@ -18,6 +18,8 @@ from geopandas.tools import (
     geocode,
     make_grid,
     reverse_geocode,
+    allocate_population,
+    PopulationAllocation,
 )
 from geopandas.tools._show_versions import show_versions
 

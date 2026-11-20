@@ -2,6 +2,17 @@
 
 ## Development version
 
+New features and improvements:
+
+- New ``geopandas.allocate_population`` tool estimates community population from
+  overlapping survey parcels. Overlaps are adjudicated by a user supplied
+  priority (with the original business number breaking ties), every covered area
+  is attributed to a single source even when that source has no population value,
+  and population is estimated under a uniform-density convention. The result
+  includes a community summary, per-source allocation records with the awarded
+  geometry and provenance, and a separate frame of inputs that could not
+  contribute any area.
+
 Bug fixes:
 
 - Fix the colorbar being shrunk when plotting with a ``"compressed"`` matplotlib

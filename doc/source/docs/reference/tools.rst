@@ -13,5 +13,7 @@ Tools
    clip
    geocode
    reverse_geocode
+   allocate_population
+   PopulationAllocation
    tools.collect
    points_from_xy
