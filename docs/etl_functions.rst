@@ -8,4 +8,5 @@ ETL functions
    etl_functions/transform.rst
    etl_functions/load.rst
    etl_functions/copy.rst
+   etl_functions/backfill.rst
    etl_functions/error_handling.rst

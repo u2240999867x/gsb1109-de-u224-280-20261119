@@ -41,3 +41,20 @@ class ETLHelperBadIdentifierError(ETLHelperError):
     Exception raised when identifier contains invalid characters.  This may
     indicate an attempt at SQL injection.
     """
+
+
+class ETLHelperBackfillError(ETLHelperError):
+    """Exception raised for invalid or failed resumable backfill operations."""
+
+
+class ETLHelperCommitUnconfirmedError(ETLHelperBackfillError):
+    """
+    Exception raised when the outcome of a destination commit cannot be
+    confirmed.  The block must not be rewritten; the caller has to reconcile
+    the destination before retrying.
+    """
+
+    def __init__(self, message, run_id=None, unconfirmed_range=None):
+        super().__init__(message)
+        self.run_id = run_id
+        self.unconfirmed_range = unconfirmed_range

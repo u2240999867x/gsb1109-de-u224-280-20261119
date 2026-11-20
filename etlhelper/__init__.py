@@ -24,6 +24,17 @@ from etlhelper.etl import (
     load,
     copy_table_rows,
 )
+from etlhelper.backfill import (
+    BackfillResult,
+    BackfillTables,
+    EventRange,
+    backfill,
+    confirmed_coverage,
+    copy_rows_resumable,
+    create_backfill_tables,
+    rejected_events,
+    resumable_copy,
+)
 from etlhelper.connect import (
     connect,
     get_connection_string,
@@ -82,11 +93,18 @@ def log_to_console(
 
 
 __all__ = [
+    "BackfillResult",
+    "BackfillTables",
     "DbParams",
+    "EventRange",
     "abort_etlhelper_threads",
+    "backfill",
+    "confirmed_coverage",
     "connect",
     "copy_rows",
+    "copy_rows_resumable",
     "copy_table_rows",
+    "create_backfill_tables",
     "execute",
     "executemany",
     "fetchall",
@@ -98,6 +116,8 @@ __all__ = [
     "iter_rows",
     "load",
     "log_to_console",
+    "rejected_events",
+    "resumable_copy",
     "row_factories",
     "table_info",
 ]

@@ -15,6 +15,15 @@ etlhelper.row_factories
     :members:
 
 
+etlhelper.backfill
+^^^^^^^^^^^^^^^^^^
+
+.. automodule:: etlhelper.backfill
+    :members: backfill, copy_rows_resumable, create_backfill_tables,
+              confirmed_coverage, rejected_events, BackfillResult,
+              BackfillTables, EventRange
+
+
 .. _db_helpers:
 
 DB Helpers
@@ -43,3 +52,5 @@ Exceptions
 .. autoclass:: etlhelper.exceptions.ETLHelperAbort
 .. autoclass:: etlhelper.exceptions.ETLHelperHelperError
 .. autoclass:: etlhelper.exceptions.ETLHelperBadIdentifierError
+.. autoclass:: etlhelper.exceptions.ETLHelperBackfillError
+.. autoclass:: etlhelper.exceptions.ETLHelperCommitUnconfirmedError
