@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add `datajudge.WithinRequirement.add_numeric_sum_constraint` and the
+  underlying `datajudge.constraints.numeric.NumericSum` constraint together with
+  `datajudge.db_access.get_sum`. The database-side sum is checked against an
+  inclusive interval; a selection without non-NULL values yields no amount and
+  is not equated with a sum of zero.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

@@ -809,6 +809,17 @@ def get_mean(
     return get_column(engine, ref, aggregate_operator=column_operator)
 
 
+def get_sum(
+    engine: sa.engine.Engine, ref: DataReference
+) -> tuple[Any, list[sa.Select]]:
+    """Return the database-side sum of the referenced column.
+
+    The sum ignores ``NULL`` values and is ``None`` if no non-NULL value is
+    present, mirroring the behavior of SQL's ``sum``.
+    """
+    return get_column(engine, ref, aggregate_operator=sa.func.sum)
+
+
 def get_percentile(
     engine: sa.engine.Engine, ref: DataReference, percentage: float
 ) -> tuple[float, list[sa.Select]]:

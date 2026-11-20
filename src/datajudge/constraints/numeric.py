@@ -129,6 +129,52 @@ class NumericBetween(Constraint):
         return result, assertion_text
 
 
+class NumericSum(Constraint):
+    def __init__(
+        self,
+        ref: DataReference,
+        lower_bound: float,
+        upper_bound: float,
+        name: str | None = None,
+        cache_size=None,
+    ):
+        super().__init__(
+            ref,
+            ref_value=(lower_bound, upper_bound),
+            name=name,
+            cache_size=cache_size,
+        )
+        if lower_bound > upper_bound:
+            raise ValueError(
+                f"lower_bound ({lower_bound}) must not be greater than "
+                f"upper_bound ({upper_bound})."
+            )
+        self._lower_bound = lower_bound
+        self._upper_bound = upper_bound
+
+    def _retrieve(
+        self, engine: sa.engine.Engine, ref: DataReference
+    ) -> tuple[float | None, _OptionalSelections]:
+        return db_access.get_sum(engine, ref)
+
+    def _compare(
+        self, value_factual: float | None, value_target: tuple[float, float]
+    ) -> tuple[bool, str | None]:
+        # SQL's sum over a selection without non-NULL values is NULL. Such a
+        # selection carries no amount at all and hence must not be conflated
+        # with an actual net amount of zero: no pass/fail verdict is emitted.
+        if value_factual is None:
+            return True, "Sum over empty set."
+        lower_bound, upper_bound = value_target
+        result = lower_bound <= value_factual <= upper_bound
+        assertion_text = (
+            f"{self._ref} has sum {value_factual} outside of the allowed "
+            f"interval [{lower_bound}, {upper_bound}]. "
+            f"{self._condition_string}"
+        )
+        return result, None if result else assertion_text
+
+
 class NumericMean(Constraint):
     def __init__(
         self,

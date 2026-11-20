@@ -624,6 +624,32 @@ class WithinRequirement(Requirement):
             )
         )
 
+    def add_numeric_sum_constraint(
+        self,
+        column: str,
+        lower_bound: float,
+        upper_bound: float,
+        condition: Condition | None = None,
+        name: str | None = None,
+        cache_size=None,
+    ) -> None:
+        """Assert the column's sum lies in the inclusive interval ``[lower_bound, upper_bound]``.
+
+        The sum is computed within the database. A selection without any
+        non-NULL values yields ``NULL`` instead of zero; such a group does not
+        carry an amount and is not judged against the interval.
+        """
+        ref = DataReference(self._data_source, [column], condition)
+        self._constraints.append(
+            numeric_constraints.NumericSum(
+                ref,
+                lower_bound,
+                upper_bound,
+                name=name,
+                cache_size=cache_size,
+            )
+        )
+
     def add_numeric_mean_constraint(
         self,
         column: str,
