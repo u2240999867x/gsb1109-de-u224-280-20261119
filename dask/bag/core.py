@@ -4,10 +4,12 @@ import io
 import itertools
 import math
 import operator
+import threading
 import uuid
 import warnings
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Sequence
+from concurrent.futures import Future
 from functools import partial, reduce, wraps
 from random import Random
 from urllib.request import urlopen
@@ -1424,11 +1426,17 @@ class Bag(DaskMethodsMixin):
         ----------
         k : int
             The number of elements to return
-        npartitions : int, optional
+        npartitions : int, None, or "auto", optional
             Elements are only taken from the first ``npartitions``, with a
             default of 1. If there are fewer than ``k`` rows in the first
             ``npartitions`` a warning will be raised and any found rows
             returned. Pass -1 to use all partitions.
+
+            Pass ``None`` or ``"auto"`` to read partitions on demand, in
+            partition order, until ``k`` elements have been found. Only the
+            partitions that are required are computed. At most one additional
+            partition may be read ahead while waiting for the next partition
+            in order.
         compute : bool, optional
             Whether to compute the result, default is True.
         warn : bool, optional
@@ -1440,6 +1448,15 @@ class Bag(DaskMethodsMixin):
         >>> b.take(3)
         (0, 1, 2)
         """
+
+        if npartitions is None or npartitions == "auto":
+            if compute:
+                return tuple(_take_auto(self, k, warn=warn))
+            token = tokenize(self, k, npartitions)
+            name = f"take-auto-{token}"
+            dsk = {(name, 0): (_take_auto, self, k, warn)}
+            graph = HighLevelGraph.from_collections(name, dsk, dependencies=[self])
+            return type(self)(graph, name, 1)
 
         if npartitions <= -1:
             npartitions = self.npartitions
@@ -2539,6 +2556,107 @@ def safe_take(n, b, warn=True):
             "elements available. Try passing larger `npartitions` to `take`."
         )
     return r
+
+
+def _take_auto(bag, k, warn=True):
+    """Read partitions in archive order until ``k`` elements are available.
+
+    At most one partition is started before it is needed. A failed read of a
+    look-ahead partition is ignored while an earlier partition can still fill
+    the result; once the earlier partitions are exhausted, the first error
+    from the required partitions is raised.
+    """
+    from dask._task_spec import convert_legacy_graph
+    from dask.utils import ensure_dict
+
+    keys = bag.__dask_keys__()
+    dsk = convert_legacy_graph(ensure_dict(bag.__dask_graph__()))
+    if k <= 0 or not keys:
+        return safe_take(k, [], warn)
+
+    cache = _AutoTakeCache(dsk)
+    result = []
+    pending = {}
+    next_partition = 0
+    next_submit = 0
+
+    def submit(index):
+        future = Future()
+
+        def run():
+            try:
+                future.set_result(cache.take(keys[index], k))
+            except BaseException as exc:
+                future.set_exception(exc)
+
+        threading.Thread(target=run, daemon=True).start()
+        pending[index] = future
+
+    try:
+        while next_partition < len(keys):
+            if next_partition >= next_submit:
+                submit(next_partition)
+                next_submit = next_partition + 1
+
+            if not pending[next_partition].done() and next_submit < len(keys):
+                submit(next_submit)
+                next_submit += 1
+
+            value = pending.pop(next_partition).result()
+            for item in value:
+                if len(result) >= k:
+                    break
+                result.append(item)
+            if len(result) >= k:
+                break
+            next_partition += 1
+    finally:
+        pending.clear()
+
+    return safe_take(k, result, warn)
+
+
+class _AutoTakeCache:
+    """Thread-safe, single-flight cache for one adaptive ``take`` call.
+
+    Partition reads run concurrently. A task is computed by exactly one
+    thread; other threads that need it wait on that thread's future instead of
+    computing it again. This both shares lazily loaded dependencies and
+    preserves the "open only what is needed" behaviour.
+    """
+
+    def __init__(self, dsk):
+        self._dsk = dsk
+        self._futures = {}
+        self._lock = threading.Lock()
+
+    def _dependency(self, key):
+        with self._lock:
+            future = self._futures.get(key)
+            if future is None:
+                future = Future()
+                self._futures[key] = future
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            return future.result()
+
+        try:
+            task = self._dsk[key]
+            if task.dependencies:
+                values = {dep: self._dependency(dep) for dep in task.dependencies}
+                value = task(values)
+            else:
+                value = task()
+        except BaseException as exc:
+            future.set_exception(exc)
+            raise
+        future.set_result(value)
+        return value
+
+    def take(self, key, n):
+        return list(take(n, self._dependency(key)))
 
 
 def random_sample(x, state_data, prob):

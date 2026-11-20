@@ -4,6 +4,7 @@ import gc
 import math
 import os
 import random
+import threading
 import warnings
 import weakref
 from bz2 import BZ2File
@@ -672,6 +673,126 @@ def test_take_npartitions_warn():
             b.take(7, npartitions=2)
             b.take(7, warn=False)
         assert not record
+
+
+def test_take_auto_waits_for_partition_order():
+    started = threading.Event()
+    released = threading.Event()
+    second_done = threading.Event()
+
+    def first():
+        started.set()
+        released.wait(5)
+        return ["first"]
+
+    def second():
+        second_done.set()
+        return ["second-a", "second-b"]
+
+    def third():
+        raise AssertionError("third partition should not be opened")
+
+    bag = Bag(
+        {
+            ("x", 0): (first,),
+            ("x", 1): (second,),
+            ("x", 2): (third,),
+        },
+        "x",
+        3,
+    )
+    result = []
+    thread = threading.Thread(
+        target=lambda: result.append(bag.take(3, npartitions=None, warn=False))
+    )
+    thread.start()
+    try:
+        assert started.wait(2)
+        assert second_done.wait(2)
+        assert result == []
+    finally:
+        released.set()
+        thread.join(5)
+
+    assert result == [("first", "second-a", "second-b")]
+
+
+def test_take_auto_uses_earlier_partition_despite_lookahead_error():
+    error_ready = threading.Event()
+
+    def first():
+        error_ready.wait(2)
+        return ["a", "b", "c"]
+
+    def second():
+        error_ready.set()
+        raise ValueError("second partition failed")
+
+    bag = Bag({("x", 0): (first,), ("x", 1): (second,)}, "x", 2)
+    assert bag.take(2, npartitions=None, warn=False) == ("a", "b")
+
+
+def test_take_auto_reports_error_if_earlier_partition_is_insufficient():
+    error_ready = threading.Event()
+
+    def first():
+        error_ready.wait(2)
+        return ["a"]
+
+    def second():
+        error_ready.set()
+        raise ValueError("second partition failed")
+
+    bag = Bag(
+        {("x", 0): (first,), ("x", 1): (second,), ("x", 2): (lambda: ["c"],)},
+        "x",
+        3,
+    )
+    with pytest.raises(ValueError, match="second partition failed"):
+        bag.take(2, npartitions=None, warn=False)
+
+
+def test_take_auto_only_loads_shared_dependency_once():
+    calls = []
+
+    def load():
+        calls.append("load")
+        return {"factor": 10}
+
+    def partition(i, config):
+        return [i * config["factor"]]
+
+    bag = Bag(
+        {
+            "config": (load,),
+            ("x", 0): (partition, 0, "config"),
+            ("x", 1): (partition, 1, "config"),
+            ("x", 2): (partition, 2, "config"),
+        },
+        "x",
+        3,
+    )
+    assert bag.take(2, npartitions="auto", warn=False) == (0, 10)
+    assert calls == ["load"]
+
+
+def test_take_auto_skips_empty_partitions_and_warns_when_exhausted():
+    bag = Bag(
+        {("x", 0): (list, ()), ("x", 1): (list, "ab"), ("x", 2): (list, "cd")},
+        "x",
+        3,
+    )
+    assert bag.take(3, npartitions=None, warn=False) == ("a", "b", "c")
+    with pytest.warns(UserWarning):
+        bag.take(5, npartitions=None)
+    assert bag.take(5, npartitions=None, warn=False) == ("a", "b", "c", "d")
+
+
+def test_take_auto_compute_false():
+    bag = db.from_sequence(range(10), npartitions=3)
+    taken = bag.take(4, npartitions=None, compute=False)
+    assert isinstance(taken, Bag)
+    assert taken.compute(scheduler="sync") == [0, 1, 2, 3]
 
 
 def test_map_is_lazy():
