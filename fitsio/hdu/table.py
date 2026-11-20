@@ -579,7 +579,21 @@ class TableHDU(HDUBase):
 
         self.write_column(name, data)
 
-    def append(self, data, columns=None, names=None, **keys):
+    def append(
+        self,
+        data,
+        columns=None,
+        names=None,
+        mapping=None,
+        axis_order=None,
+        fill=None,
+        missing=None,
+        missing_fill=None,
+        strict_mapping=False,
+        validate=False,
+        dry_run=False,
+        **keys,
+    ):
         """
         Append new rows to a table HDU
 
@@ -598,19 +612,187 @@ class TableHDU(HDUBase):
             If data is a list of arrays, you must send columns as a list
             of names or column numbers. You can also use the `columns` keyword
             argument.
-        """
-        if keys:
-            import warnings
+        mapping: dict or list, optional
+            Explicit mapping from input fields to target columns.  A
+            dictionary may be written as ``{target: source}`` or
+            ``{source: target}``; each value may also be a dictionary with
+            ``target``, ``source``, ``axes``, ``fill``, ``missing`` and
+            ``missing_fill`` keys.  A list of such dictionaries is also
+            accepted.  When omitted, fields are matched by name.
+        axis_order: dict, optional
+            Per-column axis permutation, applied before the shape check.  For
+            example ``{'IMAGE': (0, 2, 1)}`` means the input axes are in the
+            order that maps to target axes ``(0, 2, 1)``.  Axis mappings may
+            also be given in ``mapping``.
+        fill: dict or scalar, optional
+            Value used when a source column is absent, or for missing data.
+        missing: dict or scalar, optional
+            Marker value(s) that mean "no measurement" in the input.
+        missing_fill: dict or scalar, optional
+            Value used for explicitly missing markers.  Falls back to
+            ``fill``.
+        strict_mapping: bool, optional
+            If True, reject input fields that are not used by any target
+            column.  Default False.
+        validate: bool, optional
+            If True, only validate the batch and return the report; no rows
+            are written.  Default False.
+        dry_run: bool, optional
+            Alias for ``validate``.
 
-            warnings.warn(
-                "The keyword arguments '%s' are being ignored! This warning "
-                "will be an error in a future version of `fitsio`!" % keys,
-                DeprecationWarning,
-                stacklevel=2,
+        When any of ``mapping``, ``axis_order``, ``fill``, ``missing``,
+        ``missing_fill``, ``strict_mapping``, ``validate`` or ``dry_run`` is
+        given, the whole batch is checked before any row is written.  With
+        ``validate`` or ``dry_run`` the report is returned without writing,
+        even when it contains issues.  Otherwise an
+        :class:`fitsio.hdu.append.AppendValidationError` is raised on
+        failure and the table is left untouched.  On success a
+        :class:`fitsio.hdu.append.AppendReport` is returned.
+
+        Without those arguments this method keeps its original behaviour.
+        """
+        # Normalise the accepted aliases first, so that a call using only an
+        # alias still takes the checked path.
+        for key in (
+            'column_map',
+            'colmapping',
+            'columns_map',
+            'map',
+            'layout',
+            'layout_map',
+        ):
+            if key in keys and mapping is None:
+                mapping = keys.pop(key)
+        for key in (
+            'axes',
+            'axes_order',
+            'axis_map',
+            'axis_order_map',
+            'permutation',
+        ):
+            if key in keys and axis_order is None:
+                axis_order = keys.pop(key)
+        for key in ('fill_value', 'fill_values'):
+            if key in keys and fill is None:
+                fill = keys.pop(key)
+        for key in ('missing_value', 'missing_values', 'null'):
+            if key in keys and missing is None:
+                missing = keys.pop(key)
+        for key in ('missing_fill_value', 'fill_missing'):
+            if key in keys and missing_fill is None:
+                missing_fill = keys.pop(key)
+        for key in ('check', 'check_only', 'validate_only', 'only_validate'):
+            if key in keys:
+                value = bool(keys.pop(key))
+                if value:
+                    validate = True
+        for key in ('atomic', 'precheck'):
+            if key in keys:
+                keys.pop(key)
+
+        checked = (
+            mapping is not None
+            or axis_order is not None
+            or fill is not None
+            or missing is not None
+            or missing_fill is not None
+            or strict_mapping
+            or validate
+            or dry_run
+        )
+
+        if not checked:
+            if keys:
+                import warnings
+
+                warnings.warn(
+                    "The keyword arguments '%s' are being ignored! This "
+                    "warning will be an error in a future version of "
+                    "`fitsio`!" % keys,
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+
+            firstrow = self._info['nrows']
+            self.write(
+                data, firstrow=firstrow, columns=columns, names=names
+            )
+            return None
+
+        from .append import build_plan
+
+        if keys:
+            raise TypeError(
+                "unexpected append keyword arguments: %s"
+                % ", ".join(sorted(keys))
             )
 
+        kwargs = {
+            'mapping': mapping,
+            'axis_order': axis_order,
+            'fill': fill,
+            'missing': missing,
+            'missing_fill': missing_fill,
+            'strict_mapping': strict_mapping,
+        }
+
+        report = build_plan(
+            self,
+            data,
+            columns=columns,
+            names=names,
+            **kwargs,
+        )
+
+        if validate or dry_run:
+            return report
+
+        report.raise_if_errors()
+
         firstrow = self._info['nrows']
-        self.write(data, firstrow=firstrow, columns=columns, names=names)
+        plan = report._plan or {}
+        plan = {
+            name: plan[name]
+            for name in report._target_order
+            if name in plan
+        }
+
+        try:
+            self.write(
+                list(plan.values()),
+                names=list(plan.keys()),
+                firstrow=firstrow,
+            )
+        except Exception:
+            try:
+                self.resize(firstrow)
+            except Exception:
+                pass
+            raise
+
+        report.written = True
+        report.rows_written = report.nrows
+        return report
+
+    def validate_append(self, data, columns=None, names=None, **kwargs):
+        """
+        Validate an append batch without writing any rows.
+
+        Returns an :class:`fitsio.hdu.append.AppendReport`; see
+        :meth:`append` for the accepted keyword arguments.
+        """
+        kwargs['validate'] = True
+        return self.append(
+            data, columns=columns, names=names, **kwargs
+        )
+
+    check_append = validate_append
+
+    def append_checked(self, data, columns=None, names=None, **kwargs):
+        """
+        Validate and append a batch atomically, returning the report.
+        """
+        return self.append(data, columns=columns, names=names, **kwargs)
 
     def delete_rows(self, rows):
         """

@@ -13,3 +13,12 @@ from .table import (  # noqa
     _table_npy2fits_form,
     _npy2fits,
 )
+from .append import (  # noqa
+    AppendError,
+    AppendIssue,
+    AppendLayoutError,
+    AppendReport,
+    AppendValidationError,
+    FillEvent,
+    build_plan,
+)

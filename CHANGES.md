@@ -1,5 +1,28 @@
 # Changes
 
+## Unreleased
+
+New Features
+
+- Added checked appends for table HDUs.  `TableHDU.append` now accepts
+  `mapping`, `axis_order`, `fill`, `missing`, `missing_fill`,
+  `strict_mapping`, `validate` and `dry_run`.  When any of them is given,
+  the whole batch is validated before a single row is written.  Failures
+  raise `AppendValidationError` with one `AppendIssue` per problem, naming
+  the zero-based input row (and one-based `row_number`), the target column
+  and the failing condition.  A rejected batch leaves the table unchanged,
+  including its existing rows, column layout and read results.
+- Added `TableHDU.validate_append` (also `check_append`) to run the same
+  checks without writing, and `TableHDU.append_checked` to validate and
+  write atomically.  Successful calls return an `AppendReport` that records
+  values supplied for explicitly missing entries and for records with no
+  data, separately per target column.
+- Axis permutations declared in a mapping are applied before shape checks,
+  and values are checked against the target type's real bounds before any
+  narrowing.  Fixed-length vector targets also accept shorter input
+  vectors, padding the remainder to match the historical zero-fill
+  behaviour, while longer inputs are rejected.
+
 ## 1.4.3
 
 New Features

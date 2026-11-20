@@ -260,6 +260,28 @@ fits.write(dict_of_arrays, names=names) # control name order
 # in the table.  missing columns will be filled with zeros
 fits[-1].append(data2)
 
+# append a batch with an explicit column mapping and axis order.  The whole
+# batch is checked before anything is written; on failure the table is left
+# untouched.
+report = fits[-1].append(
+    new_data,
+    mapping={
+        'temperature': 'temp_in',
+        'image': {'source': 'pixels_in', 'axes': (1, 0)},
+        'flags': 'flag_in',
+    },
+    missing={'temperature': -999.0},   # explicit missing marker
+    missing_fill={'temperature': -1.0},
+    fill={'temperature': -2.0, 'flags': 0},  # also used for absent rows
+)
+print(report.fill_counts)
+
+# check without writing
+report = fits[-1].validate_append(new_data, mapping=...)
+if not report:
+    for issue in report.issues:
+        print(issue.row_number, issue.column, issue.condition)
+
 # insert a new column into a table
 fits[-1].insert_column('newcol', data)
 

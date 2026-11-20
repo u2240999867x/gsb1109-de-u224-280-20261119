@@ -34,6 +34,14 @@ from .fitslib import (
 
 from .header import FITSHDR, FITSRecord, FITSCard
 from .hdu import BINARY_TBL, ASCII_TBL, IMAGE_HDU
+from .hdu import (  # noqa
+    AppendError,
+    AppendIssue,
+    AppendLayoutError,
+    AppendReport,
+    AppendValidationError,
+    FillEvent,
+)
 
 from . import util
 from .util import (
