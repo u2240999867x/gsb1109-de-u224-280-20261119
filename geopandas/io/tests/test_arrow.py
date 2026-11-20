@@ -30,6 +30,7 @@ from geopandas.io.arrow import (
     _encode_metadata,
     _geopandas_to_arrow,
     _get_filesystem_path,
+    _get_parquet_bbox_filter,
     _remove_id_from_member_of_ensembles,
     _validate_dataframe,
     _validate_geo_metadata,
@@ -46,6 +47,7 @@ DATA_PATH = pathlib.Path(os.path.dirname(__file__)) / "data"
 # Skip all tests in this module if pyarrow is not available
 pyarrow = pytest.importorskip("pyarrow")
 
+import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pyarrow import feather
@@ -1629,9 +1631,365 @@ def test_read_parquet_bbox_column_and_statistics(bbox_intersects, tmp_path):
     bbox_intersects.assert_not_called()
 
 
+@pytest.fixture
+def store_parquet_files(tmp_path):
+    """Two equivalent store samples written as several small row groups.
+
+    The store table has the store point (``location``) as the default geometry
+    in EPSG:32633, while the delivery area (``delivery_zone``) of the same row
+    is stored in EPSG:4326. The rows are spread over four row groups of two
+    rows each, covering:
+
+    * A1: point outside the query window, delivery area reaching into it
+    * A2: point inside the window, delivery area outside it
+    * A3: delivery area touching the window edge (boundary intersection)
+    * A4: an empty delivery area (never matches)
+    * A5: inside the window but closed (filtered by the business condition)
+    * A6: delivery area inside the window
+    * A7: everything outside the window
+    * A8: delivery area inside the window
+
+    One file has a covering bbox column per geometry column, the other one only
+    keeps the quick-look information of the store point geometry.
+    """
+    delivery_zones = geopandas.GeoSeries(
+        [
+            box(8, 52, 12, 54),  # A1 point outside, area reaches inside
+            box(30, 50, 35, 55),  # A2 point inside, area outside
+            box(5, 50, 10, 55),  # A3 area touches the xmin=10 edge
+            None,  # A4 empty delivery area
+            box(15, 52, 18, 54),  # A5 inside but closed
+            box(12, 55, 14, 58),  # A6 area inside
+            box(40, 40, 45, 45),  # A7 fully outside
+            box(16, 51, 19, 53),  # A8 area inside
+        ],
+        crs="EPSG:4326",
+    )
+    store_points = geopandas.GeoSeries(
+        [
+            Point(6, 52),
+            Point(15, 55),
+            Point(7, 52),
+            Point(15, 55),
+            Point(15, 53),
+            Point(13, 56),
+            Point(42, 42),
+            Point(17, 52),
+        ],
+        crs="EPSG:4326",
+    ).to_crs("EPSG:32633")
+    statuses = [
+        "open",
+        "open",
+        "open",
+        "open",
+        "closed",
+        "open",
+        "open",
+        "open",
+    ]
+
+    gdf = GeoDataFrame(
+        {
+            "asset_id": [f"A{idx}" for idx in range(1, 9)],
+            "status": statuses,
+            "delivery_zone": delivery_zones,
+        },
+        geometry=store_points,
+        crs="EPSG:32633",
+    ).rename_geometry("location")
+
+    # reorder the rows so that the four special situations end up in four
+    # different row groups (two rows per row group):
+    #   row group 0: A1 (point outside, area reaches inside) + A6
+    #   row group 1: A2 (point inside, area outside) + A7
+    #   row group 2: A3 (area touches the window edge) + A8
+    #   row group 3: A4 (empty area) + A5 (closed store)
+    row_order = [0, 5, 1, 6, 2, 7, 3, 4]
+    gdf = gdf.iloc[row_order].reset_index(drop=True)
+
+    path_with_bbox = tmp_path / "stores_with_covering_bbox.parquet"
+    gdf.to_parquet(path_with_bbox, write_covering_bbox=True, row_group_size=2)
+
+    # build the second file manually: drop the delivery area covering bbox
+    # column and its covering metadata, leaving only the store point bbox.
+    # The delivery area column is also rewritten as a plain binary column
+    # (without the geoarrow.wkb extension metadata) so that its row groups do
+    # not carry any geospatial statistics, while the file-level geo metadata
+    # still declares it as a WKB geometry column.
+    table = _geopandas_to_arrow(gdf, schema_version="1.1.0", write_covering_bbox=True)
+    geo_metadata = json.loads(table.schema.metadata[b"geo"])
+    del geo_metadata["columns"]["delivery_zone"]["covering"]
+    table = table.drop_columns(["delivery_zone_bbox"])
+    delivery_idx = table.schema.get_field_index("delivery_zone")
+    table = table.set_column(
+        delivery_idx,
+        pa.field("delivery_zone", pa.binary()),
+        table.column("delivery_zone").cast(pa.binary()),
+    )
+    table = table.replace_schema_metadata(
+        {**table.schema.metadata, b"geo": _encode_metadata(geo_metadata)}
+    )
+    path_without_delivery_bbox = tmp_path / "stores_without_delivery_bbox.parquet"
+    pq.write_table(table, path_without_delivery_bbox, row_group_size=2)
+
+    return {
+        "gdf": gdf,
+        "path_with_bbox": path_with_bbox,
+        "path_without_delivery_bbox": path_without_delivery_bbox,
+        "window": (10, 50, 20, 60),
+        "expected_assets": ["A1", "A6", "A3", "A8"],
+    }
+
+
+def test_store_parquet_files_structure(store_parquet_files):
+    files = store_parquet_files
+    for path in (
+        files["path_with_bbox"],
+        files["path_without_delivery_bbox"],
+    ):
+        metadata = pq.read_metadata(path)
+        assert metadata.num_row_groups == 4
+
+    with_bbox = pq.read_table(files["path_with_bbox"])
+    assert "bbox" in with_bbox.column_names
+    assert "delivery_zone_bbox" in with_bbox.column_names
+    geo_metadata = json.loads(
+        pq.read_metadata(files["path_with_bbox"]).metadata[b"geo"]
+    )
+    assert (
+        geo_metadata["columns"]["delivery_zone"]["covering"]["bbox"]["xmin"][0]
+        == "delivery_zone_bbox"
+    )
+
+    without_delivery_bbox = pq.read_table(files["path_without_delivery_bbox"])
+    assert "bbox" in without_delivery_bbox.column_names
+    assert "delivery_zone_bbox" not in without_delivery_bbox.column_names
+    geo_metadata = json.loads(
+        pq.read_metadata(files["path_without_delivery_bbox"]).metadata[b"geo"]
+    )
+    assert "covering" not in geo_metadata["columns"]["delivery_zone"]
+    assert "covering" in geo_metadata["columns"]["location"]
+
+    # the row groups of the second file do not carry any quick-look
+    # information for the delivery area geometry
+    file_metadata = pq.read_metadata(files["path_without_delivery_bbox"])
+    delivery_idx = file_metadata.schema.names.index("delivery_zone")
+    assert all(
+        file_metadata.row_group(row_group).column(delivery_idx).geo_statistics is None
+        for row_group in range(file_metadata.num_row_groups)
+    )
+
+    # the four special situations each live in their own row group
+    special_assets = {"A1", "A2", "A3", "A4"}
+    row_group_assets = []
+    parquet_file = pq.ParquetFile(files["path_without_delivery_bbox"])
+    for row_group_idx in range(parquet_file.num_row_groups):
+        row_group_assets.append(
+            set(
+                parquet_file.read_row_group(row_group_idx, columns=["asset_id"])
+                .column("asset_id")
+                .to_pylist()
+            )
+        )
+    special_row_groups = [
+        idx for idx, assets in enumerate(row_group_assets) if assets & special_assets
+    ]
+    assert len(special_row_groups) == 4
+
+
+@pytest.mark.parametrize("path_key", ["path_with_bbox", "path_without_delivery_bbox"])
+def test_read_parquet_bbox_geometry_column_projections(store_parquet_files, path_key):
+    files = store_parquet_files
+    path = files[path_key]
+    window = files["window"]
+    expected_assets = files["expected_assets"]
+    read_kwargs = dict(
+        bbox=window,
+        bbox_geometry_column="delivery_zone",
+        filters=[("status", "=", "open")],
+    )
+
+    # projection 1: only the delivery area and the asset id. The default
+    # store point geometry is not requested, but the delivery area CRS is
+    # still restored from its own geometry column metadata.
+    result_delivery_only = read_parquet(
+        path, columns=["asset_id", "delivery_zone"], **read_kwargs
+    )
+    assert list(result_delivery_only.columns) == ["asset_id", "delivery_zone"]
+    assert result_delivery_only.geometry.name == "delivery_zone"
+    assert result_delivery_only.crs.to_epsg() == 4326
+    assert "location" not in result_delivery_only
+    assert "bbox" not in result_delivery_only
+    assert "delivery_zone_bbox" not in result_delivery_only
+    assert result_delivery_only["asset_id"].tolist() == expected_assets
+
+    # projection 2: keep both geometry columns. Keeping the default geometry
+    # must not switch the bbox filtering to the store point column.
+    result_both = read_parquet(
+        path,
+        columns=["asset_id", "location", "delivery_zone"],
+        **read_kwargs,
+    )
+    assert list(result_both.columns) == [
+        "asset_id",
+        "location",
+        "delivery_zone",
+    ]
+    assert result_both.geometry.name == "location"
+    assert result_both.crs.to_epsg() == 32633
+    assert result_both["delivery_zone"].crs.to_epsg() == 4326
+    assert result_both["asset_id"].tolist() == expected_assets
+
+    # projection 3: only the asset id, business status and store point. The
+    # delivery area is only read to perform the filtering and must not show
+    # up in the result.
+    result_point_only = read_parquet(
+        path, columns=["asset_id", "status", "location"], **read_kwargs
+    )
+    assert list(result_point_only.columns) == [
+        "asset_id",
+        "status",
+        "location",
+    ]
+    assert result_point_only.geometry.name == "location"
+    assert result_point_only.crs.to_epsg() == 32633
+    assert "delivery_zone" not in result_point_only
+    assert "bbox" not in result_point_only
+    assert "delivery_zone_bbox" not in result_point_only
+    assert (result_point_only["status"] == "open").all()
+    assert result_point_only["asset_id"].tolist() == expected_assets
+
+
+def test_read_parquet_bbox_geometry_column_equivalent_files(
+    store_parquet_files,
+):
+    # the two files must return exactly the same selected assets for the same
+    # bbox + business condition, regardless of the column projection
+    files = store_parquet_files
+    window = files["window"]
+    projections = [
+        ["asset_id", "delivery_zone"],
+        ["asset_id", "location", "delivery_zone"],
+        ["asset_id", "status", "location"],
+    ]
+    for columns in projections:
+        asset_ids = []
+        for path_key in (
+            "path_with_bbox",
+            "path_without_delivery_bbox",
+        ):
+            result = read_parquet(
+                files[path_key],
+                columns=columns,
+                bbox=window,
+                bbox_geometry_column="delivery_zone",
+                filters=[("status", "=", "open")],
+            )
+            asset_ids.append(result["asset_id"].tolist())
+        assert asset_ids[0] == asset_ids[1] == files["expected_assets"]
+
+
+def test_read_parquet_bbox_geometry_column_empty_area_never_matches(
+    store_parquet_files,
+):
+    # without the business filter, the empty delivery area (A4) still does
+    # not match the bbox filter
+    for path_key in (
+        "path_with_bbox",
+        "path_without_delivery_bbox",
+    ):
+        result = read_parquet(
+            store_parquet_files[path_key],
+            bbox=store_parquet_files["window"],
+            bbox_geometry_column="delivery_zone",
+        )
+        asset_ids = result["asset_id"].tolist()
+        assert "A4" not in asset_ids
+        # the closed store A5 is spatially inside, so without the status
+        # filter it is returned, proving the bbox and business filters are
+        # combined rather than one replacing the other
+        assert "A5" in asset_ids
+
+
+def test_read_parquet_bbox_geometry_column_uses_delivery_evidence(
+    store_parquet_files,
+):
+    # A1 has its store point outside the query window while its delivery area
+    # reaches into it: it must be selected. A2 is the opposite case and must
+    # not be selected on delivery area evidence.
+    for path_key in (
+        "path_with_bbox",
+        "path_without_delivery_bbox",
+    ):
+        result = read_parquet(
+            store_parquet_files[path_key],
+            bbox=store_parquet_files["window"],
+            bbox_geometry_column="delivery_zone",
+            filters=[("status", "=", "open")],
+        )
+        asset_ids = result["asset_id"].tolist()
+        assert "A1" in asset_ids
+        assert "A2" not in asset_ids
+        # boundary intersection is inclusive
+        assert "A3" in asset_ids
+
+
+def test_read_parquet_bbox_geometry_column_unknown_column(
+    store_parquet_files,
+):
+    with pytest.raises(ValueError, match="not present in the GeoParquet"):
+        read_parquet(
+            store_parquet_files["path_with_bbox"],
+            bbox=store_parquet_files["window"],
+            bbox_geometry_column="not_a_geometry_column",
+        )
+
+
+def test_get_parquet_bbox_filter_defaults_to_primary_column():
+    # omitting bbox_geometry_column keeps the historical behaviour of
+    # filtering on the primary geometry column (the store point here)
+    geo_metadata = {
+        "primary_column": "location",
+        "version": "1.1.0",
+        "columns": {
+            "location": {
+                "encoding": "WKB",
+                "covering": {
+                    "bbox": {
+                        "xmin": ["bbox", "xmin"],
+                        "ymin": ["bbox", "ymin"],
+                        "xmax": ["bbox", "xmax"],
+                        "ymax": ["bbox", "ymax"],
+                    }
+                },
+            },
+            "delivery_zone": {
+                "encoding": "WKB",
+                "covering": {
+                    "bbox": {
+                        "xmin": ["delivery_zone_bbox", "xmin"],
+                        "ymin": ["delivery_zone_bbox", "ymin"],
+                        "xmax": ["delivery_zone_bbox", "xmax"],
+                        "ymax": ["delivery_zone_bbox", "ymax"],
+                    }
+                },
+            },
+        },
+    }
+    bbox = (10, 50, 20, 60)
+
+    default_filter = _get_parquet_bbox_filter(geo_metadata, bbox)
+    assert default_filter.equals(_convert_bbox_to_parquet_filter(bbox, "bbox"))
+
+    explicit_filter = _get_parquet_bbox_filter(geo_metadata, bbox, "delivery_zone")
+    assert explicit_filter.equals(
+        _convert_bbox_to_parquet_filter(bbox, "delivery_zone_bbox")
+    )
+
+
 def test_non_geo_parquet_read_with_proper_error(tmp_path):
     # https://github.com/geopandas/geopandas/issues/3556
-
     gdf = GeoDataFrame(
         {"col": [1, 2, 3]},
         geometry=geopandas.points_from_xy([1, 2, 3], [1, 2, 3]),

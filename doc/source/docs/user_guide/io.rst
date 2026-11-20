@@ -310,6 +310,24 @@ The :func:`geopandas.read_parquet`, :func:`geopandas.read_feather`,
 enable fast roundtrip from GeoPandas to those binary file formats, preserving
 the spatial information.
 
+A spatial bounding box filter can be passed to :func:`geopandas.read_parquet`
+through the ``bbox`` keyword. By default the filter is applied on the primary
+geometry column. For a file with multiple geometry columns, the column used for
+the filtering can be chosen with ``bbox_geometry_column``; the ``bbox``
+coordinates are then interpreted in that column's CRS. If the selected geometry
+column has no covering bbox column or row group statistics, the geometries of
+that column are read to perform the filtering, while the other geometry columns
+are not used to exclude rows.
+
+.. code-block:: python
+
+    gdf = geopandas.read_parquet(
+        "stores.parquet",
+        bbox=(10, 50, 20, 60),
+        bbox_geometry_column="delivery_zone",
+        filters=[("status", "=", "open")],
+    )
+
 .. note::
 
     The GeoParquet specification is developed at:

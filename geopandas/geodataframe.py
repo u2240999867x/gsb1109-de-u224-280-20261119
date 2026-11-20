@@ -1472,10 +1472,11 @@ default 'snappy'
             specification, should be considered as experimental, and may not
             be supported by all readers.
         write_covering_bbox : bool, default False
-            Writes the bounding box column for each row entry with column
-            name 'bbox'. Writing a bbox column can be computationally
-            expensive, but allows you to specify a `bbox` in
-            :func:`read_parquet` for filtered reading.
+            Writes a bounding box column for each row entry and each geometry
+            column (named 'bbox' for the primary geometry and
+            '<geometry_column>_bbox' for the other geometry columns). Writing
+            bbox columns can be computationally expensive, but allows you to
+            specify a `bbox` in :func:`read_parquet` for filtered reading.
         schema_version : {'0.1.0', '0.4.0', '1.0.0', '1.1.0', '2.0.0', None}
             GeoParquet specification version; if not provided, will default to
             latest supported stable version (1.1.0).

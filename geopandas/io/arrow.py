@@ -126,9 +126,11 @@ def _create_metadata(
         GeoParquet encoding per geometry column.
         Defaults to "WKB" for columns that are not present in the dictionary.
     write_covering_bbox : bool, default False
-        Writes the bounding box column for each row entry with column
-        name 'bbox'. Writing a bbox column can be computationally
-        expensive, hence is default setting is False.
+        Writes a bounding box column for each row entry and each geometry
+        column. The covering bbox of the primary geometry column is stored in
+        a column named 'bbox'; every other geometry column gets a dedicated
+        column named '<geometry_column>_bbox'. Writing bbox columns can be
+        computationally expensive, hence the default setting is False.
 
     Returns
     -------
@@ -194,12 +196,13 @@ def _create_metadata(
             column_metadata[col]["bbox"] = bbox
 
         if write_covering_bbox:
+            bbox_column_name = _covering_bbox_column_name(df, col)
             column_metadata[col]["covering"] = {
                 "bbox": {
-                    "xmin": ["bbox", "xmin"],
-                    "ymin": ["bbox", "ymin"],
-                    "xmax": ["bbox", "xmax"],
-                    "ymax": ["bbox", "ymax"],
+                    "xmin": [bbox_column_name, "xmin"],
+                    "ymin": [bbox_column_name, "ymin"],
+                    "xmax": [bbox_column_name, "xmax"],
+                    "ymax": [bbox_column_name, "ymax"],
                 },
             }
 
@@ -434,17 +437,42 @@ def _geopandas_to_arrow(
                     )
 
     if write_covering_bbox:
-        if "bbox" in df.columns:
+        geometry_columns = df.columns[df.dtypes == "geometry"]
+        bbox_column_names = [
+            _covering_bbox_column_name(df, geometry_column)
+            for geometry_column in geometry_columns
+        ]
+        conflicting = [
+            bbox_column_name
+            for bbox_column_name in bbox_column_names
+            if bbox_column_name in df.columns
+        ]
+        if conflicting:
             raise ValueError(
-                "An existing column 'bbox' already exists in the dataframe. "
-                "Please rename to write covering bbox."
+                f"An existing column {conflicting[0]!r} already exists in the "
+                "dataframe. Please rename to write covering bbox."
             )
-        bounds = df.bounds
-        bbox_array = StructArray.from_arrays(
-            [bounds["minx"], bounds["miny"], bounds["maxx"], bounds["maxy"]],
-            names=["xmin", "ymin", "xmax", "ymax"],
-        )
-        table = table.append_column("bbox", bbox_array)
+
+        for geometry_column, bbox_column_name in zip(
+            geometry_columns, bbox_column_names
+        ):
+            bounds = df[geometry_column].bounds
+            # missing / empty geometries have no bounds: store a null bbox
+            # instead of NaN values so that they never match a bbox filter
+            # (NaN comparisons would otherwise let them pass the filter)
+            valid_bounds = np.isfinite(bounds["minx"].to_numpy())
+            mask = pa.array(~valid_bounds, type=pa.bool_())
+            bbox_array = StructArray.from_arrays(
+                [
+                    bounds["minx"],
+                    bounds["miny"],
+                    bounds["maxx"],
+                    bounds["maxy"],
+                ],
+                names=["xmin", "ymin", "xmax", "ymax"],
+                mask=mask,
+            )
+            table = table.append_column(bbox_column_name, bbox_array)
 
     # Store geopandas specific file-level metadata
     # This must be done AFTER creating the table or it is not persisted
@@ -503,9 +531,11 @@ def _to_parquet(
         GeoParquet specification version; if not provided will default to
         latest supported version.
     write_covering_bbox : bool, default False
-        Writes the bounding box column for each row entry with column
-        name 'bbox'. Writing a bbox column can be computationally
-        expensive, hence is default setting is False.
+        Writes a bounding box column for each row entry and each geometry
+        column. The covering bbox of the primary geometry column is stored in
+        a column named 'bbox'; every other geometry column gets a dedicated
+        column named '<geometry_column>_bbox'. Writing bbox columns can be
+        computationally expensive, hence the default setting is False.
     **kwargs
         Additional keyword arguments passed to pyarrow.parquet.write_table().
     """
@@ -814,6 +844,7 @@ def _read_parquet(
     columns=None,
     storage_options=None,
     bbox=None,
+    bbox_geometry_column=None,
     to_pandas_kwargs=None,
     **kwargs,
 ):
@@ -867,7 +898,17 @@ def _read_parquet(
         is only usable if the data was saved with the bbox covering metadata
         or with GeoParquet >= 2.0 files.
         Input is of the tuple format (xmin, ymin, xmax, ymax). Filtering on Z
-        or M coordinates is not supported.
+        or M coordinates is not supported. The coordinates of the bounding
+        box are interpreted in the CRS of the geometry column used for the
+        filtering (see ``bbox_geometry_column``).
+    bbox_geometry_column : str, optional
+        Name of the geometry column on which the ``bbox`` filter is applied.
+        The coordinates of ``bbox`` are interpreted in the CRS of this
+        geometry column. If not given, the primary geometry column of the file
+        is used. If the specified geometry column does not have any covering
+        bbox column or geospatial statistics, the geometries of this column
+        are read to perform the spatial filtering, and the other geometry
+        columns of the file are not used to exclude candidate rows.
     to_pandas_kwargs : dict, optional
         Arguments passed to the `pa.Table.to_pandas` method for non-geometry columns.
         This can be used to control the behavior of the conversion of the non-geometry
@@ -925,18 +966,96 @@ def _read_parquet(
             use pandas.read_parquet/read_feather() instead."""
         )
 
+    explicit_bbox_geometry_column = bbox_geometry_column is not None
+    if bbox is not None and bbox_geometry_column is None:
+        bbox_geometry_column = geo_metadata["primary_column"]
+    elif (
+        bbox_geometry_column is not None
+        and bbox_geometry_column not in geo_metadata["columns"]
+    ):
+        raise ValueError(
+            f"The geometry column '{bbox_geometry_column}' specified for the "
+            "bbox filter is not present in the GeoParquet metadata."
+        )
+
     bbox_filter = (
-        _get_parquet_bbox_filter(geo_metadata, bbox) if bbox is not None else None
+        _get_parquet_bbox_filter(geo_metadata, bbox, bbox_geometry_column)
+        if bbox is not None
+        else None
     )
 
-    if_bbox_column_exists = _check_if_covering_in_geo_metadata(geo_metadata)
+    # keep track of the columns the user actually asked for, so that any
+    # column additionally read only to perform the bbox filtering can be
+    # removed from the final result
+    user_columns = None if columns is None else list(columns)
 
-    # by default, bbox column is not read in, so must specify which
-    # columns are read in if it exists.
-    if not columns and if_bbox_column_exists:
-        columns = _get_non_bbox_columns(schema, geo_metadata)
-    elif columns is not None and use_pandas_metadata:
-        columns = _add_index_columns_from_pandas_metadata(columns, metadata)
+    read_columns = None
+    if columns is None:
+        if _has_any_covering_bbox(geo_metadata):
+            # by default, covering bbox columns are not read in, so we must
+            # specify explicitly which columns are read
+            read_columns = _get_non_bbox_columns(schema, geo_metadata)
+    elif use_pandas_metadata:
+        read_columns = _add_index_columns_from_pandas_metadata(columns, metadata)
+    else:
+        read_columns = list(columns)
+
+    use_row_group_stats = False
+    if bbox is not None and bbox_filter is None:
+        if isinstance(dataset, parquet.ParquetFile) or not dataset.fragments:
+            stats_available = False
+        else:
+            stats_available = True
+            for fragment in dataset.fragments:
+                fragment_schema_names = fragment.metadata.schema.names
+                if bbox_geometry_column not in fragment_schema_names:
+                    stats_available = False
+                    break
+                geometry_idx = fragment_schema_names.index(bbox_geometry_column)
+                if any(
+                    row_group.metadata.column(geometry_idx).geo_statistics is None
+                    for row_group in fragment.row_groups
+                ):
+                    stats_available = False
+                    break
+
+        if stats_available:
+            # the dataset has geospatial statistics for the targeted geometry
+            # column: row groups can be pruned manually below
+            use_row_group_stats = True
+        elif explicit_bbox_geometry_column:
+            # no covering bbox column / point encoding / complete geospatial
+            # statistics are available for this geometry column: the targeted
+            # geometry itself is read below to perform the spatial filtering.
+            # Other geometry columns (e.g. the primary one) are not used as
+            # evidence to exclude candidate rows.
+            pass
+        elif isinstance(dataset, parquet.ParquetFile):
+            # legacy fallback without pyarrow.dataset: the targeted geometry
+            # is read and the filtering is done row by row below
+            pass
+        else:
+            # preserve the existing behaviour when no geometry column was
+            # specified explicitly for the bbox filter
+            raise ValueError(
+                "Specifying 'bbox' not supported for this Parquet file (it should "
+                "either have a bbox covering column, use 'point' encoding, or use "
+                "GeoParquet 2.0 logical geometry types)."
+            )
+
+    drop_helper_geometry_column = False
+    if bbox is not None and bbox_filter is None:
+        # the post-filtering step needs the targeted geometry values, so make
+        # sure the column is read even if it was not requested by the user
+        if read_columns is None:
+            read_columns = list(schema.names)
+        else:
+            read_columns = list(read_columns)
+        if bbox_geometry_column not in read_columns:
+            read_columns.append(bbox_geometry_column)
+            drop_helper_geometry_column = (
+                user_columns is not None and bbox_geometry_column not in user_columns
+            )
 
     filters = kwargs.pop("filters", None)
     if filters is not None:
@@ -951,25 +1070,29 @@ def _read_parquet(
             filters = bbox_filter
 
     if isinstance(dataset, parquet.ParquetFile):
-        table = dataset.read(columns=columns, use_threads=use_threads)
+        table = dataset.read(columns=read_columns, use_threads=use_threads)
     else:
         dsdataset = dataset._dataset
 
-        if bbox is not None and bbox_filter is None:
-            # if bbox is specified, but the dataset does not have a bbox column,
-            # we need to filter the row groups manually.
+        if use_row_group_stats:
+            # bbox is specified, but the dataset does not have a bbox column;
+            # filter the row groups manually using the geospatial statistics
+            # of the targeted geometry column
             import pyarrow.dataset as ds
-
-            geometry = geo_metadata["primary_column"]
 
             filtered_fragments = []
             for fragment in dataset.fragments:
-                geometry_idx = fragment.metadata.schema.names.index(geometry)
+                # the column index can differ between fragments, so look it
+                # up for each fragment separately
+                geometry_idx = fragment.metadata.schema.names.index(
+                    bbox_geometry_column
+                )
                 row_group_ids = [
-                    rg.id
-                    for rg in fragment.row_groups
+                    row_group.id
+                    for row_group in fragment.row_groups
                     if _bbox_intersects(
-                        rg.metadata.column(geometry_idx).geo_statistics, bbox
+                        row_group.metadata.column(geometry_idx).geo_statistics,
+                        bbox,
                     )
                 ]
                 fragment_filtered = fragment.subset(row_group_ids=row_group_ids)
@@ -985,7 +1108,7 @@ def _read_parquet(
             )
 
         table = dsdataset.to_table(
-            columns=columns, filter=filters, use_threads=use_threads
+            columns=read_columns, filter=filters, use_threads=use_threads
         )
 
     if use_pandas_metadata:
@@ -999,9 +1122,13 @@ def _read_parquet(
     result = _arrow_to_geopandas(table, geo_metadata, to_pandas_kwargs, df_attrs)
 
     if bbox is not None and bbox_filter is None:
-        # post-filtering step: manual filtering above only filtered up to the row group
-        # level -> further filter at the row level to give consistent behaviour
-        bbox_bounds = result.bounds
+        # post-filtering step: the row group statistics only filtered up to the
+        # row group level, and without statistics the full geometry was read;
+        # further filter at the row level on the targeted geometry column to
+        # give consistent behaviour. Empty / missing geometries have no bounds
+        # and therefore never match.
+        geometry_series = result[bbox_geometry_column]
+        bbox_bounds = geometry_series.bounds
         result_bbox = shapely.box(
             bbox_bounds["minx"],
             bbox_bounds["miny"],
@@ -1011,6 +1138,28 @@ def _read_parquet(
         result = result[
             shapely.intersects(result_bbox, shapely.box(*bbox))
         ].reset_index(drop=True)
+
+        if drop_helper_geometry_column:
+            # the targeted geometry column was only read to perform the
+            # filtering and was not requested by the user: drop it again,
+            # promoting another geometry column if it was the active one
+            if (
+                result._geometry_column_name == bbox_geometry_column
+                and bbox_geometry_column in result.columns
+            ):
+                remaining_geometry_columns = [
+                    column
+                    for column in geo_metadata["columns"]
+                    if column in result.columns and column != bbox_geometry_column
+                ]
+                if remaining_geometry_columns:
+                    result = result.set_geometry(remaining_geometry_columns[0])
+                else:
+                    result = result.drop(columns=[bbox_geometry_column])
+                    result._geometry_column_name = None
+                    return result
+
+            result = result.drop(columns=[bbox_geometry_column])
 
     return result
 
@@ -1087,25 +1236,32 @@ def _read_feather(path, columns=None, to_pandas_kwargs=None, **kwargs):
     return _arrow_to_geopandas(table, to_pandas_kwargs=to_pandas_kwargs)
 
 
-def _get_parquet_bbox_filter(geo_metadata, bbox):
-    primary_column = geo_metadata["primary_column"]
+def _get_parquet_bbox_filter(geo_metadata, bbox, geometry_column=None):
+    if geometry_column is None:
+        geometry_column = geo_metadata["primary_column"]
 
-    if _check_if_covering_in_geo_metadata(geo_metadata):
-        bbox_column_name = _get_bbox_encoding_column_name(geo_metadata)
+    if _check_if_covering_in_geo_metadata(geo_metadata, geometry_column):
+        bbox_column_name = _get_bbox_encoding_column_name(geo_metadata, geometry_column)
         return _convert_bbox_to_parquet_filter(bbox, bbox_column_name)
 
-    elif geo_metadata["columns"][primary_column]["encoding"] == "point":
+    elif geo_metadata["columns"][geometry_column]["encoding"] == "point":
         import pyarrow.compute as pc
 
         return (
-            (pc.field((primary_column, "x")) >= bbox[0])
-            & (pc.field((primary_column, "x")) <= bbox[2])
-            & (pc.field((primary_column, "y")) >= bbox[1])
-            & (pc.field((primary_column, "y")) <= bbox[3])
+            (pc.field((geometry_column, "x")) >= bbox[0])
+            & (pc.field((geometry_column, "x")) <= bbox[2])
+            & (pc.field((geometry_column, "y")) >= bbox[1])
+            & (pc.field((geometry_column, "y")) <= bbox[3])
         )
 
     elif geo_metadata["version"] == "2.0.0":
         # this case gets handled later manually
+        return None
+
+    elif geometry_column != geo_metadata["primary_column"]:
+        # an explicitly selected secondary geometry column does not have any
+        # covering bbox column: return None so the geometry itself is read to
+        # perform the filtering
         return None
 
     else:
@@ -1127,22 +1283,46 @@ def _convert_bbox_to_parquet_filter(bbox, bbox_column_name):
     )
 
 
-def _check_if_covering_in_geo_metadata(geo_metadata):
-    primary_column = geo_metadata["primary_column"]
-    return "covering" in geo_metadata["columns"][primary_column].keys()
+def _check_if_covering_in_geo_metadata(geo_metadata, geometry_column=None):
+    if geometry_column is None:
+        geometry_column = geo_metadata["primary_column"]
+    return "covering" in geo_metadata["columns"][geometry_column].keys()
 
 
-def _get_bbox_encoding_column_name(geo_metadata):
-    primary_column = geo_metadata["primary_column"]
-    return geo_metadata["columns"][primary_column]["covering"]["bbox"]["xmin"][0]
+def _has_any_covering_bbox(geo_metadata):
+    return any(
+        _check_if_covering_in_geo_metadata(geo_metadata, col)
+        for col in geo_metadata["columns"]
+    )
+
+
+def _covering_bbox_column_name(df, geometry_column):
+    """Name of the covering bbox column for a geometry column.
+
+    The primary geometry column keeps the historical ``'bbox'`` name; every
+    other geometry column gets a dedicated ``'<geometry_column>_bbox'``
+    column so that geometry columns with different CRSs can each store their
+    own per-row bounds.
+    """
+    if geometry_column == df._geometry_column_name:
+        return "bbox"
+    return f"{geometry_column}_bbox"
+
+
+def _get_bbox_encoding_column_name(geo_metadata, geometry_column=None):
+    if geometry_column is None:
+        geometry_column = geo_metadata["primary_column"]
+    return geo_metadata["columns"][geometry_column]["covering"]["bbox"]["xmin"][0]
 
 
 def _get_non_bbox_columns(schema, geo_metadata):
-    bbox_column_name = _get_bbox_encoding_column_name(geo_metadata)
+    bbox_column_names = [
+        _get_bbox_encoding_column_name(geo_metadata, col)
+        for col in geo_metadata["columns"]
+        if _check_if_covering_in_geo_metadata(geo_metadata, col)
+    ]
     columns = schema.names
-    if bbox_column_name in columns:
-        columns.remove(bbox_column_name)
-    return columns
+    return [col for col in columns if col not in bbox_column_names]
 
 
 def _bbox_intersects(geo_stats, bbox):

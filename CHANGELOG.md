@@ -2,6 +2,16 @@
 
 ## Development version
 
+New features and improvements:
+
+- `read_parquet` gained a `bbox_geometry_column` keyword to apply the `bbox`
+  spatial filter on a specific geometry column of a multi-geometry file. The
+  bounding box coordinates are interpreted in that column's CRS; when the
+  column has no covering bbox or row group statistics, its geometries are read
+  to perform the filtering instead of using another geometry column as
+  evidence. Writing with `write_covering_bbox=True` now stores a covering bbox
+  column for every geometry column.
+
 Bug fixes:
 
 - Fix the colorbar being shrunk when plotting with a ``"compressed"`` matplotlib
