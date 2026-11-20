@@ -145,6 +145,30 @@ img = fits[0][:,:]
 # read a subset of the image without reading the whole image
 img = fits[0][25:35, 45:55]
 
+# An ImageWindow keeps requested grid points that fall outside the
+# source image instead of clipping them, so local indices stay aligned
+# with the pixels that are actually read.  Only the valid subset is
+# read; the full image is never loaded.
+from fitsio import ImageWindow
+
+# reverse every second row, starting beyond the source edge
+parent = ImageWindow.from_hdu(fits[0], (slice(ny + 1, None, -2), slice(None)))
+result = parent.read(fits[0])
+result.data                # delivered pixel values
+result.axis_coords         # source coordinate of every delivered sample
+result.request_positions   # local positions; missing points leave gaps
+parent.missing_source_coords()  # requested points with no source pixel
+
+# sub-window in local indices of the parent request
+child = parent.subwindow(slices=(slice(3, None, -1), slice(None)))
+
+# sub-window expressed directly in source coordinates; returns an empty
+# result (with target and reason) when no sampled point lies in range
+child = parent.subwindow(source_limits=((4, 4), (0, nx - 1)))
+result = child.read(fits[0])
+if result.is_empty:
+    print(result.target, result.reason)
+
 
 # read all rows and columns from a binary table extension
 data = fits[1].read()

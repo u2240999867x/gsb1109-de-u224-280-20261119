@@ -30,6 +30,9 @@ from .fitslib import (
     SUBTRACTIVE_DITHER_1,
     SUBTRACTIVE_DITHER_2,
     NOT_SET,
+    ImageWindow,
+    ImageSliceResult,
+    NoImagePixelsError,
 )
 
 from .header import FITSHDR, FITSRecord, FITSCard

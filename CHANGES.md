@@ -1,5 +1,19 @@
 # Changes
 
+## Unreleased
+
+New Features
+
+- Added `ImageWindow` for traceable image sampling.  Requested grid
+  points outside the source image are retained instead of being
+  clipped, so sub-windows expressed in request-local indices remain
+  aligned with the pixels actually read.  Sub-windows can also be
+  limited directly by source coordinates; ranges that overlap
+  geometrically but contain no sampled point return an empty result
+  carrying the original target and the reason.  Reads use the existing
+  cfitsio subset path, so the full image is never loaded and no
+  regridding is performed.
+
 ## 1.4.3
 
 New Features

@@ -50,6 +50,11 @@ from .hdu import (
 )
 
 from .fits_exceptions import FITSFormatError
+from .imagewindow import (  # noqa: F401
+    ImageWindow,
+    ImageSliceResult,
+    NoImagePixelsError,
+)
 
 # for python3 compat
 if IS_PY3:
