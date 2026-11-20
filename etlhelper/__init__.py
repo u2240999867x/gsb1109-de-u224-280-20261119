@@ -32,6 +32,13 @@ from etlhelper.connect import (
 from etlhelper.utils import (
     table_info,
 )
+from etlhelper.preflight import (
+    Evidence,
+    assess_migration,
+    compare_candidates,
+    format_report,
+    reevaluate,
+)
 from etlhelper import (
     row_factories,
 )
@@ -83,7 +90,10 @@ def log_to_console(
 
 __all__ = [
     "DbParams",
+    "Evidence",
     "abort_etlhelper_threads",
+    "assess_migration",
+    "compare_candidates",
     "connect",
     "copy_rows",
     "copy_table_rows",
@@ -91,6 +101,7 @@ __all__ = [
     "executemany",
     "fetchall",
     "fetchone",
+    "format_report",
     "generate_insert_sql",
     "get_connection_string",
     "get_sqlalchemy_connection_string",
@@ -98,6 +109,7 @@ __all__ = [
     "iter_rows",
     "load",
     "log_to_console",
+    "reevaluate",
     "row_factories",
     "table_info",
 ]

@@ -78,6 +78,60 @@ the ID column is of type NUMBER and has a NOT NULL constraint but not a
 DEFAULT value, while the VALUE column is of type VARCHAR2, can be NULL
 but does have a DEFAULT value.
 
+Migration preflight
+^^^^^^^^^^^^^^^^^^^
+
+Declared column types are not proof that a value survives a database
+migration.  SQLite applies type affinity: a value written to a ``NUMERIC``
+column can be read back as a float even when source and target declare the
+same type.  Use :func:`assess_migration() <etlhelper.assess_migration>` to
+compare both tables' :func:`table_info() <etlhelper.table_info>` metadata and
+a finite set of sample rows before deciding which columns can be copied
+directly.
+
+.. code:: python
+
+   from etlhelper import Evidence, assess_migration, format_report
+
+   report = assess_migration(
+       source_conn, "ledger_src",
+       target_conn, "ledger",
+       samples=[
+           {"amount": "12345678901234567890.123456789",
+            "business_no": "00017"},
+           {"amount": "12345678901234567890.123456790",
+            "business_no": "17"},
+       ],
+       mapping={"amount": "amount", "business_no": "business_no"},
+   )
+   print(format_report(report))
+
+Each assessed column gets one of three verdicts:
+
+-  ``direct_safe``: the supplied samples were preserved.
+-  ``counterexample``: a sample (or a pair of samples) was lost or merged.
+   The assessment includes the smallest failing sample, so a write that
+   silently converts ``'00017'`` and ``'17'`` to the same value is reported
+   with both records.
+-  ``insufficient_evidence``: nothing failed, but the samples cannot prove
+   the behaviour for other values.  Exact decimal storage and leading zeros
+   need a target text column or a conversion contract; a matching declared
+   type is not enough.
+
+Omitted target columns are checked separately.  A nullable column with no
+default preserves a missing value as NULL.  A NOT NULL column with no default
+is a counterexample.  A NOT NULL column with a default is reported as
+``insufficient_evidence`` until the exact default value and its completeness
+are supplied, because ``table_info`` only reports ``has_default`` as a
+boolean.
+
+Sample rows are read-only checks against an in-memory copy of the target
+table definition; the source connection is never modified.  Verdicts apply
+to the supplied samples unless a text-storage or conversion contract is
+provided.  Pass ``Evidence(business_key_text_column="...")`` or
+``Evidence(numeric_text_column="...")`` to re-route a column to a text target
+and re-evaluate with :func:`reevaluate() <etlhelper.reevaluate>`; the report's
+``changes`` list records which evidence changed each verdict.
 
 Generate INSERT SQL
 ^^^^^^^^^^^^^^^^^^^

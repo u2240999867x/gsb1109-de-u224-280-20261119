@@ -18,7 +18,7 @@ class SQLiteDbHelper(DbHelper):
     table_info_query = dedent("""
         SELECT
             name,
-            lower(type),
+            lower(type) as type,
             "notnull" as not_null,
             (case when dflt_value is not null then 1 else 0 end) as has_default
         FROM pragma_table_info(?)
