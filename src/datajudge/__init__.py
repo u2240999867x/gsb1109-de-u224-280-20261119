@@ -16,6 +16,15 @@ from .condition import Condition
 from .constraints.base import Constraint
 from .data_source import DataSource
 from .requirements import BetweenRequirement, Requirement, WithinRequirement
+from .retention import (
+    RetentionAuditReport,
+    RetentionPolicy,
+    RetentionPolicyVersion,
+    RetentionStatus,
+    RetentionSubject,
+    SourceRetentionResult,
+    audit_retention,
+)
 
 __all__ = [
     "BetweenRequirement",
@@ -23,7 +32,14 @@ __all__ = [
     "Constraint",
     "DataSource",
     "Requirement",
+    "RetentionAuditReport",
+    "RetentionPolicy",
+    "RetentionPolicyVersion",
+    "RetentionStatus",
+    "RetentionSubject",
+    "SourceRetentionResult",
     "WithinRequirement",
+    "audit_retention",
 ]
 
 __version__ = "1.13.0"

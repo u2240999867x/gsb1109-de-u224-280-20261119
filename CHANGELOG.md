@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add `datajudge.retention` with `audit_retention` to audit archive tables
+  against versioned, timezone-aware retention policies at a specified audit
+  instant. Policy versions are selected by their absolute effective instant,
+  retention periods are interpreted in local calendar days of each source's
+  business timezone, and sources without comparable dates or without an
+  applicable policy are reported separately from compared sources.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.
