@@ -5,6 +5,7 @@ from itertools import zip_longest
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 from .. import errors, helpers
+from ..exception import FrictionlessException
 from ..platform import platform
 from ..schema import Field
 
@@ -246,7 +247,9 @@ class Row(Dict[str, Any]):
                 if json is True and field.type == "number" and field.float_number:  # type: ignore
                     continue
                 cell = result[index]
-                cell, _ = handler.writer(cell, ignore_missing=True)
+                cell, writer_notes = handler.writer(cell, ignore_missing=True)
+                if writer_notes:
+                    self.__raise_write_errors(handler, cell, writer_notes)
                 result[index] = cell
 
         # Return
@@ -282,11 +285,36 @@ class Row(Dict[str, Any]):
                 # Here we can optimize performance if we use a types mapping
                 if field.type not in types:
                     cell = result[field.name]
-                    cell, _ = handler.writer(cell, ignore_missing=True)
+                    cell, writer_notes = handler.writer(cell, ignore_missing=True)
+                    if writer_notes:
+                        self.__raise_write_errors(handler, cell, writer_notes)
                     result[field.name] = cell
 
         # Return
         return result
+
+    def __raise_write_errors(
+        self, handler: _CellHandler, cell: Any, notes: Dict[str, str]
+    ):
+        """Raise a cell error when a value cannot be written losslessly
+
+        The original value (the one read from the source) is reported, so the
+        caller can locate the input item that cannot be represented.
+        """
+        if "precision" not in notes:
+            return
+        source = self.__cells[handler.field_number - 1]
+        to_str = lambda value: str(value) if value is not None else ""  # type: ignore
+        raise FrictionlessException(
+            errors.LossyValueError(
+                note=notes["precision"],
+                cells=list(map(to_str, self.__cells)),  # type: ignore
+                row_number=self.__row_number,
+                cell=str(source),
+                field_name=handler.field.name,
+                field_number=handler.field_number,
+            )
+        )
 
     # Process
 

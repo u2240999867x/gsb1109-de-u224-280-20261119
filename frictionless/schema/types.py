@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Literal, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Protocol, Tuple, Union
 
 from typing_extensions import Required, TypedDict
 
@@ -71,6 +71,15 @@ class INumberField(IField, total=False):
     bareNumber: bool
     groupChar: str
     decimalChar: str
+    units: Dict[str, Any]
+    unitMap: Dict[str, Any]
+    ratioUnits: Dict[str, Any]
+    unit: Union[str, Dict[str, Any]]
+    outputUnit: str
+    outputPrecision: int
+    decimalPlaces: int
+    outputDecimalPlaces: int
+    precision: int
 
 
 class IObjectField(IField, total=False):

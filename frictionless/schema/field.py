@@ -87,6 +87,15 @@ class Field(Metadata):
     Schema class of which the field is part of.
     """
 
+    _datapackage_version: Optional[types.IResolvedStandards] = attrs.field(
+        default=None, alias="datapackage_version"
+    )
+    """
+    Data Package standard version inherited at import time, used at read time
+    to apply version-gated constraints (`exclusiveMinimum`,
+    `exclusiveMaximum`). Private (not exported).
+    """
+
     builtin: ClassVar[bool] = False
     """
     Specifies if field is the builtin feature.
@@ -136,6 +145,15 @@ class Field(Metadata):
         for name in self.supported_constraints:
             constraint = self.constraints.get(name)
             if constraint is not None:
+                # `exclusiveMinimum`/`exclusiveMaximum` are a v2 addition:
+                # under v1 the descriptor is rejected, so they are not
+                # applied at read time either. An "unknown" version (custom
+                # profile) and a detached field accept v1+v2.
+                if (
+                    name in ("exclusiveMinimum", "exclusiveMaximum")
+                    and self._datapackage_version == "v1"
+                ):
+                    continue
                 if name in [
                     "minimum",
                     "maximum",

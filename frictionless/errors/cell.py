@@ -108,6 +108,13 @@ class ConstraintError(CellError):
     template = 'The cell "{cell}" in row at position "{rowNumber}" and field "{fieldName}" at position "{fieldNumber}" does not conform to a constraint: {note}'
 
 
+class LossyValueError(CellError):
+    type = "lossy-value"
+    title = "Lossy Value"
+    description = "A value cannot be written without losing precision in the configured output unit or display precision."
+    template = 'The cell "{cell}" in row at position "{rowNumber}" and field "{fieldName}" at position "{fieldNumber}" cannot be written losslessly: {note}'
+
+
 class UniqueError(CellError):
     type = "unique-error"
     title = "Unique Error"
