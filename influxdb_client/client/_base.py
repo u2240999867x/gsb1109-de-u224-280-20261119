@@ -230,24 +230,28 @@ class _BaseQueryApi(object):
     """Base implementation for Queryable API."""
 
     def _to_tables(self, response, query_options=None, response_metadata_mode:
-                   FluxResponseMetadataMode = FluxResponseMetadataMode.full) -> TableList:
+                   FluxResponseMetadataMode = FluxResponseMetadataMode.full, date_helper=None) -> TableList:
         """
         Parse HTTP response to TableList.
 
         :param response: HTTP response from an HTTP client. Expected type: `urllib3.response.HTTPResponse`.
+        :param date_helper: date helper captured when the query started.
         """
-        _parser = self._to_tables_parser(response, query_options, response_metadata_mode)
+        _parser = self._to_tables_parser(response, query_options, response_metadata_mode, date_helper)
         list(_parser.generator())
         return _parser.table_list()
 
     async def _to_tables_async(self, response, query_options=None, response_metadata_mode:
-                               FluxResponseMetadataMode = FluxResponseMetadataMode.full) -> TableList:
+                               FluxResponseMetadataMode = FluxResponseMetadataMode.full,
+                               date_helper=None) -> TableList:
         """
         Parse HTTP response to TableList.
 
         :param response: HTTP response from an HTTP client. Expected type: `aiohttp.client_reqrep.ClientResponse`.
+        :param date_helper: date helper captured when the query started.
         """
-        async with self._to_tables_parser(response, query_options, response_metadata_mode) as parser:
+        _parser = self._to_tables_parser(response, query_options, response_metadata_mode, date_helper)
+        async with _parser as parser:
             async for _ in parser.generator_async():
                 pass
             return parser.table_list()
@@ -257,65 +261,74 @@ class _BaseQueryApi(object):
         return CSVIterator(response)
 
     def _to_flux_record_stream(self, response, query_options=None,
-                               response_metadata_mode: FluxResponseMetadataMode = FluxResponseMetadataMode.full) -> \
+                               response_metadata_mode: FluxResponseMetadataMode = FluxResponseMetadataMode.full,
+                               date_helper=None) -> \
             Generator[FluxRecord, Any, None]:
         """
         Parse HTTP response to FluxRecord stream.
 
         :param response: HTTP response from an HTTP client. Expected type: `urllib3.response.HTTPResponse`.
+        :param date_helper: date helper captured when the query started.
         """
-        _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode)
+        _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode, date_helper)
         return _parser.generator()
 
     async def _to_flux_record_stream_async(self, response, query_options=None, response_metadata_mode:
-                                           FluxResponseMetadataMode = FluxResponseMetadataMode.full) -> \
+                                           FluxResponseMetadataMode = FluxResponseMetadataMode.full,
+                                           date_helper=None) -> \
             AsyncGenerator['FluxRecord', None]:
         """
         Parse HTTP response to FluxRecord stream.
 
         :param response: HTTP response from an HTTP client. Expected type: `aiohttp.client_reqrep.ClientResponse`.
+        :param date_helper: date helper captured when the query started.
         """
-        _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode)
+        _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode, date_helper)
         return (await _parser.__aenter__()).generator_async()
 
     def _to_data_frame_stream(self, data_frame_index, response, query_options=None,
                               response_metadata_mode: FluxResponseMetadataMode = FluxResponseMetadataMode.full,
-                              use_extension_dtypes=False):
+                              use_extension_dtypes=False, date_helper=None):
         """
         Parse HTTP response to DataFrame stream.
 
         :param response: HTTP response from an HTTP client. Expected type: `urllib3.response.HTTPResponse`.
+        :param date_helper: date helper captured when the query started.
         """
         _parser = self._to_data_frame_stream_parser(data_frame_index, query_options, response, response_metadata_mode,
-                                                    use_extension_dtypes)
+                                                    use_extension_dtypes, date_helper)
         return _parser.generator()
 
     async def _to_data_frame_stream_async(self, data_frame_index, response, query_options=None, response_metadata_mode:
                                           FluxResponseMetadataMode = FluxResponseMetadataMode.full,
-                                          use_extension_dtypes=False):
+                                          use_extension_dtypes=False, date_helper=None):
         """
         Parse HTTP response to DataFrame stream.
 
         :param response: HTTP response from an HTTP client. Expected type: `aiohttp.client_reqrep.ClientResponse`.
+        :param date_helper: date helper captured when the query started.
         """
         _parser = self._to_data_frame_stream_parser(data_frame_index, query_options, response, response_metadata_mode,
-                                                    use_extension_dtypes)
+                                                    use_extension_dtypes, date_helper)
         return (await _parser.__aenter__()).generator_async()
 
-    def _to_tables_parser(self, response, query_options, response_metadata_mode):
+    def _to_tables_parser(self, response, query_options, response_metadata_mode, date_helper=None):
         return FluxCsvParser(response=response, serialization_mode=FluxSerializationMode.tables,
-                             query_options=query_options, response_metadata_mode=response_metadata_mode)
+                             query_options=query_options, response_metadata_mode=response_metadata_mode,
+                             date_helper=self._get_date_helper(query_options) if date_helper is None else date_helper)
 
-    def _to_flux_record_stream_parser(self, query_options, response, response_metadata_mode):
+    def _to_flux_record_stream_parser(self, query_options, response, response_metadata_mode, date_helper=None):
         return FluxCsvParser(response=response, serialization_mode=FluxSerializationMode.stream,
-                             query_options=query_options, response_metadata_mode=response_metadata_mode)
+                             query_options=query_options, response_metadata_mode=response_metadata_mode,
+                             date_helper=self._get_date_helper(query_options) if date_helper is None else date_helper)
 
     def _to_data_frame_stream_parser(self, data_frame_index, query_options, response, response_metadata_mode,
-                                     use_extension_dtypes):
+                                     use_extension_dtypes, date_helper=None):
         return FluxCsvParser(response=response, serialization_mode=FluxSerializationMode.dataFrame,
                              data_frame_index=data_frame_index, query_options=query_options,
                              response_metadata_mode=response_metadata_mode,
-                             use_extension_dtypes=use_extension_dtypes)
+                             use_extension_dtypes=use_extension_dtypes,
+                             date_helper=self._get_date_helper(query_options) if date_helper is None else date_helper)
 
     def _to_data_frames(self, _generator):
         """Parse stream of DataFrames into expected type."""
@@ -335,12 +348,36 @@ class _BaseQueryApi(object):
     def _org_param(self, org):
         return get_org_query_param(org=org, client=self._influxdb_client)
 
-    def _get_query_options(self):
-        if self._query_options and self._query_options.profilers:
-            return self._query_options
+    def _get_query_options(self, date_helper=None):
+        """Resolve query options for one call without mutating the API configuration."""
+        from influxdb_client.client.query_api import QueryOptions
+        if self._query_options and (self._query_options.profilers or self._query_options.date_helper is not None):
+            query_options = self._query_options
         elif self._influxdb_client.profilers:
-            from influxdb_client.client.query_api import QueryOptions
-            return QueryOptions(profilers=self._influxdb_client.profilers)
+            query_options = QueryOptions(profilers=self._influxdb_client.profilers)
+        else:
+            query_options = None
+
+        if date_helper is None or query_options is not None and query_options.date_helper is date_helper:
+            return query_options
+
+        return QueryOptions(profilers=query_options.profilers if query_options is not None else None,
+                            profiler_callback=query_options.profiler_callback if query_options is not None else None,
+                            date_helper=date_helper)
+
+    def _capture_date_helper(self, date_helper=None):
+        """Freeze the date parser for one response at the time the query starts."""
+        if date_helper is not None:
+            return date_helper
+        if self._query_options is not None and self._query_options.date_helper is not None:
+            return self._query_options.date_helper
+        return get_date_helper()
+
+    def _get_date_helper(self, query_options=None):
+        """Resolve the date helper already attached to the query options."""
+        if query_options is not None and query_options.date_helper is not None:
+            return query_options.date_helper
+        return get_date_helper()
 
     def _create_query(self, query, dialect=default_dialect, params: dict = None, **kwargs):
         query_options = self._get_query_options()

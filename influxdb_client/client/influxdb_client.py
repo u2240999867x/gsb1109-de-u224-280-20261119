@@ -295,14 +295,14 @@ class InfluxDBClient(_BaseClient):
         """
         return WriteApi(influxdb_client=self, write_options=write_options, point_settings=point_settings, **kwargs)
 
-    def query_api(self, query_options: QueryOptions = QueryOptions()) -> QueryApi:
+    def query_api(self, query_options: QueryOptions = None) -> QueryApi:
         """
         Create an Query API instance.
 
         :param query_options: optional query api configuration
         :return: Query api instance
         """
-        return QueryApi(self, query_options)
+        return QueryApi(self, query_options if query_options is not None else QueryOptions())
 
     def invokable_scripts_api(self) -> InvokableScriptsApi:
         """

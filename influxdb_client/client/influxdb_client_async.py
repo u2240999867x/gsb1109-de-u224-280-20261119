@@ -263,14 +263,14 @@ class InfluxDBClientAsync(_BaseClient):
 
         return await ping_service.build_type_async()
 
-    def query_api(self, query_options: QueryOptions = QueryOptions()) -> QueryApiAsync:
+    def query_api(self, query_options: QueryOptions = None) -> QueryApiAsync:
         """
         Create an asynchronous Query API instance.
 
         :param query_options: optional query api configuration
         :return: Query api instance
         """
-        return QueryApiAsync(self, query_options)
+        return QueryApiAsync(self, query_options if query_options is not None else QueryOptions())
 
     def write_api(self, point_settings=None) -> WriteApiAsync:
         """

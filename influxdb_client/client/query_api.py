@@ -14,21 +14,36 @@ from influxdb_client.client.flux_table import FluxRecord, TableList, CSVIterator
 class QueryOptions(object):
     """Query options."""
 
-    def __init__(self, profilers: List[str] = None, profiler_callback: Callable = None) -> None:
+    def __init__(self, profilers: List[str] = None, profiler_callback: Callable = None,
+                 date_helper=None, datetime_helper=None) -> None:
         """
         Initialize query options.
 
         :param profilers: list of enabled flux profilers
         :param profiler_callback: callback function return profilers (FluxRecord)
+        :param date_helper: optional :class:`~influxdb_client.client.util.date_utils.DateHelper`
+                            used to parse time values of a response. When it is not specified the current
+                            process-wide helper is captured when a query is started.
+        :param datetime_helper: an alias for ``date_helper``.
         """
         self.profilers = profilers
         self.profiler_callback = profiler_callback
+        self.date_helper = date_helper if date_helper is not None else datetime_helper
+
+    @property
+    def datetime_helper(self):
+        """An alias for ``date_helper``."""
+        return self.date_helper
+
+    @datetime_helper.setter
+    def datetime_helper(self, value):
+        self.date_helper = value
 
 
 class QueryApi(_BaseQueryApi):
     """Implementation for '/api/v2/query' endpoint."""
 
-    def __init__(self, influxdb_client, query_options=QueryOptions()):
+    def __init__(self, influxdb_client, query_options=None):
         """
         Initialize query client.
 
@@ -124,7 +139,8 @@ class QueryApi(_BaseQueryApi):
 
         return result
 
-    def query(self, query: str, org=None, params: dict = None) -> TableList:
+    def query(self, query: str, org=None, params: dict = None, date_helper=None,
+              datetime_helper=None) -> TableList:
         """Execute synchronous Flux query and return result as a :class:`~influxdb_client.client.flux_table.FluxTable` list.
 
         :param query: the Flux query
@@ -132,6 +148,8 @@ class QueryApi(_BaseQueryApi):
                                       Take the ``ID``, ``Name`` or ``Organization``.
                                       If not specified the default value from ``InfluxDBClient.org`` is used.
         :param params: bind parameters
+        :param date_helper: optional time parser used only for this response.
+        :param datetime_helper: an alias for ``date_helper``.
         :return: :class:`~influxdb_client.client.flux_table.FluxTable` list wrapped into
                  :class:`~influxdb_client.client.flux_table.TableList`
         :rtype: TableList
@@ -199,13 +217,17 @@ class QueryApi(_BaseQueryApi):
             ]
         """  # noqa: E501
         org = self._org_param(org)
+        if date_helper is None:
+            date_helper = datetime_helper
+        date_helper = self._capture_date_helper(date_helper)
 
         response = self._query_api.post_query(org=org, query=self._create_query(query, self.default_dialect, params),
                                               async_req=False, _preload_content=False, _return_http_data_only=False)
 
-        return self._to_tables(response, query_options=self._get_query_options())
+        return self._to_tables(response, query_options=self._get_query_options(date_helper), date_helper=date_helper)
 
-    def query_stream(self, query: str, org=None, params: dict = None) -> Generator['FluxRecord', Any, None]:
+    def query_stream(self, query: str, org=None, params: dict = None, date_helper=None,
+                     datetime_helper=None) -> Generator['FluxRecord', Any, None]:
         """
         Execute synchronous Flux query and return stream of FluxRecord as a Generator['FluxRecord'].
 
@@ -214,16 +236,25 @@ class QueryApi(_BaseQueryApi):
                                       Take the ``ID``, ``Name`` or ``Organization``.
                                       If not specified the default value from ``InfluxDBClient.org`` is used.
         :param params: bind parameters
+        :param date_helper: optional :class:`~influxdb_client.client.util.date_utils.DateHelper`
+                            used to parse time values of this response. When it is not specified the
+                            helper configured on the ``QueryApi`` is used, otherwise the current
+                            process-wide helper is captured when the query starts.
+        :param datetime_helper: an alias for ``date_helper``.
         :return: Generator['FluxRecord']
         """
         org = self._org_param(org)
+        if date_helper is None:
+            date_helper = datetime_helper
+        date_helper = self._capture_date_helper(date_helper)
 
         response = self._query_api.post_query(org=org, query=self._create_query(query, self.default_dialect, params),
                                               async_req=False, _preload_content=False, _return_http_data_only=False)
-        return self._to_flux_record_stream(response, query_options=self._get_query_options())
+        query_options = self._get_query_options(date_helper)
+        return self._to_flux_record_stream(response, query_options=query_options, date_helper=date_helper)
 
     def query_data_frame(self, query: str, org=None, data_frame_index: List[str] = None, params: dict = None,
-                         use_extension_dtypes: bool = False):
+                         use_extension_dtypes: bool = False, date_helper=None, datetime_helper=None):
         """
         Execute synchronous Flux query and return Pandas DataFrame.
 
@@ -257,11 +288,12 @@ class QueryApi(_BaseQueryApi):
                 - https://docs.influxdata.com/flux/latest/stdlib/influxdata/influxdb/schema/fieldsascols/
         """  # noqa: E501
         _generator = self.query_data_frame_stream(query, org=org, data_frame_index=data_frame_index, params=params,
-                                                  use_extension_dtypes=use_extension_dtypes)
+                                                  use_extension_dtypes=use_extension_dtypes,
+                                                  date_helper=date_helper, datetime_helper=datetime_helper)
         return self._to_data_frames(_generator)
 
     def query_data_frame_stream(self, query: str, org=None, data_frame_index: List[str] = None, params: dict = None,
-                                use_extension_dtypes: bool = False):
+                                use_extension_dtypes: bool = False, date_helper=None, datetime_helper=None):
         """
         Execute synchronous Flux query and return stream of Pandas DataFrame as a :class:`~Generator[DataFrame]`.
 
@@ -295,6 +327,9 @@ class QueryApi(_BaseQueryApi):
                 - https://docs.influxdata.com/flux/latest/stdlib/influxdata/influxdb/schema/fieldsascols/
         """  # noqa: E501
         org = self._org_param(org)
+        if date_helper is None:
+            date_helper = datetime_helper
+        date_helper = self._capture_date_helper(date_helper)
 
         response = self._query_api.post_query(org=org, query=self._create_query(query, self.default_dialect, params,
                                                                                 dataframe_query=True),
@@ -302,8 +337,9 @@ class QueryApi(_BaseQueryApi):
 
         return self._to_data_frame_stream(data_frame_index=data_frame_index,
                                           response=response,
-                                          query_options=self._get_query_options(),
-                                          use_extension_dtypes=use_extension_dtypes)
+                                          query_options=self._get_query_options(date_helper),
+                                          use_extension_dtypes=use_extension_dtypes,
+                                          date_helper=date_helper)
 
     def __del__(self):
         """Close QueryAPI."""

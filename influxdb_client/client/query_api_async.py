@@ -15,7 +15,7 @@ from .._async.rest import RESTResponseAsync
 class QueryApiAsync(_BaseQueryApi):
     """Asynchronous implementation for '/api/v2/query' endpoint."""
 
-    def __init__(self, influxdb_client, query_options=QueryOptions()):
+    def __init__(self, influxdb_client, query_options=None):
         """
         Initialize query client.
 
@@ -23,7 +23,8 @@ class QueryApiAsync(_BaseQueryApi):
         """
         super().__init__(influxdb_client=influxdb_client, query_options=query_options)
 
-    async def query(self, query: str, org=None, params: dict = None) -> TableList:
+    async def query(self, query: str, org=None, params: dict = None, date_helper=None,
+                    datetime_helper=None) -> TableList:
         """
         Execute asynchronous Flux query and return result as a :class:`~influxdb_client.client.flux_table.FluxTable` list.
 
@@ -32,6 +33,8 @@ class QueryApiAsync(_BaseQueryApi):
                                       Take the ``ID``, ``Name`` or ``Organization``.
                                       If not specified the default value from ``InfluxDBClientAsync.org`` is used.
         :param params: bind parameters
+        :param date_helper: optional time parser used only for this response.
+        :param datetime_helper: an alias for ``date_helper``.
         :return: :class:`~influxdb_client.client.flux_table.FluxTable` list wrapped into
                  :class:`~influxdb_client.client.flux_table.TableList`
         :rtype: TableList
@@ -98,12 +101,17 @@ class QueryApiAsync(_BaseQueryApi):
             ]
         """  # noqa: E501
         org = self._org_param(org)
+        if date_helper is None:
+            date_helper = datetime_helper
+        date_helper = self._capture_date_helper(date_helper)
 
         response = await self._post_query(org=org, query=self._create_query(query, self.default_dialect, params))
 
-        return await self._to_tables_async(response, query_options=self._get_query_options())
+        return await self._to_tables_async(response, query_options=self._get_query_options(date_helper),
+                                           date_helper=date_helper)
 
-    async def query_stream(self, query: str, org=None, params: dict = None) -> AsyncGenerator['FluxRecord', None]:
+    async def query_stream(self, query: str, org=None, params: dict = None, date_helper=None,
+                           datetime_helper=None) -> AsyncGenerator['FluxRecord', None]:
         """
         Execute asynchronous Flux query and return stream of :class:`~influxdb_client.client.flux_table.FluxRecord` as an AsyncGenerator[:class:`~influxdb_client.client.flux_table.FluxRecord`].
 
@@ -112,16 +120,25 @@ class QueryApiAsync(_BaseQueryApi):
                                       Take the ``ID``, ``Name`` or ``Organization``.
                                       If not specified the default value from ``InfluxDBClientAsync.org`` is used.
         :param params: bind parameters
+        :param date_helper: optional :class:`~influxdb_client.client.util.date_utils.DateHelper`
+                            used to parse time values of this response. When it is not specified the
+                            helper configured on the ``QueryApi`` is used, otherwise the current
+                            process-wide helper is captured when the query starts.
+        :param datetime_helper: an alias for ``date_helper``.
         :return: AsyncGenerator[:class:`~influxdb_client.client.flux_table.FluxRecord`]
         """  # noqa: E501
         org = self._org_param(org)
+        if date_helper is None:
+            date_helper = datetime_helper
+        date_helper = self._capture_date_helper(date_helper)
 
         response = await self._post_query(org=org, query=self._create_query(query, self.default_dialect, params))
 
-        return await self._to_flux_record_stream_async(response, query_options=self._get_query_options())
+        return await self._to_flux_record_stream_async(response, query_options=self._get_query_options(date_helper),
+                                                       date_helper=date_helper)
 
     async def query_data_frame(self, query: str, org=None, data_frame_index: List[str] = None, params: dict = None,
-                               use_extension_dtypes: bool = False):
+                               use_extension_dtypes: bool = False, date_helper=None, datetime_helper=None):
         """
         Execute asynchronous Flux query and return :class:`~pandas.core.frame.DataFrame`.
 
@@ -155,7 +172,8 @@ class QueryApiAsync(_BaseQueryApi):
                 - https://docs.influxdata.com/flux/latest/stdlib/influxdata/influxdb/schema/fieldsascols/
         """  # noqa: E501
         _generator = await self.query_data_frame_stream(query, org=org, data_frame_index=data_frame_index,
-                                                        params=params, use_extension_dtypes=use_extension_dtypes)
+                                                        params=params, use_extension_dtypes=use_extension_dtypes,
+                                                        date_helper=date_helper, datetime_helper=datetime_helper)
 
         dataframes = []
         async for dataframe in _generator:
@@ -164,7 +182,8 @@ class QueryApiAsync(_BaseQueryApi):
         return self._to_data_frames(dataframes)
 
     async def query_data_frame_stream(self, query: str, org=None, data_frame_index: List[str] = None,
-                                      params: dict = None, use_extension_dtypes: bool = False):
+                                      params: dict = None, use_extension_dtypes: bool = False,
+                                      date_helper=None, datetime_helper=None):
         """
         Execute asynchronous Flux query and return stream of :class:`~pandas.core.frame.DataFrame` as an AsyncGenerator[:class:`~pandas.core.frame.DataFrame`].
 
@@ -198,13 +217,17 @@ class QueryApiAsync(_BaseQueryApi):
                 - https://docs.influxdata.com/flux/latest/stdlib/influxdata/influxdb/schema/fieldsascols/
         """  # noqa: E501
         org = self._org_param(org)
+        if date_helper is None:
+            date_helper = datetime_helper
+        date_helper = self._capture_date_helper(date_helper)
 
         response = await self._post_query(org=org, query=self._create_query(query, self.default_dialect, params,
                                                                             dataframe_query=True))
 
         return await self._to_data_frame_stream_async(data_frame_index=data_frame_index, response=response,
-                                                      query_options=self._get_query_options(),
-                                                      use_extension_dtypes=use_extension_dtypes)
+                                                      query_options=self._get_query_options(date_helper),
+                                                      use_extension_dtypes=use_extension_dtypes,
+                                                      date_helper=date_helper)
 
     async def query_raw(self, query: str, org=None, dialect=_BaseQueryApi.default_dialect, params: dict = None):
         """

@@ -8,7 +8,7 @@ from enum import Enum
 from typing import List
 
 from influxdb_client.client.flux_table import FluxTable, FluxColumn, FluxRecord, TableList
-from influxdb_client.client.util.date_utils import get_date_helper
+from influxdb_client.client.util.date_utils import get_date_helper, resolve_parse_date
 from influxdb_client.rest import _UTF_8_encoding
 
 ANNOTATION_DEFAULT = "#default"
@@ -65,12 +65,15 @@ class FluxCsvParser(object):
     def __init__(self, response, serialization_mode: FluxSerializationMode,
                  data_frame_index: List[str] = None, query_options=None,
                  response_metadata_mode: FluxResponseMetadataMode = FluxResponseMetadataMode.full,
-                 use_extension_dtypes=False) -> None:
+                 use_extension_dtypes=False, date_helper=None) -> None:
         """
         Initialize defaults.
 
         :param response: HTTP response from a HTTP client.
                          Acceptable types: `urllib3.response.HTTPResponse`, `aiohttp.client_reqrep.ClientResponse`.
+        :param date_helper: date helper used to parse time values in this response.
+                            The helper is resolved when the parser is created, so every response
+                            keeps its own parsing strategy for its whole lifetime.
         """
         self._response = response
         self.tables = TableList()
@@ -81,6 +84,10 @@ class FluxCsvParser(object):
         self._data_frame_values = []
         self._profilers = query_options.profilers if query_options is not None else None
         self._profiler_callback = query_options.profiler_callback if query_options is not None else None
+        if date_helper is None and query_options is not None:
+            date_helper = getattr(query_options, 'date_helper', None)
+        self._date_helper = date_helper if date_helper is not None else get_date_helper()
+        self._parse_date = resolve_parse_date(date_helper)
         self._async_mode = True if 'ClientResponse' in type(response).__name__ else False
 
     def _close(self):
@@ -321,7 +328,7 @@ class FluxCsvParser(object):
             return base64.b64decode(str_val)
 
         if "dateTime:RFC3339" == column.data_type or "dateTime:RFC3339Nano" == column.data_type:
-            return get_date_helper().parse_date(str_val)
+            return self._parse_date(str_val)
 
         if "duration" == column.data_type:
             # todo better type ?

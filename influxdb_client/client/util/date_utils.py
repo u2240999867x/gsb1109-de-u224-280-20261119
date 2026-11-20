@@ -7,6 +7,7 @@ from datetime import timezone as tz
 from dateutil import parser
 
 date_helper = None
+_default_parse_date = None
 
 lock_ = threading.Lock()
 
@@ -47,7 +48,7 @@ class DateHelper:
         :return: Returns a :class:`datetime.datetime` object or compliant implementation
                  like :class:`class 'pandas._libs.tslibs.timestamps.Timestamp`
         """
-        pass
+        return _parse_date_with_default_parser(date_string)
 
     def to_nanoseconds(self, delta):
         """
@@ -75,6 +76,37 @@ class DateHelper:
             return value.astimezone(tz.utc)
 
 
+def _select_default_parser():
+    """Select the fastest available ISO-8601 parser."""
+    try:
+        import ciso8601
+        return ciso8601.parse_datetime
+    except ModuleNotFoundError:
+        if (version_info.major, version_info.minor) >= (3, 11):
+            return datetime.datetime.fromisoformat
+        return parser.parse
+
+
+def _parse_date_with_default_parser(date_string: str):
+    """Parse date string by the fastest available ISO-8601 parser."""
+    global _default_parse_date
+    if _default_parse_date is None:
+        with lock_:
+            if _default_parse_date is None:
+                _default_parse_date = _select_default_parser()
+
+    return _default_parse_date(date_string)
+
+
+def resolve_parse_date(date_helper=None):
+    """Resolve a helper, helper class or plain parser callable to a date parsing function."""
+    helper = get_date_helper() if date_helper is None else date_helper
+    if isinstance(helper, type):
+        helper = helper()
+    parse_date = getattr(helper, 'parse_date', None)
+    return parse_date if parse_date is not None else helper
+
+
 def get_date_helper() -> DateHelper:
     """
     Return DateHelper with proper implementation.
@@ -88,14 +120,7 @@ def get_date_helper() -> DateHelper:
             # avoid duplicate initialization
             if date_helper is None:
                 _date_helper = DateHelper()
-                try:
-                    import ciso8601
-                    _date_helper.parse_date = ciso8601.parse_datetime
-                except ModuleNotFoundError:
-                    if (version_info.major, version_info.minor) >= (3, 11):
-                        _date_helper.parse_date = datetime.datetime.fromisoformat
-                    else:
-                        _date_helper.parse_date = parser.parse
+                _date_helper.parse_date = _select_default_parser()
                 date_helper = _date_helper
 
     return date_helper
