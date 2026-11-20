@@ -33,6 +33,16 @@ from .fitslib import (
 )
 
 from .header import FITSHDR, FITSRecord, FITSCard
+from .header_diff import (
+    HeaderChange,
+    HeaderDiff,
+    HeaderDiffError,
+    HeaderDiffResult,
+    apply_header_diff,
+    diff_headers,
+    normalize_header_records,
+    write_header_diff,
+)
 from .hdu import BINARY_TBL, ASCII_TBL, IMAGE_HDU
 
 from . import util

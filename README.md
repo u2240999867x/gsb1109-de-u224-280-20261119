@@ -337,6 +337,29 @@ fits[1].write_history("re-processed with software Y")
 
 fits.close()
 
+# Header revisions can be recorded as a set of applicable changes.  The
+# changes keep track of each COMMENT and HISTORY occurrence, and a long
+# string is one change even though it spans CONTINUE cards.
+
+old_header = fitsio.read_header('original.fits')
+new_header = fitsio.read_header('revised.fits')
+
+diff = old_header.diff(new_header)
+for change in diff:
+    print(change.action, change.keyword, change.occurrence)
+    print('   ', change.old_value, '->', change.new_value)
+
+# apply to a header object; on failure HeaderDiffError is raised and the
+# header is left untouched, with the failed changes listed
+updated = diff.apply(old_header)
+
+# the change set is serializable for an audit log
+payload = diff.to_dict()
+diff2 = fitsio.HeaderDiff.from_dict(payload)
+
+# apply directly to a file; the data section is preserved byte-for-byte
+fitsio.write_header_diff('original.fits', diff, ext=0)
+
 # using a context, the file is closed automatically after leaving the block
 with FITS('path/to/file') as fits:
     data = fits[ext].read()

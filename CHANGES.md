@@ -4,6 +4,16 @@
 
 New Features
 
+- Added `FITSHDR.diff()` / `fitsio.diff_headers()` for recording header
+  revisions as a set of applicable changes.  Each COMMENT and HISTORY
+  occurrence keeps its identity, so the change set says which occurrence
+  changed.  Long strings and their CONTINUE cards are treated as one
+  logical change.  Changes can be serialized for an audit log and applied
+  atomically; when a card cannot be located, `HeaderDiffError` lists the
+  failed changes and the header is left untouched.
+- Added `fitsio.write_header_diff()` to apply a change set to a FITS file
+  while preserving the image or table data bytes.
+
 - Added detection of tile-compressed tables (the `ZTABLE` convention), which
   `cfitsio` cannot read.  These are now represented by a `CompressedTableHDU`
   with the metadata of the uncompressed table.  Accessing the data raises a

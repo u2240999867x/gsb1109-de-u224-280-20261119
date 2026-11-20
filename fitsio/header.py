@@ -329,6 +329,50 @@ class FITSHDR(object):
         else:
             return default_value
 
+    def diff(self, other):
+        """
+        Return the change set that turns this header into ``other``.
+
+        The result is a :class:`fitsio.header_diff.HeaderDiff`.  COMMENT
+        and HISTORY occurrences keep their identity, so the change set
+        says which occurrence of a repeated card changed.
+
+        parameters
+        ----------
+        other: FITSHDR or list of records
+            The revised header.
+
+        returns
+        -------
+        A HeaderDiff object.
+        """
+        from .header_diff import diff_headers
+
+        return diff_headers(self, other)
+
+    def apply_changes(self, changes, in_place=False):
+        """
+        Apply a header change set to this header.
+
+        On failure a :class:`fitsio.header_diff.HeaderDiffError` is
+        raised and this header is left unchanged.
+
+        parameters
+        ----------
+        changes: HeaderDiff, dict or list of HeaderChange
+            The change set to apply.
+        in_place: bool, optional
+            If True, modify this object and return it.  Otherwise return
+            a new FITSHDR.
+
+        returns
+        -------
+        FITSHDR
+        """
+        from .header_diff import apply_header_diff
+
+        return apply_header_diff(self, changes, in_place=in_place)
+
     def __len__(self):
         return len(self._record_list)
 
