@@ -80,6 +80,13 @@ class PackageError(MetadataError):
     template = "The data package has an error: {note}"
 
 
+class CompatibilityError(MetadataError):
+    type = "compatibility-error"
+    title = "Compatibility Error"
+    description = "A descriptor compatibility audit cannot be processed."
+    template = "The descriptor compatibility audit has an error: {note}"
+
+
 class PipelineError(MetadataError):
     type = "pipeline-error"
     title = "Pipeline Error"

@@ -20,6 +20,9 @@ from .catalog import Catalog as Catalog
 from .catalog import Dataset as Dataset
 from .checklist import Check as Check
 from .checklist import Checklist as Checklist
+from .compatibility import CompatibilityAudit as CompatibilityAudit
+from .compatibility import CompatibilityContract as CompatibilityContract
+from .compatibility import CompatibilityReport as CompatibilityReport
 from .detector import Detector as Detector
 from .dialect import Control as Control
 from .dialect import Dialect as Dialect

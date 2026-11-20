@@ -1,5 +1,6 @@
 # Register modules
 from . import (
+    compatibility,
     convert,
     describe,
     explore,

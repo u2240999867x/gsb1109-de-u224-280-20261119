@@ -111,6 +111,41 @@ def test_schema_read_cells_object_missing_values():
     assert len(notes) == 2
 
 
+def test_schema_write_cells_uses_writers():
+    # `write_cells` normalizes/uncasts: it must not run the read-side
+    # conversion (which would turn "5" into 5 rather than leave the wire cell
+    # as a string).
+    schema = Schema.from_descriptor(
+        {
+            "fields": [
+                {"name": "name", "type": "string"},
+                {"name": "count", "type": "integer"},
+            ]
+        }
+    )
+    cells, notes = schema.write_cells(["name", 5])
+    assert cells == ["name", "5"]
+    assert notes == [None, None]
+
+
+def test_schema_write_cells_encodes_missing_values():
+    schema = Schema.from_descriptor(
+        {
+            "$schema": "https://datapackage.org/profiles/2.0/tableschema.json",
+            "fields": [
+                {
+                    "name": "code",
+                    "type": "string",
+                    "missingValues": ["", "NA"],
+                }
+            ],
+        }
+    )
+    cells, notes = schema.write_cells([None])
+    assert cells == [""]
+    assert notes == [None]
+
+
 def test_schema_read_cells_too_short():
     schema = Schema(DESCRIPTOR_MAX)
     source = ["string", "10.0", "1", "string"]

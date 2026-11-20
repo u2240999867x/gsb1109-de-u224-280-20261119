@@ -2,6 +2,18 @@
 
 Here described only the breaking and most significant changes. The full changelog and documentation for all released versions could be found in nicely formatted [commit history](https://github.com/frictionlessdata/frictionless-py/commits/main).
 
+## Unreleased
+
+- feat: descriptor compatibility audit (`CompatibilityAudit` and the
+  `frictionless compatibility` command) that replays the publisher's raw
+  records through each allowed read/write version direction and reports
+  rejected records, silent value/relationship changes, and the certifiable
+  range. A clean parse is not treated as compatibility; custom constraints
+  outside the supplied value domains stay "not certifiable".
+- fix: `Schema.write_cells`/`create_cell_writers` now use the field writers
+  instead of the readers, so normalizing a cell no longer casts it as a read
+  value.
+
 ## v5.21.0
 
 - feat: Data Package v2, support `exclusiveMinimum`, `exclusiveMaximum` 

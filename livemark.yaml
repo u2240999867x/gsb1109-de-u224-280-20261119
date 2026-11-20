@@ -42,6 +42,7 @@ pages:
         - path: docs/console/overview
         - path: docs/console/describe
         - path: docs/console/convert
+        - path: docs/console/compatibility
         - path: docs/console/explore
         - path: docs/console/extract
         - path: docs/console/index
@@ -83,6 +84,7 @@ pages:
         - path: docs/advanced/design
         - path: docs/advanced/system
         - path: docs/advanced/datapackage-versions
+        - path: docs/advanced/compatibility
         - path: docs/advanced/security
         - path: docs/advanced/extending
     - name: Data Resources
