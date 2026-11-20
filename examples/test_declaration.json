@@ -1,0 +1,51 @@
+{
+  "versions": {
+    "v1": {
+      "match": [
+        "编号",
+        "金额"
+      ],
+      "fields": [
+        {
+          "name": "number",
+          "column": 1,
+          "type": "text"
+        },
+        {
+          "name": "amount",
+          "column": 2,
+          "type": "number",
+          "locale": "de_DE"
+        }
+      ]
+    },
+    "v2": {
+      "match": [
+        "外部编号"
+      ],
+      "fields": [
+        {
+          "name": "number",
+          "column": 1,
+          "type": "text"
+        },
+        {
+          "name": "external_id",
+          "column": 2,
+          "type": "text"
+        },
+        {
+          "name": "amount",
+          "column": 3,
+          "type": "number",
+          "locale": "de_DE"
+        },
+        {
+          "name": "note",
+          "column": 4,
+          "type": "text"
+        }
+      ]
+    }
+  }
+}

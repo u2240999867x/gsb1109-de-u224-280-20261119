@@ -38,14 +38,18 @@ Converts a CSV file into JSON or GeoJSON (depending on flags):
 .sp
 .nf
 .ft C
-usage: csvjson [\-h] [\-d DELIMITER] [\-t] [\-q QUOTECHAR] [\-u {0,1,2,3}] [\-b]
-               [\-p ESCAPECHAR] [\-z FIELD_SIZE_LIMIT] [\-e ENCODING] [\-L LOCALE]
-               [\-S] [\-\-blanks] [\-\-null\-value NULL_VALUES [NULL_VALUES ...]]
+usage: csvjson [\-h] [\-d DELIMITER] [\-t] [\-q QUOTECHAR] [\-u {0,1,2,3,4,5}]
+               [\-b] [\-p ESCAPECHAR] [\-z FIELD_SIZE_LIMIT] [\-e ENCODING]
+               [\-L LOCALE] [\-S] [\-\-blanks]
+               [\-\-null\-value NULL_VALUES [NULL_VALUES ...]]
                [\-\-date\-format DATE_FORMAT] [\-\-datetime\-format DATETIME_FORMAT]
-               [\-H] [\-K SKIP_LINES] [\-v] [\-l] [\-\-zero] [\-V] [\-i INDENT]
-               [\-k KEY] [\-\-lat LAT] [\-\-lon LON] [\-\-type TYPE]
-               [\-\-geometry GEOMETRY] [\-\-crs CRS] [\-\-no\-bbox] [\-\-stream]
-               [\-y SNIFF_LIMIT] [\-I]
+               [\-\-no\-leading\-zeroes] [\-H] [\-K SKIP_LINES] [\-v] [\-l]
+               [\-\-add\-bom] [\-\-zero] [\-V] [\-i INDENT] [\-k KEY] [\-\-lat LAT]
+               [\-\-lon LON] [\-\-type TYPE] [\-\-geometry GEOMETRY] [\-\-crs CRS]
+               [\-\-no\-bbox] [\-\-stream] [\-y SNIFF_LIMIT] [\-I] [\-s DECLARATION]
+               [\-\-declaration\-version DECLARATION_VERSION]
+               [\-\-rejected REJECTED] [\-\-include\-undeclared]
+               [\-\-exclude\-undeclared]
                [FILE]
 
 Convert a CSV file into JSON (or GeoJSON).
@@ -85,12 +89,45 @@ optional arguments:
   \-I, \-\-no\-inference    Disable type inference (and \-\-locale, \-\-date\-format,
                         \-\-datetime\-format, \-\-no\-leading\-zeroes) when parsing
                         the input.
+  \-s DECLARATION, \-\-schema DECLARATION, \-\-declaration DECLARATION
+                        A JSON or CSV column declaration that selects, renames
+                        and types fields. See \fBColumn declarations\fP\&.
+  \-\-declaration\-version DECLARATION_VERSION, \-\-schema\-version DECLARATION_VERSION
+                        The version of the column declaration to apply, if the
+                        declaration describes multiple versions.
+  \-\-rejected REJECTED   Write rejected records, with their source line range
+                        and the declared column, as CSV to this file.
+  \-\-include\-undeclared  Output input columns that the declaration does not
+                        declare (the default).
+  \-\-exclude\-undeclared  Output only the columns that the declaration declares.
 .ft P
 .fi
 .UNINDENT
 .UNINDENT
 .sp
 See also: \fI\%Arguments common to all tools\fP\&.
+.SH COLUMN DECLARATIONS
+.sp
+A column declaration (\fB\-s/\\-\\-schema\fP) selects, renames and types fields. It can be JSON or CSV.
+.sp
+Every field identifies its source column by its \fBphysical position\fP in the input (1\-based, or 0\-based with
+\fB\-\-zero\fP), so a declaration keeps referring to the same source column even if two source headers are
+identical. A field can, alternatively, identify its source column by header.
+.sp
+A declared field keeps its value as \fBtext\fP unless it declares a type. In particular, an identifier like
+\fB00042\fP keeps its leading zeroes. A declared type can also be a number in a locale\(aqs format.
+.sp
+A version with a \fBmatch\fP list is selected automatically if the input\(aqs header contains all of its headers.
+Otherwise, if the declaration has one version, that version is used. If the declaration has multiple versions and
+the input matches more than one, the most specific version is used, and \fB\-\-declaration\-version\fP can select a
+version explicitly.
+.sp
+If a declared field\(aqs value can\(aqt be converted to its type, only that record is rejected: it is omitted
+from the JSON output, and later records keep their correct source line numbers. \fB\-\-rejected\fP writes the
+rejected records as CSV, with the source line range and the declared physical \fBcolumn\fP\&.
+.sp
+The streaming (\fB\-\-stream\fP) and array outputs reject the same records in the same order, and emit the same
+valid records. By default, input columns that the declaration doesn\(aqt declare are also output.
 .SH EXAMPLES
 .sp
 Convert veteran\(aqs education dataset to JSON keyed by state abbreviation:

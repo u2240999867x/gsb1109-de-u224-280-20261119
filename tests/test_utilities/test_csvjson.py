@@ -1,8 +1,13 @@
 import io
 import json
+import os
 import sys
+import tempfile
+
+import agate
 from unittest.mock import patch
 
+from csvkit.declaration import DeclarationError
 from csvkit.utilities.csvjson import CSVJSON, launch_new_instance
 from tests.utils import CSVKitTestCase, EmptyFileTests
 
@@ -254,3 +259,204 @@ class TestCSVJSON(CSVKitTestCase, EmptyFileTests):
             '{"type": "Feature", "properties": {"slug": "obeidder", "title": "Obeidder Monster", "description": "Sharpie and Spray Paint", "address": "3319 Seaton St.", "type": "Street Art", "photo_url": "http://i.imgur.com/3aX7E.jpg", "photo_credit": "Photo by Justin Edwards. Used with permission.", "last_seen_date": "4/15/12"}, "geometry": {"type": "Point", "coordinates": [-95.334619, 32.314431]}}',  # noqa: E501
             '{"type": "Feature", "properties": {"slug": "sensor-device", "title": "Sensor Device", "artist": "Kurt Dyrhaug", "address": "University of Texas, Campus Drive", "type": "Sculpture", "photo_url": "http://media.hacktyler.com/artmap/photos/sensor-device.jpg", "photo_credit": "Photo by Christopher Groskopf. Used with permission.", "last_seen_date": "4/16/12"}, "geometry": {"type": "Point", "coordinates": [-95.250699, 32.317216]}}',  # noqa: E501
         ])
+
+    def test_declaration_streaming(self):
+        js = [json.loads(line) for line in self.get_output(
+            ['--schema', 'examples/test_declaration.json', '--stream', 'examples/test_declared.csv']
+        ).splitlines()]
+
+        self.assertEqual(js, [
+            {'number': '1', 'external_id': '00042', 'amount': 1234.56, 'note': '第一行，含合法换行\n第二行'},
+            {'number': '2', 'external_id': '00043', 'amount': 12345.67, 'note': '正常'},
+            {'number': '4', 'external_id': '00045', 'amount': 9876.54, 'note': '继续'},
+        ])
+
+    def test_declaration_array(self):
+        js = json.loads(self.get_output(['--schema', 'examples/test_declaration.json', 'examples/test_declared.csv']))
+
+        self.assertEqual(js, [
+            {'number': '1', 'external_id': '00042', 'amount': 1234.56, 'note': '第一行，含合法换行\n第二行'},
+            {'number': '2', 'external_id': '00043', 'amount': 12345.67, 'note': '正常'},
+            {'number': '4', 'external_id': '00045', 'amount': 9876.54, 'note': '继续'},
+        ])
+
+    def test_declaration_streaming_and_array_agree(self):
+        args = ['--schema', 'examples/test_declaration.json', 'examples/test_declared.csv']
+
+        lines = [
+            json.loads(line) for line in self.get_output(args + ['--stream']).splitlines()
+        ]
+        array = json.loads(self.get_output(args))
+
+        self.assertEqual(lines, array)
+
+    def test_declaration_multiline_does_not_add_records(self):
+        js = json.loads(self.get_output(['--schema', 'examples/test_declaration.json', 'examples/test_declared.csv']))
+
+        # Four data records, one of which is rejected, and one of which contains a newline.
+        self.assertEqual(len(js), 3)
+        self.assertEqual(js[0]['note'], '第一行，含合法换行\n第二行')
+
+    def run_with_files(self, args, rejected=None):
+        output_file = io.TextIOWrapper(io.BytesIO(), encoding='utf-8', newline='', write_through=True)
+
+        utility = CSVJSON(args, output_file)
+        utility.run()
+
+        output = output_file.buffer.getvalue().decode('utf-8')
+        output_file.close()
+
+        rows = None
+        if rejected:
+            with open(rejected, encoding='utf-8', newline='') as f:
+                rows = list(agate.csv.reader(f))
+
+        return output, rows
+
+    def test_declaration_rejected_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rejected = os.path.join(directory, 'rejected.csv')
+            _output, rows = self.run_with_files(
+                ['--schema', 'examples/test_declaration.json', '--stream', '--rejected', rejected,
+                 'examples/test_declared.csv'],
+                rejected,
+            )
+
+        self.assertEqual(rows[0], ['line_start', 'line_end', 'column', 'source_name', 'field', 'value', 'msg'])
+        self.assertEqual(rows[1][:6], ['5', '5', '3', '金额', 'amount', '1.234,56,7'])
+
+    def test_declaration_both_modes_reject_identically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stream_rejected = os.path.join(directory, 'stream.csv')
+            array_rejected = os.path.join(directory, 'array.csv')
+
+            _stream, stream_rows = self.run_with_files(
+                ['--schema', 'examples/test_declaration.json', '--stream', '--rejected', stream_rejected,
+                 'examples/test_declared.csv'],
+                stream_rejected,
+            )
+            _array, array_rows = self.run_with_files(
+                ['--schema', 'examples/test_declaration.json', '--rejected', array_rejected,
+                 'examples/test_declared.csv'],
+                array_rejected,
+            )
+
+        self.assertEqual(stream_rows, array_rows)
+
+    def test_declaration_rejection_does_not_shift_later_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rejected = os.path.join(directory, 'rejected.csv')
+            output, _rows = self.run_with_files(
+                ['--schema', 'examples/test_declaration.json', '--stream', '--rejected', rejected,
+                 'examples/test_declared.csv'],
+                rejected,
+            )
+
+        # The record on lines 5-5 is rejected, and the later valid record is still output.
+        self.assertIn('"number": "4"', output)
+
+    def test_declaration_with_csv_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            declaration = os.path.join(directory, 'declaration.csv')
+            with open(declaration, 'w', encoding='utf-8', newline='') as f:
+                f.write(
+                    'version,name,column,type,locale\n'
+                    'v2,number,1,text,\n'
+                    'v2,external_id,2,text,\n'
+                    'v2,amount,3,number,de_DE\n'
+                    'v2,note,4,text,\n'
+                )
+
+            js = json.loads(self.get_output(['--schema', declaration, 'examples/test_declared.csv']))
+
+        self.assertEqual(js[0]['external_id'], '00042')
+        self.assertEqual(js[0]['amount'], 1234.56)
+
+    def test_declaration_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = os.path.join(directory, 'v1.csv')
+            with open(input_path, 'w', encoding='utf-8', newline='') as f:
+                f.write('编号,金额\n1,"1.234,56"\n2,"12.000,00"\n')
+
+            js = json.loads(self.get_output([
+                '--schema', 'examples/test_declaration.json', '--declaration-version', 'v1', input_path,
+            ]))
+
+        self.assertEqual(js[0], {'number': '1', 'amount': 1234.56})
+
+    def test_declaration_missing_physical_column(self):
+        with tempfile.TemporaryDirectory() as directory:
+            declaration = os.path.join(directory, 'declaration.json')
+            with open(declaration, 'w', encoding='utf-8') as f:
+                json.dump({'fields': [
+                    {'name': 'number', 'column': 1},
+                    {'name': 'amount', 'column': 9, 'type': 'number'},
+                ]}, f)
+
+            utility = CSVJSON(
+                ['--schema', declaration, '--stream', 'examples/test_declared.csv'],
+                io.StringIO(),
+            )
+
+            with self.assertRaisesRegex(DeclarationError, 'physical column 9 is missing'):
+                utility.run()
+
+    def test_declaration_skips_missing_optional_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            declaration = os.path.join(directory, 'declaration.csv')
+            with open(declaration, 'w', encoding='utf-8', newline='') as f:
+                f.write('name,column,type,required\nnumber,1,text,true\nmissing,9,text,false\n')
+
+            js = json.loads(self.get_output(['--schema', declaration, 'examples/test_declared.csv']))
+
+        self.assertEqual(js[0]['number'], '1')
+
+    def test_declaration_duplicate_source_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            declaration = os.path.join(directory, 'declaration.json')
+            with open(declaration, 'w', encoding='utf-8') as f:
+                json.dump({'fields': [
+                    {'name': 'number', 'column': 1, 'type': 'text'},
+                    {'name': 'external_id', 'column': 2, 'type': 'text'},
+                ]}, f)
+
+            js = json.loads(self.get_output(['--schema', declaration, 'examples/test_declared.csv']))
+
+        self.assertEqual(js[0]['number'], '1')
+        self.assertEqual(js[0]['external_id'], '00042')
+
+    def test_declaration_reads_input_once(self):
+        output_file = io.TextIOWrapper(io.BytesIO(), encoding='utf-8', newline='', write_through=True)
+        utility = CSVJSON(
+            ['--schema', 'examples/test_declaration.json', '--stream', 'examples/test_declared.csv'],
+            output_file,
+        )
+
+        original_reader = agate.csv.reader
+
+        reads = []
+
+        def counting_reader(f, **kwargs):
+            reader = original_reader(f, **kwargs)
+
+            class CountingReader:
+                def __iter__(self):
+                    return self
+
+                def __next__(self):
+                    row = next(reader)
+                    reads.append(row)
+                    return row
+
+                def __getattr__(self, name):
+                    return getattr(reader, name)
+
+            return CountingReader()
+
+        with patch('agate.csv.reader', counting_reader):
+            utility.run()
+
+        output_file.close()
+
+        # The header plus four data records, each read exactly once.
+        self.assertEqual(len(reads), 5)
