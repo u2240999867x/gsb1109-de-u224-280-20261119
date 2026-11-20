@@ -47,4 +47,4 @@ from ._fitsio_wrap import (
     cfitsio_is_reentrant,
 )
 
-from .fits_exceptions import FITSFormatError
+from .fits_exceptions import FITSFormatError, ColumnEditError

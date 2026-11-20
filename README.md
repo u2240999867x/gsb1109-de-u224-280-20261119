@@ -489,6 +489,31 @@ in Python 3 will now come back as a string and not a byte string. Note that this
 support is not the same as full unicode support. Internally, fitsio only supports
 the ASCII character set.
 
+### Scaled and Unmeasured Table Columns
+
+Binary tables may store integer codes with `TSCALn`, `TZEROn` and `TNULLn`
+calibration. Ordinary reads apply the calibration once and return the
+physical value:
+
+```python
+with fitsio.FITS(fname) as fits:
+    hdu = fits[1]
+    flux = hdu.read_column('flux')
+    validity = hdu.raw_column_valid('flux')
+```
+
+Use `raw=True` or `read_raw_column()` to inspect the stored integer codes.
+Validity is decided in that raw-code domain, so two adjacent codes that map to
+the same floating point value can still have different validity.
+
+Calibrated edits are written with `edit_raw_column()` or `edit_columns()`.
+Each physical value is inverse-quantized exactly; an unmeasured edit is encoded
+as the target column's `TNULLn`. A group containing a value that lands on the
+unmeasured code, overflows the storage type or cannot be represented exactly is
+rejected as a whole with `ColumnEditError`, whose `errors` list names the column,
+row, attempted value and candidate stored code. No bytes are changed in that
+case. Variables and strings are not part of the integer-code API.
+
 ## Thread Safety and Python Free Threading
 
 `fitsio` is a Python wrapper for the `cfitsio` library and so inherits the constraints

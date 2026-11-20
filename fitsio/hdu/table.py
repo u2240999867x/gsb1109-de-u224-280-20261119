@@ -24,6 +24,7 @@ See the main docs at https://github.com/esheldon/fitsio
 from __future__ import with_statement, print_function
 import copy
 import warnings
+from fractions import Fraction
 from functools import reduce
 
 import numpy as np
@@ -40,7 +41,14 @@ from ..util import (
     mks,
     copy_if_needed,
 )
-from .base import HDUBase, ASCII_TBL, IMAGE_HDU, _hdu_type_map
+from .base import (
+    HDUBase,
+    ASCII_TBL,
+    BINARY_TBL,
+    IMAGE_HDU,
+    _hdu_type_map,
+)
+from ..fits_exceptions import ColumnEditError
 
 # for python3 compat
 if IS_PY3:
@@ -717,6 +725,7 @@ class TableHDU(HDUBase):
         upper=False,
         lower=False,
         trim_strings=False,
+        raw=False,
         **keys,
     ):
         """
@@ -769,6 +778,13 @@ class TableHDU(HDUBase):
                 DeprecationWarning,
                 stacklevel=2,
             )
+
+        if raw:
+            if columns is not None:
+                return self.read_raw_columns(columns, rows=rows)
+            if rows is not None:
+                return self.read_raw_rows(rows)
+            return self.read_raw_columns(None)
 
         if columns is not None:
             data = self.read_columns(
@@ -880,17 +896,9 @@ class TableHDU(HDUBase):
             nrows = self._info['nrows']
             array = np.zeros(nrows, dtype=dtype)
 
-            self._FITS.read_as_rec(self._ext + 1, 1, nrows, array)
-
+            colnums = self._extract_colnums()
+            self._read_calibrated_rec_into(array, colnums, None, None)
             array = self._maybe_decode_fits_ascii_strings_to_unicode_py3(array)
-
-            for colnum, name in enumerate(array.dtype.names):
-                self._rescale_and_convert_field_inplace(
-                    array,
-                    name,
-                    self._info['colinfo'][colnum]['tscale'],
-                    self._info['colinfo'][colnum]['tzero'],
-                )
 
         if self.lower or lower:
             _names_to_lower_if_recarray(array)
@@ -900,6 +908,56 @@ class TableHDU(HDUBase):
         self._maybe_trim_strings(array, trim_strings=trim_strings)
         return array
 
+    def read_raw_columns(self, columns, rows=None):
+        """
+        Read the stored integer codes for one or more columns.
+
+        Columns without a fixed-width numeric storage, such as strings and
+        variable-length arrays, are omitted.  The result follows
+        ``read_columns`` for the remaining columns: a record array for several
+        columns and a plain array for one.
+        """
+        if columns is None:
+            colnums = self._extract_colnums()
+        else:
+            colnums = self._extract_colnums(columns)
+        if isinstance(colnums, int):
+            return self._read_raw_column(colnums, rows=rows)
+
+        if rows is not None:
+            rows, sortind = self._extract_rows(rows)
+        else:
+            sortind = None
+        cols = []
+        names = []
+        for colnum in colnums:
+            if not self._can_read_stored_colcodes(colnum):
+                continue
+            dt = self._get_storage_dtype(int(colnum))
+            info = self._info['colinfo'][int(colnum)]
+            shape = _tdim2shape(info['tdim'], info['name'], is_string=False)
+            if shape is not None:
+                dt = np.dtype((dt, shape))
+            cols.append((info['name'], dt))
+            names.append(info['name'])
+        dtype = np.dtype(cols)
+        array = np.zeros(
+            self._info['nrows'] if rows is None else rows.size, dtype=dtype
+        )
+        for i, colnum in enumerate(
+            [c for c in colnums if self._can_read_stored_colcodes(c)]
+        ):
+            array[names[i]] = self._read_raw_column(
+                int(colnum), rows=rows, sortind=sortind
+            )
+        return array
+
+    def read_raw_rows(self, rows):
+        """
+        Read all columns for the given rows as stored integer codes.
+        """
+        return self.read_raw_columns(None, rows=rows)
+
     def read_column(
         self,
         col,
@@ -908,6 +966,7 @@ class TableHDU(HDUBase):
         upper=False,
         lower=False,
         trim_strings=False,
+        raw=False,
         **keys,
     ):
         """
@@ -961,11 +1020,13 @@ class TableHDU(HDUBase):
             upper=upper,
             lower=lower,
             trim_strings=trim_strings,
+            raw=raw,
         )
         colname = res.dtype.names[0]
         data = res[colname]
 
-        self._maybe_trim_strings(data, trim_strings=trim_strings)
+        if not raw:
+            self._maybe_trim_strings(data, trim_strings=trim_strings)
         return data
 
     def read_rows(
@@ -975,6 +1036,7 @@ class TableHDU(HDUBase):
         upper=False,
         lower=False,
         trim_strings=False,
+        raw=False,
         **keys,
     ):
         """
@@ -1006,6 +1068,9 @@ class TableHDU(HDUBase):
                 DeprecationWarning,
                 stacklevel=2,
             )
+
+        if raw:
+            return self.read_raw_columns(None, rows=rows)
 
         if rows is None:
             # we actually want all rows!
@@ -1055,17 +1120,9 @@ class TableHDU(HDUBase):
             )
         else:
             array = np.zeros(rows.size, dtype=dtype)
-            self._FITS.read_rows_as_rec(self._ext + 1, array, rows, sortind)
-
+            colnums = self._extract_colnums()
+            self._read_calibrated_rec_into(array, colnums, rows, sortind)
             array = self._maybe_decode_fits_ascii_strings_to_unicode_py3(array)
-
-            for colnum, name in enumerate(array.dtype.names):
-                self._rescale_and_convert_field_inplace(
-                    array,
-                    name,
-                    self._info['colinfo'][colnum]['tscale'],
-                    self._info['colinfo'][colnum]['tzero'],
-                )
 
         if self.lower or lower:
             _names_to_lower_if_recarray(array)
@@ -1084,6 +1141,7 @@ class TableHDU(HDUBase):
         upper=False,
         lower=False,
         trim_strings=False,
+        raw=False,
         **keys,
     ):
         """
@@ -1147,7 +1205,11 @@ class TableHDU(HDUBase):
                 upper=upper,
                 lower=lower,
                 trim_strings=trim_strings,
+                raw=raw,
             )
+
+        if raw:
+            return self.read_raw_columns(colnums, rows=rows)
 
         # if rows is None still returns None, and is correctly interpreted
         # by the reader to mean all
@@ -1181,23 +1243,33 @@ class TableHDU(HDUBase):
 
             array = np.zeros(nrows, dtype=dtype)
 
-            colnumsp = colnums[:].copy()
-            colnumsp[:] += 1
-            self._FITS.read_columns_as_rec(
-                self._ext + 1, colnumsp, array, rows, sortind
-            )
-
-            array = self._maybe_decode_fits_ascii_strings_to_unicode_py3(array)
-
-            for i in xrange(colnums.size):
-                colnum = int(colnums[i])
-                name = array.dtype.names[i]
-                self._rescale_and_convert_field_inplace(
-                    array,
-                    name,
-                    self._info['colinfo'][colnum]['tscale'],
-                    self._info['colinfo'][colnum]['tzero'],
+            if all(
+                self._can_read_stored_colcodes(colnum) for colnum in colnums
+            ):
+                self._read_calibrated_rec_into(array, colnums, rows, sortind)
+                array = self._maybe_decode_fits_ascii_strings_to_unicode_py3(
+                    array
                 )
+            else:
+                colnumsp = colnums[:].copy()
+                colnumsp[:] += 1
+                self._FITS.read_columns_as_rec(
+                    self._ext + 1, colnumsp, array, rows, sortind
+                )
+
+                array = self._maybe_decode_fits_ascii_strings_to_unicode_py3(
+                    array
+                )
+
+                for i in xrange(colnums.size):
+                    colnum = int(colnums[i])
+                    name = array.dtype.names[i]
+                    self._rescale_and_convert_field_inplace(
+                        array,
+                        name,
+                        self._info['colinfo'][colnum]['tscale'],
+                        self._info['colinfo'][colnum]['tzero'],
+                    )
 
         if self._check_tbit(colnums=colnums):
             array = self._fix_tbit_dtype(array, colnums)
@@ -1220,6 +1292,7 @@ class TableHDU(HDUBase):
         lower=False,
         upper=False,
         trim_strings=False,
+        raw=False,
         **keys,
     ):
         """
@@ -1282,6 +1355,10 @@ class TableHDU(HDUBase):
                 "slice must specify a sub-range of [%d,%d]" % (0, maxrow)
             )
 
+        if raw:
+            rows = np.arange(firstrow, lastrow, step, dtype='i8')
+            return self.read_raw_columns(None, rows=rows)
+
         dtype, offsets, isvar = self.get_rec_dtype(vstorage=vstorage)
 
         (w,) = np.where(isvar == True)  # noqa
@@ -1318,25 +1395,17 @@ class TableHDU(HDUBase):
             else:
                 # no +1 because lastrow is non-inclusive
                 nrows = lastrow - firstrow
-                array = np.zeros(nrows, dtype=dtype)
-
-                # only first needs to be +1.  This is becuase the c code is
-                # inclusive
-                self._FITS.read_as_rec(
-                    self._ext + 1, firstrow + 1, lastrow, array
+                colnums = self._extract_colnums()
+                array = self._read_calibrated_rec(
+                    colnums,
+                    None,
+                    dtype,
                 )
-
                 array = self._maybe_decode_fits_ascii_strings_to_unicode_py3(
                     array
                 )
-
-                for colnum, name in enumerate(array.dtype.names):
-                    self._rescale_and_convert_field_inplace(
-                        array,
-                        name,
-                        self._info['colinfo'][colnum]['tscale'],
-                        self._info['colinfo'][colnum]['tzero'],
-                    )
+                if firstrow != 0 or lastrow != nrows:
+                    array = array[firstrow:lastrow]
 
         if self.lower or lower:
             _names_to_lower_if_recarray(array)
@@ -1575,12 +1644,20 @@ class TableHDU(HDUBase):
             for i in xrange(thesecol.size):
                 name = array.dtype.names[wnotvar[i]]
                 colnum = thesecol[i] - 1
-                self._rescale_and_convert_field_inplace(
-                    array,
-                    name,
-                    self._info['colinfo'][colnum]['tscale'],
-                    self._info['colinfo'][colnum]['tzero'],
-                )
+                if self._can_read_stored_colcodes(colnum):
+                    array[name] = self._read_calibrated_column(
+                        int(colnum),
+                        array[name].dtype,
+                        rows=rows,
+                        sortind=sortind,
+                    )
+                else:
+                    self._rescale_and_convert_field_inplace(
+                        array,
+                        name,
+                        self._info['colinfo'][colnum]['tscale'],
+                        self._info['colinfo'][colnum]['tzero'],
+                    )
 
         array = self._maybe_decode_fits_ascii_strings_to_unicode_py3(array)
 
@@ -1772,6 +1849,516 @@ class TableHDU(HDUBase):
         if zero != 0.0:
             zval = np.array(zero, dtype=array.dtype)
             array += zval
+
+    def _get_storage_dtype(self, colnum):
+        info = self._info['colinfo'][colnum]
+        if info['type'] == 11:
+            return np.dtype('u1')
+        if info['type'] == 14 or info['eqtype'] == 14:
+            return np.dtype('i1')
+        try:
+            npy_type = _table_fits2npy[abs(info['type'])]
+        except KeyError:
+            raise ValueError(
+                "column '%s' has no fixed-width numeric storage" % info['name']
+            )
+        if info['type'] < 0 or info['type'] == 1 or npy_type[0] in 'SU':
+            raise ValueError(
+                "column '%s' has no fixed-width numeric storage" % info['name']
+            )
+        if npy_type in ('u1', 'i1', 'b1'):
+            return np.dtype(npy_type)
+        return np.dtype('>' + npy_type)
+
+    def _can_read_stored_colcodes(self, colnum):
+        info = self._info['colinfo'][colnum]
+        if info['type'] in (1, 14):
+            return False
+        try:
+            self._get_storage_dtype(colnum)
+        except ValueError:
+            return False
+        return True
+
+    def _can_edit_stored_colcodes(self, colnum):
+        info = self._info['colinfo'][colnum]
+        if info['type'] in (1, 14):
+            return False
+        return self._can_read_stored_colcodes(colnum)
+
+    def _get_col_null(self, colnum):
+        if self._info['hdutype'] != BINARY_TBL:
+            return None
+        npy_type = _table_fits2npy.get(
+            abs(self._info['colinfo'][colnum]['type'])
+        )
+        if npy_type is None or npy_type[0] not in 'iu':
+            return None
+        value = self.read_header().get('TNULL%d' % (colnum + 1), None)
+        if value is None:
+            return None
+        return int(value)
+
+    def _number_to_storage(self, colnum, value):
+        return np.asarray(value).astype(self._get_storage_dtype(colnum))
+
+    def _read_raw_column(self, colnum, rows=None, sortind=None):
+        dtype = self._get_storage_dtype(colnum)
+        info = self._info['colinfo'][colnum]
+        name = info['name']
+        shape = _tdim2shape(info['tdim'], name, is_string=False)
+        if shape is not None:
+            dtype = np.dtype((dtype, shape))
+
+        if rows is None:
+            nrows = self._info['nrows']
+            row_index = None
+            sort_index = None
+        else:
+            rows = np.atleast_1d(np.asarray(rows, dtype='i8'))
+            nrows = rows.size
+            row_index = rows
+            if sortind is None:
+                sort_index = np.arange(nrows, dtype='i8')
+            else:
+                sort_index = np.asarray(sortind, dtype='i8')
+
+        allrows = np.zeros(nrows, dtype=dtype)
+        if allrows.size > 0:
+            self._FITS.raw_column(
+                self._ext + 1,
+                colnum + 1,
+                1,
+                0,
+                allrows,
+                row_index,
+                sort_index,
+            )
+        return allrows
+
+    def _read_raw_codes(self, colnum, rows, sortind=None):
+        return self._read_raw_column(colnum, rows=rows, sortind=sortind)
+
+    def _read_calibrated_column(self, colnum, dtype, rows=None, sortind=None):
+        codes = self._read_raw_codes(colnum, rows, sortind)
+        info = self._info['colinfo'][colnum]
+        scale = info['tscale']
+        zero = info['tzero']
+        target = np.dtype(dtype)
+        codes = np.asarray(codes)
+        if scale == 1.0 and np.issubdtype(target, np.unsignedinteger):
+            if float(zero).is_integer():
+                if target.itemsize == 8:
+                    out = (
+                        codes.astype(np.uint64)
+                        + np.uint64(int(zero))
+                    ).astype(target)
+                else:
+                    out = (
+                        codes.astype(np.int64) + np.int64(zero)
+                    ).astype(target)
+                return out
+        if scale == 1.0 and np.issubdtype(target, np.signedinteger):
+            if float(zero).is_integer():
+                out = (
+                    np.asarray(codes).astype(np.int64) + np.int64(zero)
+                ).astype(target)
+                return out
+        if scale == 1.0 and zero == 0.0:
+            if np.issubdtype(target, np.bool_):
+                out = np.asarray(codes).view(np.int8) == ord('T')
+            else:
+                out = codes.astype(dtype, copy=True)
+        else:
+            out = np.asarray(codes, dtype=dtype) * scale + zero
+            if np.issubdtype(target, np.bool_):
+                out = out.view(np.int8) == ord('T')
+        null = self._get_col_null(colnum)
+        if null is not None and np.issubdtype(np.dtype(dtype), np.floating):
+            out[codes == null] = np.nan
+        return out
+
+    def _read_bit_column(self, colnum, dtype, rows=None, sortind=None):
+        info = self._info['colinfo'][colnum]
+        if rows is None:
+            nrows = self._info['nrows']
+            index = None
+        else:
+            index = np.atleast_1d(np.asarray(rows, dtype='i8'))
+            if sortind is not None:
+                index = index[np.asarray(sortind, dtype='i8')]
+            nrows = index.size
+        out = np.zeros(nrows, dtype=bool)
+        array = np.zeros(nrows, dtype=bool)
+        self._FITS.read_column(
+            self._ext + 1, colnum + 1, array, index, None
+        )
+        out[...] = array
+        return out
+
+    def _read_calibrated_rec(self, colnums, rows, dtype, sortind=None):
+        nrows = self._info['nrows'] if rows is None else len(rows)
+        array = np.zeros(nrows, dtype=dtype)
+        self._read_calibrated_rec_into(array, colnums, rows, sortind)
+        return array
+
+    def _read_calibrated_rec_into(self, array, colnums, rows, sortind):
+        read_cols = []
+        read_indices = []
+        for i, colnum in enumerate(colnums):
+            name = array.dtype.names[i]
+            if self._can_read_stored_colcodes(colnum):
+                array[name] = self._read_calibrated_column(
+                    int(colnum), array[name].dtype, rows=rows, sortind=sortind
+                )
+            else:
+                read_cols.append(int(colnum) + 1)
+                read_indices.append(i)
+        if read_cols:
+            descr = [array.dtype.descr[i] for i in read_indices]
+            sub = np.zeros(array.shape[0], dtype=descr)
+            self._FITS.read_columns_as_rec(
+                self._ext + 1,
+                np.array(read_cols, dtype='i8'),
+                sub,
+                rows,
+                sortind,
+            )
+            for i in read_indices:
+                name = array.dtype.names[i]
+                colnum = int(colnums[i])
+                self._rescale_and_convert_field_inplace(
+                    sub,
+                    name,
+                    self._info['colinfo'][colnum]['tscale'],
+                    self._info['colinfo'][colnum]['tzero'],
+                )
+                array[name] = sub[name]
+
+    def _encode_edits(
+        self, colnum, rows, values, measured, allow_phantom=False, edit_index=0
+    ):
+        info = self._info['colinfo'][colnum]
+        name = info['name']
+        scale = info['tscale']
+        zero = info['tzero']
+        null = self._get_col_null(colnum)
+        dtype = self._get_storage_dtype(colnum)
+        codes = np.zeros(rows.size, dtype=dtype)
+        errors = []
+
+        for i, row in enumerate(rows):
+            if row < 0 or row >= self._info['nrows']:
+                errors.append(
+                    {
+                        'edit': edit_index,
+                        'column': name,
+                        'colnum': colnum,
+                        'row': int(row),
+                        'value': values[i],
+                        'candidate': None,
+                        'reason': 'row out of range',
+                    }
+                )
+                continue
+
+            if not measured[i]:
+                if null is None:
+                    errors.append(
+                        {
+                            'edit': edit_index,
+                            'column': name,
+                            'colnum': colnum,
+                            'row': int(row),
+                            'value': values[i],
+                            'candidate': None,
+                            'reason': 'column has no TNULLn declaration',
+                        }
+                    )
+                    continue
+                codes[i] = self._number_to_storage(colnum, null)
+                continue
+
+            value = values[i]
+            if not np.isfinite(value):
+                errors.append(
+                    {
+                        'edit': edit_index,
+                        'column': name,
+                        'colnum': colnum,
+                        'row': int(row),
+                        'value': value,
+                        'candidate': null,
+                        'reason': 'value is not finite',
+                    }
+                )
+                continue
+
+            exact = None
+            if isinstance(value, (int, np.integer)):
+                exact = Fraction(int(value))
+                exact_scale = Fraction(scale)
+                exact_zero = Fraction(zero)
+                if exact_scale != 0:
+                    ideal = (exact - exact_zero) / exact_scale
+                    candidate = _round_half_away(ideal)
+                else:
+                    ideal = None
+            if exact is None:
+                ideal = (float(value) - float(zero)) / float(scale)
+                candidate = int(np.round(ideal))
+            if null is not None and candidate == null:
+                if allow_phantom:
+                    try:
+                        codes[i] = np.array(candidate, dtype=dtype)[()]
+                    except (OverflowError, ValueError):
+                        errors.append(
+                            {
+                                'edit': edit_index,
+                                'column': name,
+                                'colnum': colnum,
+                                'row': int(row),
+                                'value': value,
+                                'candidate': candidate,
+                                'reason': (
+                                    'candidate is outside the column range'
+                                ),
+                            }
+                        )
+                    continue
+                errors.append(
+                    {
+                        'edit': edit_index,
+                        'column': name,
+                        'colnum': colnum,
+                        'row': int(row),
+                        'value': value,
+                        'candidate': candidate,
+                        'reason': 'value falls on the unmeasured code',
+                    }
+                )
+                continue
+
+            try:
+                stored = np.array(candidate, dtype=dtype)[()]
+            except (OverflowError, ValueError):
+                errors.append(
+                    {
+                        'edit': edit_index,
+                        'column': name,
+                        'colnum': colnum,
+                        'row': int(row),
+                        'value': value,
+                        'candidate': candidate,
+                        'reason': 'candidate code is outside the column range',
+                    }
+                )
+                continue
+
+            back = float(stored) * scale + zero
+            exact_back = (
+                Fraction(int(stored)) * Fraction(scale) + Fraction(zero)
+            )
+            if exact is not None:
+                is_exact = exact_back == exact
+            else:
+                is_exact = back == float(value)
+            if not is_exact:
+                errors.append(
+                    {
+                        'edit': edit_index,
+                        'column': name,
+                        'colnum': colnum,
+                        'row': int(row),
+                        'value': value,
+                        'candidate': int(stored),
+                        'reason': 'value is not exactly representable',
+                    }
+                )
+                continue
+            codes[i] = stored
+
+        return codes, errors
+
+    def _write_raw_codes(self, colnum, rows, codes):
+        dtype = self._get_storage_dtype(colnum)
+        codes = np.ascontiguousarray(codes, dtype=dtype)
+        rows = np.ascontiguousarray(rows, dtype='i8')
+        self._FITS.raw_column(
+            self._ext + 1,
+            colnum + 1,
+            1,
+            1,
+            codes,
+            rows,
+            None,
+        )
+
+    def get_column_scaling(self, column):
+        """
+        Return the calibration and unmeasured code for a column.
+
+        The result is a dict with ``scale``, ``zero``, ``null`` and ``dtype``.
+        ``null`` is None when the column has no integer TNULLn declaration.
+        """
+        colnum = self._extract_colnum(column)
+        info = self._info['colinfo'][colnum]
+        header = self.read_header()
+        null = header.get('TNULL%d' % (colnum + 1), None)
+        return {
+            'name': info['name'],
+            'scale': info['tscale'],
+            'zero': info['tzero'],
+            'null': null,
+            'dtype': self._get_storage_dtype(colnum),
+        }
+
+    def read_raw_column(self, column, rows=None):
+        """
+        Read stored integer codes without applying TSCALn/TZEROn.
+
+        The returned array has the integer storage dtype of the column.  TNULLn
+        is not converted or masked; use ``raw_column_valid`` to test validity
+        in the stored code domain.
+        """
+        colnum = self._extract_colnum(column)
+        return self._read_raw_column(colnum, rows=rows)
+
+    def raw_column_valid(self, column, rows=None):
+        """
+        Return a boolean array marking rows whose stored code is measured.
+
+        Validity is decided from the integer code and TNULLn only.  Two codes
+        that map to the same scaled floating point value can have different
+        validity.
+        """
+        colnum = self._extract_colnum(column)
+        codes = self._read_raw_column(colnum, rows=rows)
+        if codes.dtype.names is not None:
+            codes = codes[codes.dtype.names[0]]
+        null = self._get_col_null(colnum)
+        if null is None:
+            return np.ones(codes.shape, dtype=bool)
+        return codes != null
+
+    def read_scaled_column(self, column, rows=None):
+        """
+        Read a column and apply its calibration exactly once.
+
+        This is the ordinary calibrated read used by ``read_column``.  It is
+        provided as an explicit name for callers mixing raw and calibrated
+        access.
+        """
+        return self.read_column(column, rows=rows)
+
+    def _normalize_edit(self, rows, values, measured):
+        rows = np.atleast_1d(np.asarray(rows, dtype='i8'))
+        values = np.asarray(values)
+        if values.ndim == 0:
+            values = values.reshape(1)
+        if values.shape[0] != rows.size:
+            raise ValueError("rows and values must have the same length")
+        if measured is None:
+            measured = np.ones(rows.size, dtype=bool)
+        else:
+            measured = np.asarray(measured, dtype=bool).reshape(-1)
+            if measured.size != rows.size:
+                raise ValueError("rows and measured must have the same length")
+        return rows, values, measured
+
+    def edit_raw_column(
+        self, column, rows, values, measured=None, allow_phantom=False
+    ):
+        """
+        Write calibrated values back to a column as stored integer codes.
+
+        ``values`` are physical values.  ``measured`` is an optional boolean
+        array; False marks an edit that should be stored as TNULLn.  Every
+        candidate is checked against the column quantization before any bytes
+        are changed.  If any edit is invalid, ``ColumnEditError`` is raised and
+        the table is left untouched.
+        """
+        colnum = self._extract_colnum(column)
+        if not self._can_edit_stored_colcodes(colnum):
+            raise ColumnEditError(
+                [
+                    {
+                        'edit': 0,
+                        'column': self._info['colinfo'][colnum]['name'],
+                        'colnum': colnum,
+                        'row': None,
+                        'value': None,
+                        'candidate': None,
+                        'reason': 'column has no writable integer storage',
+                    }
+                ]
+            )
+        rows, values, measured = self._normalize_edit(rows, values, measured)
+
+        codes, errors = self._encode_edits(
+            colnum, rows, values, measured, allow_phantom=allow_phantom
+        )
+        if errors:
+            raise ColumnEditError(errors)
+
+        self._write_raw_codes(colnum, rows, codes)
+        return codes
+
+    def edit_columns(self, edits):
+        """
+        Apply a group of column edits atomically.
+
+        Each edit is a dict with ``column``, ``rows``, ``values`` and optional
+        ``measured``.  All candidates are validated before the first write.  A
+        rejected group raises ``ColumnEditError`` and leaves the file
+        unchanged.
+        """
+        if isinstance(edits, dict):
+            edits = [edits]
+
+        prepared = []
+        errors = []
+        for i, edit in enumerate(edits):
+            colnum = self._extract_colnum(edit['column'])
+            if not self._can_edit_stored_colcodes(colnum):
+                errors.append(
+                    {
+                        'edit': i,
+                        'column': self._info['colinfo'][colnum]['name'],
+                        'colnum': colnum,
+                        'row': None,
+                        'value': None,
+                        'candidate': None,
+                        'reason': 'column has no writable integer storage',
+                    }
+                )
+                prepared.append(
+                    (colnum, np.zeros(0, dtype='i8'), np.zeros(0))
+                )
+                continue
+            rows, values, measured = self._normalize_edit(
+                edit['rows'],
+                edit['values'],
+                edit.get('measured'),
+            )
+
+            codes, edit_errors = self._encode_edits(
+                colnum,
+                rows,
+                values,
+                measured,
+                allow_phantom=edit.get('allow_phantom', False),
+                edit_index=i,
+            )
+            errors.extend(edit_errors)
+            prepared.append((colnum, rows, codes))
+
+        if errors:
+            raise ColumnEditError(errors)
+
+        for colnum, rows, codes in prepared:
+            self._write_raw_codes(colnum, rows, codes)
+        return [codes for _, _, codes in prepared]
 
     def _maybe_trim_strings(self, array, trim_strings=False, **keys):
         """
@@ -2745,6 +3332,15 @@ class TableColumnSubset(object):
 
         s = "\n".join(text)
         return s
+
+
+def _round_half_away(value):
+    """
+    Round a Fraction to the nearest integer, with halves away from zero.
+    """
+    if value >= 0:
+        return (value + Fraction(1, 2)).__floor__()
+    return (value - Fraction(1, 2)).__ceil__()
 
 
 def _tdim2shape(tdim, name, is_string=False):

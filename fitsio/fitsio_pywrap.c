@@ -3337,6 +3337,200 @@ _fitsio_pywrap_write_columns_bail:
     Py_RETURN_NONE;
 }
 
+/*
+ * Read or write the stored bytes of a fixed-width column without applying
+ * TSCALn/TZEROn or TNULLn.  The input array must already have the storage
+ * dtype described by TFORMn.  Rows are zero offset.
+ */
+static PyObject *PyFITSObject_raw_column(struct PyFITSObject *self,
+                                         PyObject *args) {
+    ALLOW_NOGIL;
+    int status = 0;
+    int hdunum = 0;
+    int colnum = 0;
+    int writemode = 0;
+    int hdutype = 0;
+
+    LONGLONG firstrow = 0;
+    npy_intp nrows = 0;
+    npy_intp ncols = 1;
+    npy_intp stride = 0;
+    npy_intp nrow_index = 0, nsortind = 0;
+    npy_int64 *row_index = NULL;
+    npy_int64 *sortind = NULL;
+
+    PyObject *array_obj = NULL;
+    PyObject *rows_obj = NULL;
+    PyObject *sortind_obj = NULL;
+    PyArrayObject *array = NULL;
+
+    FITSfile *hdu = NULL;
+    tcolumn *colptr = NULL;
+    long groupsize = 0;
+    long width = 0;
+    npy_intp irow = 0;
+    npy_intp si = 0;
+    npy_int64 row = 0;
+    char *data = NULL;
+    char *ptr = NULL;
+    LONGLONG file_pos = 0;
+
+    LOCK_FITS(self);
+
+    if (!PyArg_ParseTuple(args, (char *)"iiLiOOO", &hdunum, &colnum,
+                          &firstrow, &writemode, &array_obj, &rows_obj,
+                          &sortind_obj)) {
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+
+    if (self->fits == NULL) {
+        PyErr_SetString(PyExc_ValueError, "fits file is NULL");
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+    if (!PyArray_Check(array_obj)) {
+        PyErr_SetString(PyExc_TypeError, "input must be an array");
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+    array = (PyArrayObject *)array_obj;
+
+    if (NOGIL(fits_movabs_hdu(self->fits, hdunum, &hdutype, &status))) {
+        goto raw_column_cleanup;
+    }
+    if (hdutype != BINARY_TBL) {
+        status = NOT_BTABLE;
+        goto raw_column_cleanup;
+    }
+
+    hdu = self->fits->Fptr;
+    if (colnum < 1 || colnum > hdu->tfield) {
+        status = BAD_COL_NUM;
+        goto raw_column_cleanup;
+    }
+
+    colptr = hdu->tableptr + (colnum - 1);
+    if (colptr->tdatatype == TSTRING || colptr->tdatatype == TBIT ||
+        colptr->tdatatype == TLOGICAL) {
+        PyErr_SetString(PyExc_ValueError,
+                        "raw_column supports fixed-width numeric columns");
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+
+    groupsize = get_groupsize(colptr);
+    width = colptr->twidth;
+
+    if ((npy_intp)PyArray_ITEMSIZE(array) != width) {
+        PyErr_Format(PyExc_ValueError,
+                     "raw column element size is %ld bytes, got %ld",
+                     (long)width, (long)PyArray_ITEMSIZE(array));
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+
+    nrows = PyArray_DIM(array, 0);
+    stride = PyArray_STRIDE(array, 0);
+    if (PyArray_NDIM(array) > 1) {
+        ncols = stride / width;
+    }
+    if (ncols * (npy_intp)width != groupsize) {
+        PyErr_Format(PyExc_ValueError,
+                     "raw column vector size is %ld bytes, got %ld",
+                     (long)groupsize, (long)(ncols * width));
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+    data = (char *)PyArray_DATA(array);
+
+    if (rows_obj != Py_None) {
+        row_index =
+            get_int64_from_array((PyArrayObject *)rows_obj, &nrow_index);
+        if (row_index == NULL) {
+            UNLOCK_FITS(self);
+            return NULL;
+        }
+        if (nrow_index != nrows) {
+            PyErr_Format(PyExc_ValueError,
+                         "%ld rows requested but got %ld", nrows,
+                         nrow_index);
+            UNLOCK_FITS(self);
+            return NULL;
+        }
+        if (sortind_obj != Py_None) {
+            sortind =
+                get_int64_from_array((PyArrayObject *)sortind_obj, &nsortind);
+            if (sortind == NULL) {
+                UNLOCK_FITS(self);
+                return NULL;
+            }
+            if (nsortind != nrows) {
+                PyErr_Format(PyExc_ValueError,
+                             "%ld rows expected but sort index has %ld", nrows,
+                             nsortind);
+                UNLOCK_FITS(self);
+                return NULL;
+            }
+        }
+    }
+
+    if (writemode && NOGIL(fits_flush_file(self->fits, &status))) {
+        goto raw_column_cleanup;
+    }
+
+    for (irow = 0; irow < nrows; irow++) {
+        if (row_index != NULL) {
+            si = sortind != NULL ? sortind[irow] : irow;
+            row = row_index[si];
+        } else {
+            si = irow;
+            row = firstrow + irow - 1;
+        }
+        if (row < 0 || row >= hdu->numrows) {
+            status = BAD_ROW_NUM;
+            goto raw_column_cleanup;
+        }
+        ptr = data + si * stride;
+        file_pos = hdu->datastart + row * hdu->rowlength + colptr->tbcol;
+
+        if (writemode) {
+            if (NOGIL(ffmbyt(self->fits, file_pos, IGNORE_EOF, &status))) {
+                goto raw_column_cleanup;
+            }
+            if (NOGIL(ffpbytoff(self->fits, (long)width, (long)ncols, 0, ptr,
+                                &status))) {
+                goto raw_column_cleanup;
+            }
+        } else {
+            if (NOGIL(ffmbyt(self->fits, file_pos, REPORT_EOF, &status))) {
+                goto raw_column_cleanup;
+            }
+            if (NOGIL(ffgbytoff(self->fits, (long)width, (long)ncols, 0, ptr,
+                                &status))) {
+                goto raw_column_cleanup;
+            }
+        }
+    }
+
+    if (writemode) {
+        if (NOGIL(fits_flush_file(self->fits, &status))) {
+            goto raw_column_cleanup;
+        }
+    }
+
+raw_column_cleanup:
+
+    if (status != 0) {
+        set_ioerr_string_from_status(status, self);
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+
+    UNLOCK_FITS(self);
+    Py_RETURN_NONE;
+}
+
 // No error checking performed here
 static int write_var_string_column(
     fitsfile *fits,    /* I - FITS file pointer                       */
@@ -6639,6 +6833,9 @@ static PyMethodDef PyFITSObject_methods[] = {
     {"write_columns", (PyCFunction)PyFITSObject_write_columns,
      METH_VARARGS | METH_KEYWORDS,
      "write_columns\n\nWrite columns into the specified hdu."},
+    {"raw_column", (PyCFunction)PyFITSObject_raw_column, METH_VARARGS,
+     "raw_column\n\nRead or write the stored bytes of a fixed-width column "
+     "without applying TSCALn/TZEROn/TNULLn."},
     {"write_var_column", (PyCFunction)PyFITSObject_write_var_column,
      METH_VARARGS | METH_KEYWORDS,
      "write_var_column\n\nWrite a variable length column into the specified "

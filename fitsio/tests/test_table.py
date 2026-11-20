@@ -1655,3 +1655,281 @@ def test_table_read_write_ulonglong_ascii_raises(typ):
                     table_type='ascii',
                 )
             assert f"unsupported type '{typ}' for ascii tables" in str(e.value)
+
+
+def _make_raw_table(fname, flux_scale=1.0):
+    dtype = [
+        ('flux', 'i8'),
+        ('back', 'i4'),
+        ('note', 'S3'),
+        ('vec', 'i2', (2,)),
+    ]
+    data = np.zeros(4, dtype=dtype)
+    flux_null = 2**53
+    back_null = np.iinfo('i4').min
+    data['flux'] = [
+        flux_null,
+        2**53 + 1,
+        2**53 + 2,
+        2**53 + 3,
+    ]
+    data['back'] = [100, 101, 102, back_null]
+    data['note'] = b'abc'
+    data['vec'] = [[1, 2], [3, 4], [5, 6], [7, 8]]
+
+    with FITS(fname, 'rw') as fits:
+        fits.write(data)
+        hdu = fits[1]
+        hdu.write_key('TSCAL1', flux_scale)
+        hdu.write_key('TZERO1', 0.0)
+        hdu.write_key('TNULL1', int(flux_null))
+        hdu.write_key('TSCAL2', 0.5)
+        hdu.write_key('TZERO2', -10.0)
+        hdu.write_key('TNULL2', int(back_null))
+    return data
+
+
+def test_table_raw_codes_and_validity():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        _make_raw_table(fname)
+
+        with FITS(fname) as fits:
+            hdu = fits[1]
+            raw = hdu.read_raw_column('flux')
+            assert raw.dtype == np.dtype('>i8')
+            np.testing.assert_array_equal(
+                raw,
+                np.array([2**53, 2**53 + 1, 2**53 + 2, 2**53 + 3]),
+            )
+            np.testing.assert_array_equal(
+                hdu.raw_column_valid('flux'),
+                [False, True, True, True],
+            )
+
+            scaled = hdu.read_column('flux')
+            assert scaled.dtype == np.dtype('>i8')
+            assert scaled[0] == 2**53
+            assert scaled[1] == 2**53 + 1
+            assert not np.isnan(scaled[0])
+
+            back = hdu.read_raw_column('back')
+            np.testing.assert_array_equal(
+                back, [100, 101, 102, np.iinfo('i4').min]
+            )
+            np.testing.assert_array_equal(
+                hdu.raw_column_valid('back'),
+                [True, True, True, False],
+            )
+            assert hdu.read_column('back')[2] == 41.0
+
+            raw_read = hdu.read(raw=True)
+            assert raw_read.dtype.names == ('flux', 'back', 'vec')
+            np.testing.assert_array_equal(raw_read['flux'], raw)
+            np.testing.assert_array_equal(raw_read['vec'], hdu.read()['vec'])
+
+            np.testing.assert_array_equal(
+                hdu.read(columns='flux', raw=True), raw
+            )
+
+
+def test_table_scaled_float_collapses_adjacent_codes():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        _make_raw_table(fname, flux_scale=0.5)
+
+        with FITS(fname) as fits:
+            hdu = fits[1]
+            raw = hdu.read_raw_column('flux')
+            assert raw[0] != raw[1]
+            assert float(raw[0]) == float(raw[1])
+            np.testing.assert_array_equal(
+                hdu.raw_column_valid('flux'),
+                [False, True, True, True],
+            )
+            scaled = hdu.read_column('flux')
+            assert scaled.dtype == np.dtype('>f8')
+            assert np.isnan(scaled[0])
+            assert hdu.read_raw_column('flux')[0] == 2**53
+
+
+def test_table_raw_edit_reports_candidate_codes():
+    from ..fits_exceptions import ColumnEditError
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        _make_raw_table(fname, flux_scale=2.0)
+
+        with FITS(fname, 'rw') as fits:
+            hdu = fits[1]
+            before = hdu.read_raw_column('flux').copy()
+            with pytest.raises(ColumnEditError) as exc:
+                hdu.edit_raw_column('flux', [0], [2**53 + 1])
+            err = exc.value.errors[0]
+            assert err['candidate'] == 2**52 + 1
+            assert err['reason'] == 'value is not exactly representable'
+            assert err['row'] == 0
+            assert err['column'] == 'flux'
+            np.testing.assert_array_equal(
+                before, hdu.read_raw_column('flux')
+            )
+            assert "column 'flux' row 0" in str(exc.value)
+
+
+def test_table_raw_edit_preserves_untouched_codes_and_header():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        _make_raw_table(fname)
+
+        with FITS(fname) as fits:
+            hdr = fits[1].read_header()
+            keys = [
+                (name, hdr[name])
+                for name in (
+                    'TSCAL1',
+                    'TZERO1',
+                    'TNULL1',
+                    'TSCAL2',
+                    'TZERO2',
+                    'TNULL2',
+                )
+            ]
+
+        with FITS(fname, 'rw') as fits:
+            hdu = fits[1]
+            hdu.edit_columns(
+                [
+                    {
+                        'column': 'flux',
+                        'rows': [1],
+                        'values': [2**53 + 10],
+                    },
+                    {
+                        'column': 'back',
+                        'rows': [1, 3],
+                        'values': [0.0, 0.0],
+                        'measured': [True, False],
+                    },
+                ]
+            )
+
+        with FITS(fname) as fits:
+            hdu = fits[1]
+            np.testing.assert_array_equal(
+                hdu.read_raw_column('flux'),
+                [2**53, 2**53 + 10, 2**53 + 2, 2**53 + 3],
+            )
+            np.testing.assert_array_equal(
+                hdu.read_raw_column('back'),
+                [100, 20, 102, np.iinfo('i4').min],
+            )
+            np.testing.assert_array_equal(
+                hdu.read_raw_column('flux', rows=[1, 1, 2]),
+                [2**53 + 10, 2**53 + 10, 2**53 + 2],
+            )
+            np.testing.assert_array_equal(
+                hdu.raw_column_valid('back', rows=[1, 1, 3]),
+                [True, True, False],
+            )
+            hdr = hdu.read_header()
+            for name, value in keys:
+                assert hdr[name] == value
+            assert hdu.read_column('back')[1] == 0.0
+
+    from ..fits_exceptions import ColumnEditError
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        dtype = [('counts', 'i4'), ('flux', 'i4')]
+        data = np.zeros(2, dtype=dtype)
+        data['counts'] = [10, 20]
+        data['flux'] = [100, 200]
+        with FITS(fname, 'rw') as fits:
+            fits.write(data)
+            fits[1].write_key('TSCAL2', 0.5)
+            fits[1].write_key('TZERO2', 0.0)
+
+        with FITS(fname, 'rw') as fits:
+            hdu = fits[1]
+            with pytest.raises(ColumnEditError) as exc:
+                hdu.edit_raw_column(
+                    'counts', [0], [0], measured=[False]
+                )
+            assert 'TNULLn' in exc.value.errors[0]['reason']
+            assert hdu.read_raw_column('counts')[0] == 10
+
+            hdu.edit_raw_column(
+                'counts', [1], [0], allow_phantom=True
+            )
+            assert hdu.read_column('counts')[1] == 0
+
+    from ..fits_exceptions import ColumnEditError
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        _make_raw_table(fname)
+
+        with FITS(fname, 'rw') as fits:
+            hdu = fits[1]
+            codes = hdu.edit_columns(
+                [
+                    {
+                        'column': 'flux',
+                        'rows': [1, 2],
+                        'values': [2**53 + 1, 2**53 + 2],
+                    },
+                    {
+                        'column': 'back',
+                        'rows': [3],
+                        'values': [0.0],
+                        'measured': [False],
+                    },
+                ]
+            )
+            np.testing.assert_array_equal(codes[0], [2**53 + 1, 2**53 + 2])
+            np.testing.assert_array_equal(
+                codes[1], [np.iinfo('i4').min]
+            )
+
+        with FITS(fname) as fits:
+            hdu = fits[1]
+            np.testing.assert_array_equal(
+                hdu.read_raw_column('back'),
+                [100, 101, 102, np.iinfo('i4').min],
+            )
+
+        with FITS(fname, 'rw') as fits:
+            hdu = fits[1]
+            before = hdu.read_raw_column('flux').copy()
+            with pytest.raises(ColumnEditError) as exc:
+                hdu.edit_columns(
+                    [
+                        {
+                            'column': 'flux',
+                            'rows': [1],
+                            'values': [2**53],
+                        },
+                        {
+                            'column': 'flux',
+                            'rows': [2],
+                            'values': [2**53 + 2],
+                        },
+                    ]
+                )
+            errors = exc.value.errors
+            assert len(errors) == 1
+            assert errors[0]['column'] == 'flux'
+            assert errors[0]['row'] == 1
+            assert errors[0]['candidate'] == 2**53
+            np.testing.assert_array_equal(
+                before, hdu.read_raw_column('flux')
+            )
+
+            with pytest.raises(ColumnEditError) as exc:
+                hdu.edit_raw_column('back', [1], [0.25])
+            assert exc.value.errors[0]['row'] == 1
+            assert exc.value.errors[0]['candidate'] == 20
+            np.testing.assert_array_equal(
+                hdu.read_raw_column('back'),
+                [100, 101, 102, np.iinfo('i4').min],
+            )
