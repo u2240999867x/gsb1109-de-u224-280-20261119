@@ -374,6 +374,55 @@ f[1].upper           # If True, upper case colnames on output
 f[1].case_sensitive  # if True, names are matched case sensitive
 ```
 
+## Strict extension selection
+
+Ordinary indexing (`fits['SCI']` or `fits[('SCI', 2)]`) keeps its historical
+behavior and silently returns the first matching HDU.  Archive imports that
+must prove exactly which on-disk extension was used can instead call
+`select_extension`.  It never defaults to the first or last match: a unique
+selection returns evidence for the chosen HDU, while multiple matches raise
+`ExtensionAmbiguousError` listing every candidate and the header fields it
+came from.
+
+```python
+import fitsio
+from fitsio import ExtensionAmbiguousError
+
+with fitsio.FITS('archive.fits') as fits:
+    # name only: no version condition, extensions without EXTVER stay eligible
+    selection = fits.select_extension('SCI', require_unique=False)
+    for candidate in selection.candidates:
+        print(candidate.as_dict())
+        # {'extnum': 0, 'extname': 'SCI', 'name_keyword': 'EXTNAME',
+        #  'extver': 2, 'hduver': 0, 'version_keyword': 'EXTVER'}
+
+    # name plus an explicit version; only the modern EXTVER keyword matches
+    try:
+        selection = fits.select_extension('SCI', 2)
+    except ExtensionAmbiguousError as err:
+        # every real candidate is reported; pick one by physical number
+        print(err.candidates)
+
+    # the literal name SCI-2 never collapses into SCI + EXTVER 2
+    selection = fits.select_extension('SCI-2')
+
+    # case sensitivity can be set per call, overriding the open() default
+    selection = fits.select_extension('sci', case_sensitive=True)
+
+    # physical number selection still documents the actual content and
+    # version declaration of that exact HDU
+    selection = fits.select_extension(3)
+    data = selection.hdu.read()
+```
+
+Only the modern `EXTVER` keyword satisfies an explicit version request.  An
+old file using the legacy `HDUVER` keyword still matches a name-only lookup,
+but its candidate shows `version_keyword=None` and the value under `hduver`,
+so it cannot be confused with a real `EXTVER`.  Selecting an explicit version
+that no extension declares is reported separately from omitting a version.
+Each call re-inspects the file, so an HDU appended in the same session turns a
+previously unique result ambiguous instead of returning a cached answer.
+
 ## Installation
 
 The easiest way is using `pip` or `conda`. To get the latest release

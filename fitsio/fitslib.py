@@ -31,6 +31,7 @@ from .util import (
     mks,
     array_to_native,
     isstring,
+    isinteger,
     copy_if_needed,
     _nonfinite_as_cfitsio_floating_null_value,
 )
@@ -47,6 +48,8 @@ from .hdu import (
     _table_npy2fits_form,
     _npy2fits,
     _hdu_type_map,
+    build_selection,
+    select_by_number,
 )
 
 from .fits_exceptions import FITSFormatError
@@ -1650,6 +1653,82 @@ class FITS(object):
             return True
         except Exception:
             return False
+
+    def select_extension(
+        self,
+        ext,
+        extver=None,
+        case_sensitive=None,
+        require_unique=True,
+    ):
+        """
+        Strictly select an extension and report the selection evidence.
+
+        Unlike ordinary indexing (``fits[name]``), this never silently picks
+        the first or last matching extension.  It inspects every HDU fresh on
+        each call, so an extension appended after an earlier unique lookup is
+        reflected immediately and no result is cached as forever unique.
+
+        parameters
+        ----------
+        ext: int or string
+            Either a zero-based physical extension number, or an extension
+            name.  A physical number always selects that exact HDU; its
+            returned evidence still documents the on-disk content and the
+            version declaration.
+        extver: int, optional
+            Explicit EXTVER to require.  Only the modern EXTVER keyword is
+            accepted as a match.  When omitted, no version condition is
+            applied and extensions without a version keyword remain eligible.
+            This argument is ignored when ``ext`` is a physical number.
+        case_sensitive: bool, optional
+            Whether name matching is case sensitive.  Defaults to the value
+            set when this FITS object was opened.
+        require_unique: bool, optional
+            When True (the default), a non-unique match raises
+            ExtensionAmbiguousError carrying every candidate.  When False, the
+            ExtensionSelection is returned unchanged so the caller can inspect
+            the candidates itself.
+
+        returns
+        -------
+        ExtensionSelection
+            Holds the requested name/version, every matching candidate and,
+            when unique, the physical number and HDU actually selected.
+
+        raises
+        ------
+        OSError
+            When no extension matches, or the physical number is out of range.
+        ExtensionAmbiguousError
+            When require_unique is True and more than one extension matches.
+        """
+        if case_sensitive is None:
+            case_sensitive = self.case_sensitive
+
+        # make sure the hdu list reflects the current file contents
+        if not hasattr(self, 'hdu_list') or not hasattr(self, 'hdu_map'):
+            if self._did_create:
+                raise ValueError("Requested hdu '%s' not present" % ext)
+            self.update_hdu_list()
+
+        if isinteger(ext):
+            selection = select_by_number(
+                self, ext, case_sensitive=case_sensitive
+            )
+            if require_unique:
+                selection.require_unique()
+            return selection
+
+        selection = build_selection(
+            self,
+            ext,
+            version=extver,
+            case_sensitive=case_sensitive,
+        )
+        if require_unique:
+            selection.require_unique()
+        return selection
 
     def __repr__(self):
         """

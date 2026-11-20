@@ -1,5 +1,22 @@
 # Changes
 
+## Unreleased
+
+New Features
+
+- Added `FITS.select_extension` for strict, evidence-based extension
+  selection.  Unlike ordinary name indexing it never silently defaults to the
+  first or last matching HDU.  A non-unique name (or name plus EXTVER) raises
+  `ExtensionAmbiguousError` carrying every matching `ExtensionCandidate` with
+  the physical extension number, the actual `EXTNAME`/`HDUNAME` source
+  keyword, and the modern `EXTVER` versus legacy `HDUVER` version evidence.
+  Explicit version requests match only the modern EXTVER keyword, the literal
+  name `SCI-2` is never conflated with `SCI` plus EXTVER 2, and each call
+  re-inspects the file so HDUs appended in the same session immediately
+  re-establish any ambiguity.  Physical-number selection returns the same
+  evidence for the exact HDU.  The existing `fits[name]` indexing behavior is
+  unchanged for backward compatibility.
+
 ## 1.4.3
 
 New Features

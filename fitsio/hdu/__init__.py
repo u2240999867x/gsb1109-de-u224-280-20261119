@@ -13,3 +13,10 @@ from .table import (  # noqa
     _table_npy2fits_form,
     _npy2fits,
 )
+from .selection import (  # noqa
+    ExtensionCandidate,
+    ExtensionSelection,
+    ExtensionAmbiguousError,
+    build_selection,
+    select_by_number,
+)
