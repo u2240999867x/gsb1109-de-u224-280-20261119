@@ -7,6 +7,8 @@ Changelog
   - Remove Python 2.7 and <3.8 support (#606)
 
 * **Improvements**
+  - Add `impala.profile_diff` for reviewable per-instance scan-counter
+    increments between two Thrift runtime profile samples
   - Switch to pyproject.toml from setup.py (#607)
   - Upgrade Thrift to 0.23.0 (#609)
     - also unpinned Thrift dependency (>=0.23.0)
