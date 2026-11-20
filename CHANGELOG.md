@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**New features**
+
+- [`datajudge.BetweenRequirement.add_row_equality_constraint`][datajudge.requirements.BetweenRequirement.add_row_equality_constraint]
+  now compares row multisets instead of deduplicated row sets by default, so
+  repeated values contribute with their multiplicity. Null values are treated
+  as regular values. The previous set semantics remain available via
+  `compare_distinct=True`.
+- Row equality supports per-partition comparison via `partition_columns1` and
+  `partition_columns2`. Failure messages report the missing and excess
+  occurrences per partition and identify counterexamples by their row values,
+  partition values and both multiplicities. The number of counterexamples can
+  be controlled via `n_counterexamples`; counts are computed in the database.
+- Row equality counts and counterexamples are read from a single database
+  snapshot that is locked in when the comparison starts. Changes committed
+  afterwards only affect subsequent validations.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

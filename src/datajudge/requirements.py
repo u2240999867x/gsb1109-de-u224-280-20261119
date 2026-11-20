@@ -2051,14 +2051,33 @@ class BetweenRequirement(Requirement):
         condition2: Condition | None = None,
         name: str | None = None,
         cache_size=None,
+        partition_columns1: list[str] | None = None,
+        partition_columns2: list[str] | None = None,
+        compare_distinct: bool = False,
+        n_counterexamples: int = 5,
     ) -> None:
-        """At most ``max_missing_fraction`` of rows in T1 and T2 are absent in either.
+        r"""At most ``max_missing_fraction`` of rows in T1 and T2 are absent in either.
 
         In other words
 
-        $$\\frac{|T1 - T2| + |T2 - T1|}{|T1 \\cup T2|} \\leq \\text{mmf}$$
+        $$\frac{|T1 - T2| + |T2 - T1|}{|T1 \cup T2|} \leq \text{mmf}$$
 
         Rows from T1 are indexed in ``columns1``, rows from T2 are indexed in ``columns2``.
+        Both differences are multiset differences, i.e. the multiplicity of a row
+        value matters. A value occurring three times in T1 and twice in T2
+        contributes one missing occurrence; the extra occurrence in T2 does not
+        compensate for it. Set ``compare_distinct`` to compare the deduplicated row
+        sets instead.
+
+        If ``partition_columns1`` and ``partition_columns2`` are given, the
+        comparison is carried out per partition. The partition columns must also be
+        part of ``columns1`` and ``columns2``. Failure messages then report the
+        differing multiplicity per partition and identify counterexamples by their
+        row values, partition values and both multiplicities.
+
+        The counts and the counterexamples of one test are read from a single
+        database snapshot. Data committed afterwards is only visible to a subsequent
+        test.
         """  # noqa: D301
         ref = DataReference(self._data_source, columns1, condition1)
         ref2 = DataReference(self._data_source2, columns2, condition2)
@@ -2067,6 +2086,10 @@ class BetweenRequirement(Requirement):
                 ref,
                 ref2,
                 lambda engine: max_missing_fraction,
+                partition_columns1=partition_columns1,
+                partition_columns2=partition_columns2,
+                compare_distinct=compare_distinct,
+                n_counterexamples=n_counterexamples,
                 name=name,
                 cache_size=cache_size,
             )

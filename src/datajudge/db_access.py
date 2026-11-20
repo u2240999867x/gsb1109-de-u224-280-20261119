@@ -4,6 +4,7 @@ import json
 import operator
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, overload
 
@@ -17,6 +18,7 @@ from ._engines import (
     is_mssql,
     is_postgresql,
     is_snowflake,
+    is_sqlite,
 )
 from .condition import Condition
 from .data_source import DataSource, TableDataSource
@@ -137,7 +139,12 @@ class DataReference:
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(data_source={self.data_source!r}, columns={self.columns!r}, condition={self.condition!r})"
 
-    def get_selection(self, engine: sa.engine.Engine) -> sa.Select:
+    def get_selection(
+        self,
+        engine: sa.engine.Engine,
+        *,
+        allow_dirty_reads: bool = True,
+    ) -> sa.Select:
         clause = self.data_source._get_clause(engine)
         if self.columns:
             column_names = self.get_columns(engine)
@@ -153,7 +160,11 @@ class DataReference:
             if is_snowflake(engine):
                 text = self.condition._snowflake_str()
             selection = selection.where(sa.text(text))
-        if is_mssql(engine) and isinstance(self.data_source, TableDataSource):
+        if (
+            allow_dirty_reads
+            and is_mssql(engine)
+            and isinstance(self.data_source, TableDataSource)
+        ):
             # Allow dirty reads when using MSSQL.
             # When using an ExpressionDataSource or StringDataSource, the user is
             # expected to specify this by themselves.
@@ -1039,6 +1050,292 @@ def get_row_difference_count(
         raise ValueError("Could not get the row difference count.")
     result = int(result_intermediate)
     return result, [selection]
+
+
+@contextmanager
+def read_snapshot(engine: sa.engine.Engine) -> Iterator[sa.Connection]:
+    """Yield a connection whose reads all observe one consistent snapshot.
+
+    The transaction is opened before the first read and kept open until the
+    context exits. Thereby, every count and every sample taken inside the
+    context refers to the same database state, even if another session commits
+    changes in between. A subsequent validation starts a new snapshot and thus
+    observes such changes.
+    """
+    if is_sqlite(engine):
+        connection = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+        connection.exec_driver_sql("BEGIN")
+        try:
+            yield connection
+        finally:
+            try:
+                connection.exec_driver_sql("ROLLBACK")
+            except sa.exc.DBAPIError:
+                # The transaction may already have been closed by the driver.
+                pass
+            connection.close()
+        return
+
+    # Prefer an explicit snapshot isolation level where the backend supports
+    # it. Falling back to the default isolation level still keeps a single
+    # transaction open (and with it a consistent read view on most backends).
+    isolation_levels: tuple[str | None, ...] = (
+        *{
+            "postgresql": ("REPEATABLE READ",),
+            "mssql": ("SNAPSHOT", "SERIALIZABLE"),
+            "duckdb": ("SERIALIZABLE",),
+            "ibm_db_sa": ("RR", "SERIALIZABLE"),
+        }.get(engine.name, ()),
+        None,
+    )
+
+    last_error: Exception | None = None
+    for isolation_level in isolation_levels:
+        try:
+            connection = engine.connect()
+            if isolation_level is not None:
+                connection = connection.execution_options(
+                    isolation_level=isolation_level
+                )
+            transaction = connection.begin()
+        except Exception as error:
+            last_error = error
+            try:
+                connection.close()
+            except Exception:
+                pass
+            continue
+        try:
+            yield connection
+        finally:
+            transaction.rollback()
+            connection.close()
+        return
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Could not open a read snapshot.")
+
+
+_Bind = sa.engine.Engine | sa.Connection
+
+
+def _bind_engine(bind: _Bind) -> sa.engine.Engine:
+    return bind.engine if isinstance(bind, sa.Connection) else bind
+
+
+@contextmanager
+def _bind_connection(bind: _Bind) -> Iterator[sa.Connection]:
+    if isinstance(bind, sa.Connection):
+        yield bind
+    else:
+        with bind.connect() as connection:
+            yield connection
+
+
+def _row_value_side(
+    engine: sa.engine.Engine,
+    ref: DataReference,
+    side: int,
+    *,
+    distinct: bool,
+    allow_dirty_reads: bool,
+) -> sa.Select:
+    selection = ref.get_selection(
+        engine, allow_dirty_reads=allow_dirty_reads
+    ).subquery()
+    columns = list(selection.c)
+    if distinct:
+        base = sa.select(*columns).distinct().subquery()
+        columns = list(base.c)
+    else:
+        base = selection
+    return sa.select(
+        *[column.label(f"dj_value_{index}") for index, column in enumerate(columns)],
+        sa.literal(side).label("dj_side"),
+    ).select_from(base)
+
+
+def _row_value_counts(
+    engine: sa.engine.Engine,
+    ref: DataReference,
+    ref2: DataReference,
+    *,
+    distinct: bool,
+    allow_dirty_reads: bool,
+) -> tuple[sa.Subquery, int]:
+    selection1 = _row_value_side(
+        engine, ref, 1, distinct=distinct, allow_dirty_reads=allow_dirty_reads
+    )
+    selection2 = _row_value_side(
+        engine, ref2, 2, distinct=distinct, allow_dirty_reads=allow_dirty_reads
+    )
+    n_columns = len(list(selection1.selected_columns)) - 1
+    combined = sa.union_all(selection1, selection2).subquery()
+    values = [combined.c[f"dj_value_{index}"] for index in range(n_columns)]
+    counts = sa.select(
+        *values,
+        sa.func.sum(sa.case((combined.c.dj_side == 1, 1), else_=0)).label("dj_count1"),
+        sa.func.sum(sa.case((combined.c.dj_side == 2, 1), else_=0)).label("dj_count2"),
+    ).group_by(*values)
+    return counts.subquery(), n_columns
+
+
+def _difference_columns(
+    counts: sa.Subquery,
+) -> tuple[sa.ColumnElement, sa.ColumnElement, sa.ColumnElement]:
+    count1 = counts.c.dj_count1
+    count2 = counts.c.dj_count2
+    missing = sa.func.coalesce(
+        sa.cast(
+            sa.func.sum(sa.case((count1 > count2, count1 - count2), else_=0)),
+            sa.BigInteger,
+        ),
+        0,
+    ).label("dj_missing")
+    excess = sa.func.coalesce(
+        sa.cast(
+            sa.func.sum(sa.case((count2 > count1, count2 - count1), else_=0)),
+            sa.BigInteger,
+        ),
+        0,
+    ).label("dj_excess")
+    union = sa.func.coalesce(
+        sa.cast(
+            sa.func.sum(sa.case((count1 > count2, count1), else_=count2)),
+            sa.BigInteger,
+        ),
+        0,
+    ).label("dj_union")
+    return missing, excess, union
+
+
+def get_row_difference_counts(
+    bind: _Bind,
+    ref: DataReference,
+    ref2: DataReference,
+    *,
+    distinct: bool = False,
+    allow_dirty_reads: bool = True,
+) -> tuple[tuple[int, int, int], list[sa.Select]]:
+    """Count multiset differences between two row selections in the database.
+
+    Returns the number of occurrences only present in ``ref``, the number of
+    occurrences only present in ``ref2`` and the size of the multiset union,
+    i.e. the sum of the per-value maxima of both multiplicities. With
+    ``distinct`` the selections are deduplicated first, which reduces the
+    computation to plain set semantics.
+    """
+    engine = _bind_engine(bind)
+    counts, _ = _row_value_counts(
+        engine,
+        ref,
+        ref2,
+        distinct=distinct,
+        allow_dirty_reads=allow_dirty_reads,
+    )
+    selection = sa.select(*_difference_columns(counts)).select_from(counts)
+    with _bind_connection(bind) as connection:
+        n_missing, n_excess, n_union = connection.execute(selection).one()
+    return (
+        int(n_missing),
+        int(n_excess),
+        int(n_union),
+    ), [selection]
+
+
+def get_partition_difference_counts(
+    bind: _Bind,
+    ref: DataReference,
+    ref2: DataReference,
+    *,
+    partition_indices: Sequence[int],
+    distinct: bool = False,
+    allow_dirty_reads: bool = True,
+) -> tuple[list[tuple[Any, ...]], list[sa.Select]]:
+    """Aggregate multiplicity differences per partition in the database.
+
+    ``partition_indices`` selects the columns of ``ref`` that define a
+    partition. Each returned row holds the partition values followed by the
+    number of occurrences missing in ``ref2`` and the number of excess
+    occurrences within that partition.
+    """
+    if not partition_indices:
+        return [], []
+    engine = _bind_engine(bind)
+    counts, n_columns = _row_value_counts(
+        engine,
+        ref,
+        ref2,
+        distinct=distinct,
+        allow_dirty_reads=allow_dirty_reads,
+    )
+    if any(index >= n_columns for index in partition_indices):
+        raise ValueError(
+            f"Expected partition indices below {n_columns}, got {partition_indices}."
+        )
+    partition_values = [counts.c[f"dj_value_{index}"] for index in partition_indices]
+    selection = (
+        sa.select(
+            *partition_values,
+            *_difference_columns(counts),
+        )
+        .select_from(counts)
+        .group_by(*partition_values)
+        .order_by(*partition_values)
+    )
+    with _bind_connection(bind) as connection:
+        rows = connection.execute(selection).fetchall()
+    return [tuple(row) for row in rows], [selection]
+
+
+def get_row_difference_count_samples(
+    bind: _Bind,
+    ref: DataReference,
+    ref2: DataReference,
+    *,
+    n_counterexamples: int,
+    distinct: bool = False,
+    allow_dirty_reads: bool = True,
+) -> tuple[tuple[list[Any], list[Any]], list[sa.Select]]:
+    """Fetch representative differing row values with both multiplicities.
+
+    At most ``n_counterexamples`` samples are returned per direction. ``-1``
+    fetches all differing values and ``0`` none.
+    """
+    if n_counterexamples < -1:
+        raise ValueError(f"Unexpected number of counterexamples: {n_counterexamples}")
+    if n_counterexamples == 0:
+        return ([], []), []
+    engine = _bind_engine(bind)
+    counts, n_columns = _row_value_counts(
+        engine,
+        ref,
+        ref2,
+        distinct=distinct,
+        allow_dirty_reads=allow_dirty_reads,
+    )
+    values = [counts.c[f"dj_value_{index}"] for index in range(n_columns)]
+    count1 = counts.c.dj_count1
+    count2 = counts.c.dj_count2
+
+    def _sample_selection(condition) -> sa.Select:
+        selection = (
+            sa.select(*values, count1, count2)
+            .select_from(counts)
+            .where(condition)
+            .order_by(*values)
+        )
+        if n_counterexamples > 0:
+            selection = selection.limit(n_counterexamples)
+        return selection
+
+    missing_selection = _sample_selection(count1 > count2)
+    excess_selection = _sample_selection(count2 > count1)
+    selections = [missing_selection, excess_selection]
+    with _bind_connection(bind) as connection:
+        missing = connection.execute(missing_selection).fetchall()
+        excess = connection.execute(excess_selection).fetchall()
+    return ([tuple(row) for row in missing], [tuple(row) for row in excess]), selections
 
 
 def get_row_mismatch(
