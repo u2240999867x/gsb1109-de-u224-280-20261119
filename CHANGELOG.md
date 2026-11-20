@@ -1,3 +1,9 @@
+**v0.58.3**
+* Added `AttachmentManifest`, an opt-in attachment provenance record. Each attachment occurrence is identified by its storage path in the source MSG tree, so identical bytes and names that collide only after sanitizing remain distinct. A single manifest can be passed to folder and ZIP saves and records the actual path each occurrence received in each destination. Attachments inside embedded messages saved only as `.msg` are recorded as `not-expanded` without a fabricated path.
+* Added `MSGFile.saveAttachmentFiles()`, which writes every attachment occurrence, including those inside embedded messages, into one destination namespace so cross-level filename conflicts receive real conflict suffixes.
+* Changed `--no-folders` to use the flat attachment export, so attachments inside embedded messages are included in the specified folder instead of creating nested directories.
+* Added `--attachment-manifest` to the command line. Default save behavior is unchanged when the manifest is not requested.
+
 **v0.58.2**
 * [[Advisory GHSA-6p33-92hw-4v86](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-6p33-92hw-4v86)] [[Advisory GHSA-cxpg-prmv-g4pp](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-cxpg-prmv-g4pp)] Fixed further attack vectors regarding the original advisory that were previously undiscovered. Most changes suggested in the new advisory were accepted as is, however a change was made to the handling of `srcset` to prevent it from being used at all if external files are not allowed.
 * Changed `setup.py` to exclude `extract_msg_tests` from installed packages.

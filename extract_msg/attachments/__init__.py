@@ -12,6 +12,8 @@ __all__ = [
     # Classes.
     'Attachment',
     'AttachmentBase',
+    'AttachmentManifest',
+    'AttachmentManifestEntry',
     'BrokenAttachment',
     'CustomAttachmentHandler',
     'EmbeddedMsgAttachment',
@@ -32,6 +34,10 @@ from .broken_att import BrokenAttachment
 from .custom_att import CustomAttachment
 from .custom_att_handler import CustomAttachmentHandler, registerHandler
 from .emb_msg_att import EmbeddedMsgAttachment
+from .manifest import (
+        ATTACHMENT_MANIFEST_FILENAME, ATTACHMENT_MANIFEST_SCHEMA,
+        AttachmentManifest, AttachmentManifestEntry
+    )
 from .signed_att import SignedAttachment
 from .unsupported_att import UnsupportedAttachment
 from .web_att import WebAttachment

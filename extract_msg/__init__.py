@@ -47,6 +47,8 @@ __all__ = [
     # Classes:
     'Attachment',
     'AttachmentBase',
+    'AttachmentManifest',
+    'AttachmentManifestEntry',
     'Message',
     'MSGFile',
     'MSGPath',
@@ -68,7 +70,10 @@ from . import constants, enums, exceptions
 from . import utils
 
 from . import attachments, msg_classes, null_date, properties, structures
-from .attachments import Attachment, AttachmentBase, SignedAttachment
+from .attachments import (
+        Attachment, AttachmentBase, AttachmentManifest,
+        AttachmentManifestEntry, SignedAttachment
+    )
 from .msg_classes import Message, MSGFile
 from .msg_path import MSGPath
 from .ole_writer import OleWriter

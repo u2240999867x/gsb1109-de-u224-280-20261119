@@ -100,9 +100,13 @@ refer to the usage information provided from the program's help dialog:
      --save-header         Store the header in a separate file.
      --attachments-only    Specify to only save attachments from an MSG file.
      --skip-hidden         Skips any attachment marked as hidden (usually ones embedded in the body).
-     --no-folders          Stores everything in the location specified by --out. Requires --attachments-only and is incompatible with --out-name.
+     --no-folders          Stores everything in the location specified by --out. Requires --attachments-only and is incompatible with --out-name. Embedded-message attachments are included without nested folders.
      --skip-embedded       Skips all embedded MSG files when saving attachments.
      --extract-embedded    Extracts the embedded MSG files as MSG files instead of running their save functions.
+     --attachment-manifest
+                           Writes an attachment manifest recording each source
+                           occurrence and the file it received in this
+                           destination.
      --overwrite-existing  Disables filename conflict resolution code for attachments when saving a file, causing files to be overwritten if two attachments with the same
                            filename are on an MSG file.
      --skip-not-implemented, --skip-ni
@@ -124,6 +128,43 @@ From there, open the MSG file:
 ::
 
      msg = extract_msg.openMsg("path/to/msg/file.msg")
+
+To record where every attachment occurrence was actually written, create an
+``AttachmentManifest`` and pass the same instance to each save call. Each
+occurrence keeps a stable identifier derived from its location in the source
+message, so identical bytes and names that only collide after sanitizing still
+remain separate entries::
+
+     import extract_msg
+     import zipfile
+
+     msg = extract_msg.openMsg("path/to/msg/file.msg")
+     manifest = extract_msg.AttachmentManifest(msg)
+
+     # Save to a folder, preserving existing files.
+     msg.saveAttachments(
+         customPath = "archive/folder",
+         attachmentManifest = manifest,
+     )
+
+     # Save the same source again to a ZIP. The destination may assign
+     # different conflict suffixes, and the manifest records both.
+     with zipfile.ZipFile("archive.zip", "a") as z:
+         msg.saveAttachments(
+             customPath = "export",
+             zip = z,
+             attachmentManifest = manifest,
+         )
+
+     manifest.save("archive/attachment_manifest.json")
+
+``saveAttachments`` keeps the normal nested-folder behavior for embedded
+messages. To put every occurrence in one flat namespace (so an outer and a
+nested ``invoice.pdf`` both receive real ``(2)``, ``(3)`` suffixes in the same
+destination), call ``msg.saveAttachmentFiles(customPath = ..., zip = ...,
+attachmentManifest = manifest)``. In either mode, saving an embedded message
+itself as a ``.msg`` file (``extractEmbedded = True``) records its children as
+``not-expanded`` with no invented file path.
 
 Alternatively, if you wish to send a msg binary string instead of a file
 to the ``extract_msg.openMsg()`` Method:

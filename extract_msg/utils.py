@@ -459,6 +459,9 @@ def getCommandArgs(args: Sequence[str]) -> argparse.Namespace:
     # --extract-embedded
     parser.add_argument('--extract-embedded', dest='extractEmbedded', action='store_true',
                         help='Extracts the embedded MSG files as MSG files instead of running their save functions.')
+    # --attachment-manifest
+    parser.add_argument('--attachment-manifest', dest='attachmentManifest', action='store_true',
+                        help='Writes an attachment manifest recording each source occurrence and the file it received in this destination.')
     # --overwrite-existing
     parser.add_argument('--overwrite-existing', dest='overwriteExisting', action='store_true',
                         help='Disables filename conflict resolution code for attachments when saving a file, causing files to be overwritten if two attachments with the same filename are on an MSG file.')

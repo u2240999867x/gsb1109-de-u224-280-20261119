@@ -43,6 +43,7 @@ def main(argv: List[str] = sys.argv) -> None:
     # Quickly make a dictionary for the keyword arguments.
     kwargs = {
         'allowFallback': args.allowFallback,
+        'attachmentManifest': args.attachmentManifest,
         'attachmentsOnly': args.attachmentsOnly,
         'charset': args.charset,
         'contentId': args.cid,
@@ -51,6 +52,7 @@ def main(argv: List[str] = sys.argv) -> None:
         'extractEmbedded': args.extractEmbedded,
         'html': args.html,
         'json': args.json,
+        'noFolders': args.noFolders,
         'overwriteExisting': args.overwriteExisting,
         'pdf': args.pdf,
         'preparedHtml': args.preparedHtml,

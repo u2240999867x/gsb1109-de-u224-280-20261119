@@ -31,10 +31,13 @@ from ..constants import (
 from ..attachments import (
         AttachmentBase, initStandardAttachment, SignedAttachment
     )
+from ..attachments.manifest import (
+        ATTACHMENT_MANIFEST_FILENAME, AttachmentManifest
+    )
 from ..encoding import lookupCodePage
 from ..enums import (
-        ErrorBehavior, InsecureFeatures, Importance, Priority, PropertiesType,
-        RetentionFlags, SaveType, Sensitivity, SideEffect
+        AttachmentType, ErrorBehavior, InsecureFeatures, Importance, Priority,
+        PropertiesType, RetentionFlags, SaveType, Sensitivity, SideEffect
     )
 from ..exceptions import (
         ConversionError, InvalidFileFormatError, PrefixError,
@@ -45,8 +48,8 @@ from ..properties.named import Named, NamedProperties
 from ..properties.properties_store import PropertiesStore
 from ..structures.contact_link_entry import ContactLinkEntry
 from ..utils import (
-        divide, guessEncoding, makeWeakRef, parseType, verifyPropertyId,
-        verifyType
+        createZipOpen, divide, guessEncoding, inputToString, makeWeakRef,
+        parseType, prepareFilename, verifyPropertyId, verifyType
     )
 
 
@@ -865,10 +868,227 @@ class MSGFile:
 
         :param skipHidden: If ``True``, skips attachments marked as hidden.
             (Default: ``False``)
+        :param noFolders: If ``True``, writes every attachment occurrence,
+            including nested embedded-message attachments, into the specified
+            destination without creating nested folders.
+        :param attachmentManifest: An optional
+            :class:`~extract_msg.attachments.AttachmentManifest` (or ``True``
+            to create one) that records each source occurrence and its saved
+            path for this destination.
         """
-        for attachment in self.attachments:
-            if not (skipHidden and attachment.hidden):
-                attachment.save(skipHidden = skipHidden, **kwargs)
+        if kwargs.get('noFolders', False):
+            self.saveAttachmentFiles(skipHidden = skipHidden, **kwargs)
+            return
+
+        manifest = kwargs.get('attachmentManifest')
+        if manifest is False:
+            manifest = None
+        if manifest is None:
+            for attachment in self.attachments:
+                if not (skipHidden and attachment.hidden):
+                    attachment.save(skipHidden = skipHidden, **kwargs)
+            return
+
+        if manifest is True or not isinstance(manifest, AttachmentManifest):
+            manifest = AttachmentManifest(self)
+        else:
+            manifest._ensureLoaded(self)
+        kwargs['attachmentManifest'] = manifest
+
+        _zip = kwargs.get('zip')
+        destinationId = None
+        createdZip = False
+        try:
+            if _zip:
+                if isinstance(_zip, (str, pathlib.Path)):
+                    _zip = zipfile.ZipFile(_zip, 'a', zipfile.ZIP_DEFLATED)
+                    kwargs['zip'] = _zip
+                    createdZip = True
+                root = pathlib.Path(kwargs.get('customPath', ''))
+                _open = createZipOpen(_zip.open)
+                mode = 'w'
+            else:
+                root = pathlib.Path(kwargs.get('customPath', '.')).absolute()
+                _open = open
+                mode = 'wb'
+
+            archive = str(_zip.filename) if _zip and getattr(_zip, 'filename', None) else None
+            destinationId = manifest.beginDestination(
+                'zip' if _zip else 'folder', root, archive
+            )
+
+            childKwargs = dict(kwargs)
+            childKwargs['_manifestDestinationId'] = destinationId
+            childKwargs['_manifestNewDestination'] = False
+
+            for attachment in self.attachments:
+                if skipHidden and attachment.hidden:
+                    manifest.recordSkipped(
+                        attachment, destinationId,
+                        'The attachment is hidden and skipHidden was set.'
+                    )
+                    continue
+                result = attachment.save(skipHidden = skipHidden, **childKwargs)
+                manifest.recordSave(
+                    attachment, destinationId, result,
+                    extractEmbedded = bool(kwargs.get('extractEmbedded', False)),
+                )
+
+            manifest.finalizeDestination(destinationId)
+            manifest.writeTo(_open, root / ATTACHMENT_MANIFEST_FILENAME, mode)
+        except Exception:
+            if destinationId is not None:
+                manifest.discardDestination(destinationId)
+            raise
+        finally:
+            if _zip and createdZip:
+                _zip.close()
+
+    def saveAttachmentFiles(self, **kwargs):
+        """
+        Saves every attachment occurrence as a file in one destination
+        namespace, including attachments inside embedded messages.
+
+        Unlike :meth:`saveAttachments`, which leaves the nesting decisions of
+        embedded messages to their own save functions, this method writes each
+        attachment to :param customPath: (or a ZIP member path) directly. That
+        means a name conflict between an outer attachment and an attachment
+        inside an embedded message is resolved in the same namespace, so all
+        occurrences receive distinct filenames and real conflict suffixes.
+
+        Embedded messages themselves are treated as containers and are not
+        written as ``.msg`` files. Their child attachments are written instead.
+        The return value lists the saved paths in source-tree order.
+
+        :param skipHidden: If ``True``, skips attachments marked as hidden.
+        :param skipNotImplemented: If ``True``, skips attachments whose type is
+            not implemented instead of raising.
+        :param customPath: The destination folder or ZIP member directory.
+        :param zip: A path or open ``ZipFile`` to write into.
+        :param attachmentManifest: An optional manifest that receives one save
+            record per occurrence for this destination.
+        """
+        _zip = kwargs.get('zip')
+        createdZip = False
+        manifest = kwargs.get('attachmentManifest')
+        if manifest is False:
+            manifest = None
+        elif manifest is not None and (
+            manifest is True or not isinstance(manifest, AttachmentManifest)
+        ):
+            manifest = AttachmentManifest(self)
+            kwargs['attachmentManifest'] = manifest
+        savedPaths = []
+
+        try:
+            if _zip:
+                if isinstance(_zip, (str, pathlib.Path)):
+                    _zip = zipfile.ZipFile(_zip, 'a', zipfile.ZIP_DEFLATED)
+                    kwargs['zip'] = _zip
+                    createdZip = True
+                customPath = pathlib.Path(kwargs.get('customPath', ''))
+                _open = createZipOpen(_zip.open)
+                mode = 'w'
+            else:
+                customPath = pathlib.Path(kwargs.get('customPath', '.')).absolute()
+                _open = open
+                mode = 'wb'
+
+            os.makedirs(customPath, exist_ok = True) if not _zip else None
+
+            childKwargs = {k: v for k, v in kwargs.items() if k not in (
+                'attachmentManifest', '_manifestDestinationId',
+                '_manifestNewDestination'
+            )}
+
+            destinationId = None
+            if manifest is not None:
+                archive = str(_zip.filename) if _zip and getattr(_zip, 'filename', None) else None
+                destinationId = manifest.beginDestination(
+                    'zip' if _zip else 'folder', customPath, archive
+                )
+
+            def saveLevel(msg):
+                for attachment in msg.attachments:
+                    if kwargs.get('skipHidden', False) and attachment.hidden:
+                        if manifest is not None:
+                            manifest.recordSkipped(
+                                attachment, destinationId,
+                                'The attachment is hidden and skipHidden was set.'
+                            )
+                        continue
+
+                    if attachment.type in (
+                        AttachmentType.MSG, AttachmentType.SIGNED_EMBEDDED
+                    ):
+                        # Do not emit the container; descend into it instead.
+                        if manifest is not None:
+                            manifest.recordTraversed(
+                                attachment, destinationId,
+                                'Embedded message was traversed; only its '
+                                'child attachments were written.'
+                            )
+                        saveLevel(attachment.data)
+                        continue
+
+                    try:
+                        if hasattr(attachment, 'getFilename'):
+                            filename = attachment.getFilename(**childKwargs)
+                        else:
+                            filename = attachment.name
+                    except NotImplementedError:
+                        if childKwargs.get('skipNotImplemented', False):
+                            if manifest is not None:
+                                manifest.recordSkipped(
+                                    attachment, destinationId,
+                                    'The attachment type is not implemented '
+                                    'and skipNotImplemented was set.'
+                                )
+                            continue
+                        raise
+
+                    filename = prepareFilename(inputToString(
+                        filename, msg.stringEncoding
+                    ))
+                    maxNameLength = childKwargs.get('maxNameLength', 256)
+                    if len(filename) > maxNameLength:
+                        name, ext = os.path.splitext(filename)
+                        filename = name[:maxNameLength - len(ext)] + ext
+
+                    fullFilename = attachment._handleFnc(
+                        _zip, filename, customPath, childKwargs
+                    )
+
+                    data = attachment.data
+                    if data is None:
+                        result = (SaveType.NONE, None)
+                    else:
+                        with _open(str(fullFilename), mode) as f:
+                            f.write(data)
+                        result = (SaveType.FILE, str(fullFilename))
+
+                    if manifest is not None:
+                        manifest.recordSave(
+                            attachment, destinationId, result,
+                            extractEmbedded = True,
+                        )
+                    if result[1] is not None:
+                        savedPaths.append(result[1])
+
+            saveLevel(self)
+
+            if manifest is not None:
+                manifest.finalizeDestination(destinationId)
+                manifest.writeTo(_open, customPath / ATTACHMENT_MANIFEST_FILENAME, mode)
+
+            return savedPaths
+        except Exception:
+            if manifest is not None and destinationId is not None:
+                manifest.discardDestination(destinationId)
+            raise
+        finally:
+            if _zip and createdZip:
+                _zip.close()
 
     def saveRaw(self, path) -> None:
         # Create a 'raw' folder.

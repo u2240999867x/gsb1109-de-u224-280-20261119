@@ -35,6 +35,9 @@ from typing import Any, Callable, cast, Dict, List, Optional, Tuple, Type, Union
 from .. import constants
 from .._rtf.create_doc import createDocument
 from .._rtf.inject_rtf import injectStartRTF
+from ..attachments.manifest import (
+        ATTACHMENT_MANIFEST_FILENAME, AttachmentManifest
+    )
 from ..enums import (
         BodyTypes, DeencapType, ErrorBehavior, RecipientType, SaveType
     )
@@ -872,6 +875,14 @@ class MessageBase(MSGFile):
 
         :param attachmentsOnly: Turns off saving the body and only saves the
             attachments when set.
+        :param attachmentManifest: An optional
+            :class:`~extract_msg.attachments.AttachmentManifest` (or ``True``
+            to create one). When set, the manifest records every attachment
+            occurrence in the message tree and the file path that occurrence
+            received in this destination. Pass the same instance to a second
+            save call to keep one manifest covering both a folder and a ZIP
+            export of the same source. Existing save behavior is unchanged when
+            this is omitted.
         :param saveHeader: Turns on saving the header as a separate file when
             set.
         :param skipAttachments: Turns off saving attachments.
@@ -931,6 +942,25 @@ class MessageBase(MSGFile):
         # Track if we should skip the body if no valid body is found instead of
         # raising an exception.
         skipBodyNotFound = kwargs.get('skipBodyNotFound', False)
+
+        # An attachment manifest is strictly opt-in. When requested, the same
+        # instance may be passed to multiple save calls so that one document
+        # can describe a folder export and a ZIP export of the same source.
+        manifest = kwargs.get('attachmentManifest')
+        manifestRequested = manifest is not None and manifest is not False
+        if manifestRequested:
+            if manifest is True or not isinstance(manifest, AttachmentManifest):
+                manifest = AttachmentManifest(self)
+                kwargs['attachmentManifest'] = manifest
+            else:
+                manifest._ensureLoaded(self)
+            # Nested saves triggered by embedded messages must record into the
+            # destination selected by the outermost save call.
+            destinationId = kwargs.get('_manifestDestinationId')
+            newDestination = destinationId is None
+        else:
+            destinationId = None
+            newDestination = False
 
         fext = None
 
@@ -1073,8 +1103,30 @@ class MessageBase(MSGFile):
             # Update the kwargs.
             kwargs['customPath'] = path
 
+            if manifestRequested and newDestination:
+                archive = str(_zip.filename) if _zip and getattr(_zip, 'filename', None) else None
+                destinationId = manifest.beginDestination(
+                    'zip' if _zip else 'folder', path, archive
+                )
+                kwargs['_manifestDestinationId'] = destinationId
+                kwargs['_manifestNewDestination'] = True
+            elif manifestRequested:
+                # Nested save calls share the outer destination but must not
+                # write or finalize the manifest themselves.
+                kwargs['_manifestNewDestination'] = False
+
             if raw:
                 self.saveRaw(path)
+                if manifestRequested:
+                    manifest.markAllSkipped(
+                        destinationId,
+                        'The message was saved in raw format rather than as attachment files.'
+                    )
+                    manifest.finalizeDestination(destinationId)
+                    if newDestination:
+                        manifest.writeTo(
+                            _open, path / ATTACHMENT_MANIFEST_FILENAME, mode
+                        )
                 return (SaveType.FOLDER, str(path))
 
             # If the user has requested the headers for this file, save it now.
@@ -1089,7 +1141,25 @@ class MessageBase(MSGFile):
 
             if not skipAttachments:
                 # Save the attachments.
-                attachmentReturns = [attachment.save(**kwargs) for attachment in self.attachments if not (skipHidden and attachment.hidden)]
+                attachmentReturns = []
+                for attachment in self.attachments:
+                    if skipHidden and attachment.hidden:
+                        if manifestRequested:
+                            manifest.recordSkipped(
+                                attachment,
+                                destinationId,
+                                'The attachment is hidden and skipHidden was set.'
+                            )
+                        continue
+                    result = attachment.save(**kwargs)
+                    attachmentReturns.append(result)
+                    if manifestRequested:
+                        manifest.recordSave(
+                            attachment,
+                            destinationId,
+                            result,
+                            extractEmbedded = bool(kwargs.get('extractEmbedded', False)),
+                        )
                 # Get the names from each.
                 attachmentNames = []
                 for x in attachmentReturns:
@@ -1097,6 +1167,13 @@ class MessageBase(MSGFile):
                         attachmentNames.append(x[1])
                     elif isinstance(x[1], list):
                         attachmentNames.extend(x[1])
+            elif manifestRequested:
+                manifest.markAllSkipped(
+                    destinationId,
+                    'Attachments were skipped for this save call (skipAttachments was set).'
+                )
+
+
 
             if not attachOnly and fext:
                 with _open(str(path / ('message.' + fext)), mode) as f:
@@ -1115,7 +1192,15 @@ class MessageBase(MSGFile):
                     else:
                         f.write(self.getSaveBody(**kwargs))
 
+            if manifestRequested and newDestination:
+                manifest.finalizeDestination(destinationId)
+                manifest.writeTo(_open, path / ATTACHMENT_MANIFEST_FILENAME, mode)
+
             return (SaveType.FOLDER, str(path))
+        except Exception:
+            if manifestRequested and newDestination and destinationId is not None:
+                manifest.discardDestination(destinationId)
+            raise
         finally:
             # Close the ZipFile if this function created it.
             if _zip and createdZip:
