@@ -527,6 +527,47 @@ Examples:
 self.client = InfluxDBClient.from_env_properties()
 ```
 
+#### Preview and merge tags before writing
+
+`preview_tags` merges the configured default tags into structured records
+(`Point`, nested `tags` dictionaries, or flat dictionaries with
+`record_tag_keys`) **without mutating them** and without sending anything.
+Every record reports its original tags (`TagOrigin.RECORD`), the tags filled
+from defaults (`TagOrigin.DEFAULT`) and the tags explicitly excluded
+(`TagOrigin.OMITTED`). Use `OMIT_TAG` as a tag value, or `omit_tag_keys`, to
+state that a tag must not be written; an explicitly omitted key is never
+repaired by a default. Calling `write_merged` with the same configuration
+writes exactly the line protocol the preview produced.
+
+``` python
+from influxdb_client import Point, OMIT_TAG, TagMergeOptions
+
+options = TagMergeOptions(default_tags={"region": "us-east-1"})
+
+records = [
+    Point("sensor").tag("host", "h1").tag("region", "us-west-2").field("level", 1).time(1),
+    Point("sensor").tag("host", "h1").field("level", 2).time(2),
+    Point("sensor").tag("host", "h1").tag("region", OMIT_TAG).field("level", 3).time(3),
+]
+
+preview = write_api.preview_tags(records, tag_merge_options=options)
+for merged in preview.records:
+    print(merged.line_protocol, merged.tag_origins())
+
+# sensor,host=h1,region=us-west-2 level=1i 1  {'host': RECORD, 'region': RECORD}
+# sensor,host=h1,region=us-east-1 level=2i 2  {'host': RECORD, 'region': DEFAULT}
+# sensor,host=h1 level=3i 3                  {'host': RECORD, 'region': OMITTED}
+
+write_api.write_merged("my-bucket", "my-org", records, tag_merge_options=options)
+```
+
+The same input can be merged again for another destination with different
+defaults because neither the records nor the writer settings are changed.
+Records whose line protocol is empty (for example a point without fields) are
+reported as `discarded` and are never sent. Provenance metadata stays on the
+client side and is never written to InfluxDB; the regular `write` call keeps
+its original behavior.
+
 #### Synchronous client
 
 Data are writes in a synchronous HTTP request.

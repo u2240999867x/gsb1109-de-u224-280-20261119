@@ -22,6 +22,7 @@ from influxdb_client.client.util.helpers import get_org_query_param
 from influxdb_client.client.write.dataframe_serializer import DataframeSerializer
 from influxdb_client.client.write.point import Point, DEFAULT_WRITE_PRECISION
 from influxdb_client.client.write.retry import WritesRetry
+from influxdb_client.client.write.tag_merger import MergedBatch, TagMergeOptions, TagMerger
 from influxdb_client.rest import _UTF_8_encoding
 
 logger = logging.getLogger('influxdb_client.client.write_api')
@@ -374,7 +375,9 @@ You can use native asynchronous version of the client:
         """  # noqa: E501
         org = get_org_query_param(org=org, client=self._influxdb_client)
 
-        self._append_default_tags(record)
+        if kwargs.get('_append_default_tags', True):
+            self._append_default_tags(record)
+        kwargs.pop('_append_default_tags', None)
 
         if self._write_options.write_type is WriteType.batching:
             return self._write_batching(bucket, org, record,
@@ -395,6 +398,90 @@ You can use native asynchronous version of the client:
         elif len(results) == 1:
             return results[0]
         return results
+
+    def _tag_merger(self, tag_merge_options, default_tags, omit_tag_keys):
+        if tag_merge_options is not None:
+            return TagMerger.from_options(tag_merge_options)
+        if default_tags is None and omit_tag_keys is None:
+            return TagMerger.from_options(
+                TagMergeOptions.from_point_settings(self._point_settings))
+        merged_defaults = dict(self._point_settings.defaultTags)
+        if default_tags:
+            merged_defaults.update(default_tags)
+        return TagMerger(default_tags=merged_defaults, omit_tag_keys=omit_tag_keys)
+
+    def preview_tags(self, record,
+                     write_precision: WritePrecision = DEFAULT_WRITE_PRECISION,
+                     tag_merge_options: TagMergeOptions = None,
+                     default_tags: dict = None,
+                     omit_tag_keys: Iterable[str] = None,
+                     **kwargs) -> MergedBatch:
+        """
+        Preview the tags that would be written without sending anything.
+
+        Every record is reported with its original tags, the tags filled from
+        the configured defaults and the tags explicitly excluded. The input
+        records and the writer's default tag settings are not modified.
+
+        :param record: a Point/dict or an iterable of Points/dicts to preview
+        :param write_precision: precision for the timestamps of the preview
+        :param tag_merge_options: explicit :class:`TagMergeOptions`; when set it
+                                  overrides ``default_tags`` and
+                                  ``omit_tag_keys``
+        :param default_tags: extra defaults on top of the writer settings, used
+                             only for this preview
+        :param omit_tag_keys: keys that must not be written
+        :key record_measurement_key: key of dictionary with specified measurement
+        :key record_measurement_name: static measurement name for dictionary
+        :key record_time_key: key of dictionary with specified timestamp
+        :key record_tag_keys: list of dictionary keys to use as a tag
+        :key record_field_keys: list of dictionary keys to use as a field
+        :return: the merged batch, including per-record provenance
+        """
+        merger = self._tag_merger(tag_merge_options, default_tags, omit_tag_keys)
+        records = record if isinstance(record, Iterable) \
+            and not isinstance(record, (dict, Point, str, bytes)) else [record]
+        return merger.merge_batch(records, write_precision=write_precision, **kwargs)
+
+    def write_merged(self, bucket: str, org: str = None,
+                     record=None,
+                     write_precision: WritePrecision = DEFAULT_WRITE_PRECISION,
+                     tag_merge_options: TagMergeOptions = None,
+                     default_tags: dict = None,
+                     omit_tag_keys: Iterable[str] = None,
+                     **kwargs) -> Any:
+        """
+        Write records after merging the configured tags without mutation.
+
+        Use :meth:`preview_tags` with the very same arguments to inspect the
+        provenance first. Only records that survive serialization are sent;
+        records whose line protocol is empty are skipped. The provenance
+        metadata itself is never written to InfluxDB.
+
+        :param bucket: specifies the destination bucket for writes (required)
+        :param org: specifies the destination organization for writes
+        :param record: a Point/dict or an iterable of Points/dicts to write
+        :param write_precision: precision for the timestamps within the body
+        :param tag_merge_options: explicit :class:`TagMergeOptions`; when set it
+                                  overrides ``default_tags`` and
+                                  ``omit_tag_keys``
+        :param default_tags: extra defaults on top of the writer settings, used
+                             only for this write
+        :param omit_tag_keys: keys that must not be written
+        :key record_measurement_key: key of dictionary with specified measurement
+        :key record_measurement_name: static measurement name for dictionary
+        :key record_time_key: key of dictionary with specified timestamp
+        :key record_tag_keys: list of dictionary keys to use as a tag
+        :key record_field_keys: list of dictionary keys to use as a field
+        :return: the result of the underlying :meth:`write` call
+        """
+        merged_batch = self.preview_tags(
+            record, write_precision=write_precision,
+            tag_merge_options=tag_merge_options,
+            default_tags=default_tags, omit_tag_keys=omit_tag_keys, **kwargs)
+        writable_points = [merged.point for merged in merged_batch.writable_records()]
+        return self.write(bucket, org, writable_points, write_precision,
+                          _append_default_tags=False, **kwargs)
 
     def flush(self):
         """

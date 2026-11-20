@@ -8,6 +8,7 @@ from influxdb_client import Point, WritePrecision
 from influxdb_client.client._base import _BaseWriteApi, _HAS_DATACLASS
 from influxdb_client.client.util.helpers import get_org_query_param
 from influxdb_client.client.write.point import DEFAULT_WRITE_PRECISION
+from influxdb_client.client.write.tag_merger import MergedBatch, TagMergeOptions, TagMerger
 from influxdb_client.client.write_api import PointSettings
 
 logger = logging.getLogger('influxdb_client.client.write_api_async')
@@ -112,7 +113,9 @@ class WriteApiAsync(_BaseWriteApi):
 
         """  # noqa: E501
         org = get_org_query_param(org=org, client=self._influxdb_client)
-        self._append_default_tags(record)
+        if kwargs.get('_append_default_tags', True):
+            self._append_default_tags(record)
+        kwargs.pop('_append_default_tags', None)
 
         payloads = defaultdict(list)
         self._serialize(record, write_precision, payloads, precision_from_point=True, **kwargs)
@@ -132,3 +135,54 @@ class WriteApiAsync(_BaseWriteApi):
                 raise result
 
         return False not in [re[1] in (201, 204) for re in results]
+
+    def _tag_merger(self, tag_merge_options, default_tags, omit_tag_keys):
+        if tag_merge_options is not None:
+            return TagMerger.from_options(tag_merge_options)
+        if default_tags is None and omit_tag_keys is None:
+            return TagMerger.from_options(
+                TagMergeOptions.from_point_settings(self._point_settings))
+        merged_defaults = dict(self._point_settings.defaultTags)
+        if default_tags:
+            merged_defaults.update(default_tags)
+        return TagMerger(default_tags=merged_defaults, omit_tag_keys=omit_tag_keys)
+
+    def preview_tags(self, record,
+                     write_precision: WritePrecision = DEFAULT_WRITE_PRECISION,
+                     tag_merge_options: TagMergeOptions = None,
+                     default_tags: dict = None,
+                     omit_tag_keys: Iterable[str] = None,
+                     **kwargs) -> MergedBatch:
+        """
+        Preview the tags that would be written without sending anything.
+
+        Mirrors :meth:`influxdb_client.client.write_api.WriteApi.preview_tags`
+        for the asynchronous client. Input records and writer settings are not
+        modified and provenance metadata is never written to InfluxDB.
+        """
+        merger = self._tag_merger(tag_merge_options, default_tags, omit_tag_keys)
+        records = record if isinstance(record, Iterable) \
+            and not isinstance(record, (dict, Point, str, bytes)) else [record]
+        return merger.merge_batch(records, write_precision=write_precision, **kwargs)
+
+    async def write_merged(self, bucket: str, org: str = None,
+                           record=None,
+                           write_precision: WritePrecision = DEFAULT_WRITE_PRECISION,
+                           tag_merge_options: TagMergeOptions = None,
+                           default_tags: dict = None,
+                           omit_tag_keys: Iterable[str] = None,
+                           **kwargs) -> bool:
+        """
+        Write records after merging the configured tags without mutation.
+
+        Use :meth:`preview_tags` with the same arguments to inspect provenance
+        first. Records whose line protocol is empty are skipped and the
+        provenance metadata is never written to InfluxDB.
+        """
+        merged_batch = self.preview_tags(
+            record, write_precision=write_precision,
+            tag_merge_options=tag_merge_options,
+            default_tags=default_tags, omit_tag_keys=omit_tag_keys, **kwargs)
+        writable_points = [merged.point for merged in merged_batch.writable_records()]
+        return await self.write(bucket, org, writable_points, write_precision,
+                                _append_default_tags=False, **kwargs)

@@ -390,6 +390,15 @@ from influxdb_client.client.write_api import WriteApi, WriteOptions
 from influxdb_client.client.influxdb_client import InfluxDBClient
 from influxdb_client.client.logging_handler import InfluxLoggingHandler
 from influxdb_client.client.write.point import Point
+from influxdb_client.client.write.tag_merger import (
+    OMIT_TAG,
+    MergedBatch,
+    MergedRecord,
+    TagMergeOptions,
+    TagMerger,
+    TagOrigin,
+    TagProvenance,
+)
 
 from influxdb_client.version import VERSION
 
@@ -478,4 +487,6 @@ __all__ = ['AuthorizationsService', 'BackupService', 'BucketSchemasService', 'Bu
            'VariableProperties', 'Variables', 'View', 'ViewLinks', 'ViewProperties', 'Views', 'WritePrecision',
            'XYGeom', 'XYViewProperties', 'AuthorizationsApi', 'BucketsApi', 'DeleteApi', 'InvokableScriptsApi',
            'LabelsApi', 'OrganizationsApi', 'QueryApi', 'TasksApi', 'UsersApi', 'WriteApi', 'WriteOptions',
-           'InfluxDBClient', 'InfluxLoggingHandler', 'Point', 'VERSION']
+           'InfluxDBClient', 'InfluxLoggingHandler', 'Point',
+           'OMIT_TAG', 'MergedBatch', 'MergedRecord', 'TagMergeOptions', 'TagMerger', 'TagOrigin', 'TagProvenance',
+           'VERSION']

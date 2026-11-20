@@ -12,7 +12,11 @@ from influxdb_client import (
     BucketsService,
     Configuration,
     InfluxDBClient,
+    OMIT_TAG,
     Point,
+    TagMergeOptions,
+    TagMerger,
+    TagOrigin,
     WriteOptions,
     WritePrecision,
 )
@@ -27,6 +31,12 @@ def check_exports() -> None:
     assert BucketsService is not None
     assert Configuration is not None
     assert InfluxDBClient is not None
+
+    options = TagMergeOptions(default_tags={"region": "us-east-1"}, omit_tag_keys=["debug"])
+    merger = TagMerger.from_options(options)
+    batch = merger.merge_batch([point, Point("temperature").tag("region", OMIT_TAG).field("v", 1)])
+    assert batch.records[0].tag_origins()["region"] == TagOrigin.DEFAULT
+    assert batch.records[1].omitted_tags == ["region"]
 
 
 if __name__ == "__main__":

@@ -1,5 +1,9 @@
 ## 1.51.0 [unreleased]
 
+### Features
+
+1. Add a previewable, non-mutating tag merge path (`WriteApi.preview_tags` / `WriteApi.write_merged`, mirrored on `WriteApiAsync`) for structured records (`Point`, nested `tags` dicts and flat dicts via `record_tag_keys`). Each merged record exposes its original tags, default-filled tags and explicitly omitted tags with provenance (`TagOrigin`), supports `OMIT_TAG` / `omit_tag_keys`, never mutates inputs or writer settings, skips records whose line protocol is empty, and never writes provenance metadata to InfluxDB.
+
 ### Documentation
 
 1. [#721](https://github.com/influxdata/influxdb-client-python/pull/721): Add examples for configure TLS/mTLS for the Influxdb client.
