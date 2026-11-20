@@ -334,3 +334,45 @@ pipeline.run(frozen_source())
 pipeline.run(frozen_source(), schema_contract="freeze")
 
 ```
+
+## Preview contract outcomes with `preflight`
+
+`pipeline.preflight` reads a small input through the extractor and normalizer without writing the
+schema or the destination. It reports what each record would do: land, land without a discarded
+column, be dropped, or fail. This lets you check a new contract before deploying it.
+
+```py
+import dlt
+
+pipeline = dlt.pipeline("payments", destination="duckdb")
+
+
+@dlt.resource(name="payments")
+def payments():
+    yield {"id": 1, "amount": 100}
+    # a new contract for this table takes effect for the records that follow
+    yield dlt.mark.with_hints(
+        {"id": 2, "amount": 200},
+        dlt.mark.make_hints(
+            table_name="payments", schema_contract={"columns": "discard_value"}
+        ),
+        create_table_variant=True,
+    )
+    yield {"id": 3, "amount": 300, "reimbursed": True}
+    yield dlt.mark.with_table_name({"refund_id": 9}, "refunds")
+
+
+plan = pipeline.preflight(payments())
+print(plan.summary())
+```
+
+The plan keeps the input order, so a hint applies only to the records after it. Each target table
+resolves its own contract: a hint for `payments` does not constrain `refunds`. For every record,
+`plan.records[i]` carries the resolved `contract`, its `contract_source` (`table`, `parent_table`,
+`global` or `default`) and the per-column decisions. `plan.tables` summarizes each target table,
+including the columns it would gain and the columns the contract rejected. `plan.asdict()` returns
+the same data as plain dictionaries.
+
+A table that does not exist yet is created and accepts its first-seen columns. Once a record lands
+in that table, later records are held to the contract in effect for them. The preflight never
+creates a table in the destination, changes the pipeline schema or writes a load package.

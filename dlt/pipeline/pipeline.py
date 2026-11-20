@@ -1339,6 +1339,52 @@ class Pipeline(SupportsPipeline):
             self._apply_abort_plan(plan)
         return plan
 
+    def preflight(
+        self,
+        data: Any,
+        *,
+        table_name: str = None,
+        parent_table_name: str = None,
+        write_disposition: TWriteDispositionConfig = None,
+        columns: TAnySchemaColumns = None,
+        primary_key: TColumnNames = None,
+        schema: Schema = None,
+        schema_contract: TSchemaContract = None,
+    ) -> Any:
+        """Plans how `data` would be loaded without changing the schema or the destination.
+
+        Reads the input in order through the extractor and normalizes each record against a
+        clone of the pipeline schema. Mid-stream hints apply to the records after them and each
+        target table resolves its own contract. Nothing is written to the schema storage or the
+        destination.
+
+        Args:
+            data (Any): The same data accepted by `run`.
+            table_name (str, optional): Overrides the table name for all resources.
+            parent_table_name (str, optional): Sets the parent table for all resources.
+            write_disposition (TWriteDispositionConfig, optional): Overrides the write disposition.
+            columns (TAnySchemaColumns, optional): Overrides columns.
+            primary_key (TColumnNames, optional): Overrides the primary key.
+            schema (Schema, optional): Starts the plan from this schema.
+            schema_contract (TSchemaContract, optional): Overrides the contract for all sources.
+
+        Returns:
+            PreflightResult: Per-record outcomes, resolved contracts and their source level.
+        """
+        from dlt.pipeline.preflight import preflight
+
+        return preflight(
+            self,
+            data,
+            table_name=table_name,
+            parent_table_name=parent_table_name,
+            write_disposition=write_disposition,
+            columns=columns,
+            primary_key=primary_key,
+            schema_contract=schema_contract,
+            schema=schema,
+        )
+
     @with_schemas_sync
     def sync_schema(self, schema_name: str = None, force: bool = False) -> TSchemaTables:
         """Synchronizes the schema `schema_name` with the destination. If no name is provided, the default schema will be synchronized.
