@@ -1,13 +1,16 @@
 import json
 import math
 import unittest
+import datetime
 import pandas as pd
 from io import BytesIO
 from packaging import version
 
 import pytest
+from httpretty import httpretty
 from urllib3 import HTTPResponse
 
+from influxdb_client import InfluxDBClient
 from influxdb_client.client.flux_csv_parser import FluxCsvParser, FluxSerializationMode, FluxQueryException, \
     FluxResponseMetadataMode
 from influxdb_client.client.flux_table import FluxStructureEncoder, TableList
@@ -575,3 +578,135 @@ class FluxCsvParserTest(unittest.TestCase):
         return FluxCsvParser(response=HTTPResponse(fp, preload_content=False),
                              serialization_mode=serialization_mode, response_metadata_mode=response_metadata_mode,
                              use_extension_dtypes=use_extension_dtypes)
+
+
+class FluxCsvQueryOfflineRegressionTest(unittest.TestCase):
+    """Offline regression for defaults, column layout and group state defined by annotation blocks."""
+
+    QUERY = 'from(bucket: "ops") |> range(start: 2026-11-19T07:00:00Z, stop: 2026-11-19T10:00:00Z)'
+
+    RESPONSE = (
+        "#default,_result,,,,open,5,,,\n"
+        "#datatype,string,long,dateTime:RFC3339,string,string,long,string,string,double\n"
+        "#group,false,false,false,true,false,false,true,true,false\n"
+        ",result,table,_time,site,status,quota,_field,_measurement,_value\n"
+        ",,1,2026-11-19T08:00:00Z,North,,,orders,orders_total,10\n"
+        ",,1,2026-11-19T08:02:00Z,North,,,orders,orders_total,12\n"
+        ",,2,2026-11-19T08:05:00Z,South,closed,0,orders,orders_total,0\n"
+        ",,2,2026-11-19T08:07:00Z,South,,,orders,orders_total,3\n"
+        "\n"
+        "#default,_result,,,,,queued,,,\n"
+        "#datatype,string,long,dateTime:RFC3339,string,string,string,string,string,double\n"
+        "#group,false,false,false,false,false,false,true,true,false\n"
+        ",result,table,_time,site,quota,status,_field,_measurement,_value\n"
+        ",,2,2026-11-19T09:00:00Z,West,0,,orders,orders_total,0\n"
+        ",,2,2026-11-19T09:05:00Z,West,,,orders,orders_total,1\n"
+        ",,2,2026-11-19T09:10:00Z,West,12,held,orders,orders_total,2\n"
+    )
+
+    BUSINESS_COLUMNS = ('table', '_time', 'site', 'status', 'quota', '_field', '_measurement', '_value')
+
+    def setUp(self) -> None:
+        httpretty.enable()
+        httpretty.reset()
+        httpretty.register_uri(httpretty.POST, uri="http://localhost/api/v2/query", status=200,
+                               body=self.RESPONSE)
+        self.client = InfluxDBClient("http://localhost", "my-token", org="my-org", enable_gzip=False)
+        self.query_api = self.client.query_api()
+
+    def tearDown(self) -> None:
+        self.client.close()
+        httpretty.disable()
+
+    def test_tables_keep_block_defaults_and_treat_reused_table_id_as_new_table(self):
+        tables = self.query_api.query(self.QUERY)
+
+        self.assertEqual(3, len(tables))
+        self.assertEqual([2, 2, 3], [len(table.records) for table in tables])
+        self.assertEqual([[1, 1], [2, 2], [2, 2, 2]],
+                         [[record['table'] for record in table.records] for table in tables])
+
+        expected = [
+            [
+                (1, self._utc(8, 0), 'North', 'open', 5, 'orders', 'orders_total', 10.0),
+                (1, self._utc(8, 2), 'North', 'open', 5, 'orders', 'orders_total', 12.0),
+            ],
+            [
+                (2, self._utc(8, 5), 'South', 'closed', 0, 'orders', 'orders_total', 0.0),
+                (2, self._utc(8, 7), 'South', 'open', 5, 'orders', 'orders_total', 3.0),
+            ],
+            [
+                (2, self._utc(9, 0), 'West', 'queued', '0', 'orders', 'orders_total', 0.0),
+                (2, self._utc(9, 5), 'West', 'queued', None, 'orders', 'orders_total', 1.0),
+                (2, self._utc(9, 10), 'West', 'held', '12', 'orders', 'orders_total', 2.0),
+            ],
+        ]
+        self.assertEqual(expected,
+                         [[self._business_record(record) for record in table.records] for table in tables])
+
+        first_columns = self._column_definitions(tables[0])
+        second_columns = self._column_definitions(tables[1])
+        third_columns = self._column_definitions(tables[2])
+
+        self.assertEqual(first_columns, second_columns)
+        self.assertEqual(('string', False, 'open'), first_columns['status'])
+        self.assertEqual(('long', False, '5'), first_columns['quota'])
+        self.assertEqual(('string', True, ''), first_columns['site'])
+
+        self.assertEqual(['result', 'table', '_time', 'site', 'quota', 'status',
+                          '_field', '_measurement', '_value'],
+                         [column.label for column in tables[2].columns])
+        self.assertEqual(('string', False, ''), third_columns['quota'])
+        self.assertEqual(('string', False, 'queued'), third_columns['status'])
+        self.assertEqual(('string', False, ''), third_columns['site'])
+
+        self.assertEqual(['site', '_field', '_measurement'],
+                         [column.label for column in tables[0].get_group_key()])
+        self.assertEqual(['site', '_field', '_measurement'],
+                         [column.label for column in tables[1].get_group_key()])
+        self.assertEqual(['_field', '_measurement'],
+                         [column.label for column in tables[2].get_group_key()])
+
+        self.assertIsNot(tables[1], tables[2])
+        self.assertEqual(['closed', 'open'], [record['status'] for record in tables[1].records])
+        self.assertEqual([0, 5], [record['quota'] for record in tables[1].records])
+        self.assertEqual(['queued', 'queued', 'held'], [record['status'] for record in tables[2].records])
+
+        self.assertIsInstance(tables[1].records[0]['quota'], int)
+        self.assertIsInstance(tables[2].records[0]['quota'], str)
+        self.assertEqual('0', tables[2].records[0]['quota'])
+        self.assertIsNone(tables[2].records[1]['quota'])
+
+    def test_stream_matches_tables_and_keeps_earlier_records_stable(self):
+        tables = self.query_api.query(self.QUERY)
+        expected = [self._business_record(record) for table in tables for record in table.records]
+
+        stream = self.query_api.query_stream(self.QUERY)
+        early_records = [next(stream) for _ in range(4)]
+        early_snapshot = [self._business_record(record) for record in early_records]
+        self.assertEqual(['open', 'open', 'closed', 'open'], [record['status'] for record in early_records])
+        self.assertEqual([5, 5, 0, 5], [record['quota'] for record in early_records])
+
+        remaining_records = list(stream)
+        self.assertEqual(3, len(remaining_records))
+        self.assertEqual('0', remaining_records[0]['quota'])
+        self.assertIsInstance(remaining_records[0]['quota'], str)
+        self.assertIsNone(remaining_records[1]['quota'])
+        self.assertEqual('queued', remaining_records[1]['status'])
+
+        actual = [self._business_record(record) for record in early_records + remaining_records]
+        self.assertEqual(expected, actual)
+        self.assertEqual(early_snapshot, [self._business_record(record) for record in early_records])
+
+    @classmethod
+    def _business_record(cls, record):
+        return tuple(record[column] for column in cls.BUSINESS_COLUMNS)
+
+    @staticmethod
+    def _column_definitions(table):
+        return {column.label: (column.data_type, column.group, column.default_value)
+                for column in table.columns}
+
+    @staticmethod
+    def _utc(hour, minute):
+        return datetime.datetime(2026, 11, 19, hour, minute, tzinfo=datetime.timezone.utc)
