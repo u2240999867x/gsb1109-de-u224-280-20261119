@@ -18,7 +18,7 @@ import shapely
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 
 import geopandas
-from geopandas import GeoDataFrame, read_feather, read_file, read_parquet
+from geopandas import GeoDataFrame, GeoSeries, read_feather, read_file, read_parquet
 from geopandas._compat import HAS_PYPROJ
 from geopandas.array import to_wkb
 from geopandas.io.arrow import (
@@ -559,6 +559,209 @@ def test_parquet_multiple_geom_cols(tmpdir, file_format, naturalearth_lowres):
     assert_geodataframe_equal(df, pq_df)
 
     assert_geoseries_equal(df.geom2, pq_df.geom2, check_geom_type=True)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the multi-geometry hand-off path: reproject ->
+# concat -> GeoParquet write/read-back. The caller layout uses two
+# same-named geometry columns across batches: the active "sample_point"
+# column (sampling points) and the "approach_path" column (approach paths),
+# plus a "route_id" business identifier. All coordinates are non-zero and
+# asymmetric, and expected metric coordinates are hard-coded literals (not
+# recomputed through geopandas/pyproj), so that a transform of the wrong
+# column, a CRS relabel without transform, or an axis-order swap cannot
+# go unnoticed.
+# ---------------------------------------------------------------------------
+
+MULTI_GEOM_METRIC_CRS = "EPSG:3857"
+
+# lon/lat endpoints of the batch-1 approach paths (EPSG:4326)
+MULTI_GEOM_PATH_LONLAT = [(8.0, 50.0), (9.5, 51.5)]
+# EPSG:3857 equivalents of MULTI_GEOM_PATH_LONLAT, hard-coded on purpose
+MULTI_GEOM_PATH_METRIC = [
+    (890555.9263461885, 6446275.841017159),
+    (1057535.162536099, 6710219.083220741),
+]
+# expected (point, path) coordinates per business id after the hand-off;
+# a None path marks the batch that does not deliver the path column
+MULTI_GEOM_EXPECTED = {
+    "R-101": ((123456.0, 2345678.0), MULTI_GEOM_PATH_METRIC),
+    "R-102": ((234567.0, 3456789.0), MULTI_GEOM_PATH_METRIC[::-1]),
+    "R-201": ((456789.0, 5678901.0), [(500000.0, 6500000.0), (600000.0, 6600000.0)]),
+    "R-202": ((567890.0, 6789012.0), [(600000.0, 6600000.0), (500000.0, 6500000.0)]),
+    "R-301": ((654321.0, 1987654.0), None),
+}
+
+
+def _multi_geom_sample_batches():
+    """Three caller batches sharing the same two-geometry-column layout.
+
+    Every batch delivers the active "sample_point" column in the same metric
+    CRS. Batch 1 ships its "approach_path" column as lon/lat, batch 2 already
+    in the metric target CRS, and batch 3 has points but no path column.
+    """
+
+    def points_series(route_ids):
+        return GeoSeries(
+            [Point(*MULTI_GEOM_EXPECTED[route_id][0]) for route_id in route_ids],
+            crs=MULTI_GEOM_METRIC_CRS,
+        )
+
+    batch1 = GeoDataFrame(
+        {
+            "route_id": ["R-101", "R-102"],
+            "sample_point": points_series(["R-101", "R-102"]),
+            "approach_path": GeoSeries(
+                [
+                    LineString(MULTI_GEOM_PATH_LONLAT),
+                    LineString(MULTI_GEOM_PATH_LONLAT[::-1]),
+                ],
+                crs="EPSG:4326",
+            ),
+        },
+        geometry="sample_point",
+    )
+    batch2 = GeoDataFrame(
+        {
+            "route_id": ["R-201", "R-202"],
+            "sample_point": points_series(["R-201", "R-202"]),
+            "approach_path": GeoSeries(
+                [
+                    LineString(MULTI_GEOM_EXPECTED["R-201"][1]),
+                    LineString(MULTI_GEOM_EXPECTED["R-202"][1]),
+                ],
+                crs=MULTI_GEOM_METRIC_CRS,
+            ),
+        },
+        geometry="sample_point",
+    )
+    batch3 = GeoDataFrame(
+        {
+            "route_id": ["R-301"],
+            "sample_point": points_series(["R-301"]),
+        },
+        geometry="sample_point",
+    )
+    return batch1, batch2, batch3
+
+
+def _assert_multi_geom_handoff(gdf):
+    """Check both geometry columns of the merged hand-off, row by route_id."""
+    assert gdf["sample_point"].crs.to_epsg() == 3857
+    assert gdf["approach_path"].crs.to_epsg() == 3857
+    rows = gdf.set_index("route_id")
+    assert sorted(rows.index) == sorted(MULTI_GEOM_EXPECTED)
+    for route_id, (point_xy, path_xy) in MULTI_GEOM_EXPECTED.items():
+        point = rows.loc[route_id, "sample_point"]
+        assert (point.x, point.y) == point_xy
+        path = rows.loc[route_id, "approach_path"]
+        if path_xy is None:
+            assert path is None
+        else:
+            assert list(path.coords) == path_xy
+
+
+def test_concat_same_named_path_column_crs_mismatch():
+    """Concat must reject batches whose same-named non-active geometry
+    columns carry different CRSs, even when the active columns match, and
+    must leave the input objects' coordinate columns untouched.
+    """
+    batch1, batch2, _ = _multi_geom_sample_batches()
+    batch1_before = batch1.copy()
+    batch2_before = batch2.copy()
+
+    # the active point columns are compatible: concat of only those succeeds
+    points_only = pd.concat(
+        [
+            batch1[["route_id", "sample_point"]],
+            batch2[["route_id", "sample_point"]],
+        ]
+    )
+    assert len(points_only) == 4
+
+    # ... so the rejection below is caused by the same-named approach-path
+    # columns disagreeing (EPSG:4326 vs EPSG:3857)
+    with pytest.raises(ValueError, match="Cannot determine common CRS"):
+        pd.concat([batch1, batch2])
+
+    # the rejected concat must not mutate either input's geometry columns
+    assert_geodataframe_equal(batch1, batch1_before)
+    assert_geodataframe_equal(batch2, batch2_before)
+
+
+def test_set_geometry_switch_and_to_crs_multi_geom():
+    """Switching the active geometry column must not rewrite coordinates,
+    and to_crs must transform only the active column.
+    """
+    batch1, _, _ = _multi_geom_sample_batches()
+    points_before = batch1["sample_point"].copy()
+    paths_before = batch1["approach_path"].copy()
+
+    # switching the active column to the path column changes no coordinates
+    switched = batch1.set_geometry("approach_path")
+    assert switched.geometry.name == "approach_path"
+    assert switched["approach_path"].crs.to_epsg() == 4326
+    assert_geoseries_equal(switched["sample_point"], points_before)
+    assert_geoseries_equal(switched["approach_path"], paths_before)
+
+    # projecting transforms only the active path column, to the hard-coded
+    # metric targets (a CRS relabel or axis swap would fail this comparison)
+    projected = switched.to_crs(MULTI_GEOM_METRIC_CRS)
+    assert projected["approach_path"].crs.to_epsg() == 3857
+    for route_id, path in zip(projected["route_id"], projected["approach_path"]):
+        assert list(path.coords) == MULTI_GEOM_EXPECTED[route_id][1]
+    # the inactive point column keeps its original metric coordinates
+    assert_geoseries_equal(projected["sample_point"], points_before)
+
+    # switching back to the point column again rewrites nothing
+    restored = projected.set_geometry("sample_point")
+    assert restored.geometry.name == "sample_point"
+    assert_geoseries_equal(restored["sample_point"], points_before)
+    assert_geoseries_equal(restored["approach_path"], projected["approach_path"])
+
+
+def test_multi_geom_project_concat_parquet_roundtrip(tmpdir):
+    """Full hand-off: repair the lon/lat batch, concat all batches (including
+    one without the path column), write GeoParquet, and read back both the
+    full frame and a projection of path column plus business id.
+    """
+    batch1, batch2, batch3 = _multi_geom_sample_batches()
+
+    # repair batch 1: activate the path column, project it to the shared
+    # metric CRS, then switch back to the sampling points
+    batch1 = (
+        batch1.set_geometry("approach_path")
+        .to_crs(MULTI_GEOM_METRIC_CRS)
+        .set_geometry("sample_point")
+    )
+
+    merged = pd.concat([batch1, batch2, batch3], ignore_index=True)
+    assert merged.geometry.name == "sample_point"
+    # the batch without a path column keeps its row, with an empty path
+    assert merged["approach_path"].isna().tolist() == [False] * 4 + [True]
+    _assert_multi_geom_handoff(merged)
+
+    filename = os.path.join(str(tmpdir), "multi_geom.pq")
+    merged.to_parquet(filename)
+
+    # full read-back: both geometry columns keep their own CRS and coordinates
+    full = read_parquet(filename)
+    assert full.geometry.name == "sample_point"
+    _assert_multi_geom_handoff(full)
+
+    # projection read-back: the path column becomes the active geometry and
+    # still keeps its own coordinates and CRS
+    subset = read_parquet(filename, columns=["route_id", "approach_path"])
+    assert subset.geometry.name == "approach_path"
+    assert "sample_point" not in subset.columns
+    assert subset["approach_path"].crs.to_epsg() == 3857
+    rows = subset.set_index("route_id")
+    for route_id, (_, path_xy) in MULTI_GEOM_EXPECTED.items():
+        path = rows.loc[route_id, "approach_path"]
+        if path_xy is None:
+            assert path is None
+        else:
+            assert list(path.coords) == path_xy
 
 
 def test_parquet_missing_metadata(tmpdir, naturalearth_lowres):
