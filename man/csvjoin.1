@@ -43,7 +43,8 @@ usage: csvjoin [\-h] [\-d DELIMITER] [\-t] [\-q QUOTECHAR] [\-u {0,1,2,3}] [\-b]
                [\-S] [\-\-blanks] [\-\-null\-value NULL_VALUES [NULL_VALUES ...]]
                [\-\-date\-format DATE_FORMAT] [\-\-datetime\-format DATETIME_FORMAT]
                [\-H] [\-K SKIP_LINES] [\-v] [\-l] [\-\-zero] [\-V] [\-c COLUMNS]
-               [\-\-outer] [\-\-left] [\-\-right] [\-y SNIFF_LIMIT] [\-I]
+               [\-\-outer] [\-\-left] [\-\-right] [\-\-map\-file FILE]
+               [\-\-map\-region REGION] [\-y SNIFF_LIMIT] [\-I]
                [FILE [FILE ...]]
 
 Execute a SQL\-like join to merge CSV files on a specified column or columns.
@@ -58,8 +59,12 @@ optional arguments:
                         The column name(s) on which to join. Should be either
                         one name (or index) or a comma\-separated list with one
                         name (or index) per file, in the same order in which
-                        the files were specified. If not specified, the two
-                        files will be joined sequentially without matching.
+                        the files were specified. To join on a composite key,
+                        separate the per\-file column lists with semicolons and
+                        the columns within each list with commas, for example
+                        "region_a,store_a;region_b,store_b". If not specified,
+                        the two files will be joined sequentially without
+                        matching.
   \-\-outer               Perform a full outer join, rather than the default
                         inner join.
   \-\-left                Perform a left outer join, rather than the default
@@ -70,6 +75,16 @@ optional arguments:
                         inner join. If more than two files are provided this
                         will be executed as a sequence of right outer joins,
                         starting at the right.
+  \-\-map\-file FILE       A CSV file mapping old numbers to current numbers for
+                        the store\-number component (the last column) of the
+                        join key. Must have "old_number" and "new_number"
+                        columns and may have a "region" column. Only listed
+                        numbers are mapped. Repeat once per input file, in
+                        input order, or use the "N:path" form to target input
+                        file N (1\-based).
+  \-\-map\-region REGION   Scope a mapping file without a "region" column to one
+                        region. Repeat in the same order as \-\-map\-file, or give
+                        a single value that applies to every mapping file.
   \-y SNIFF_LIMIT, \-\-snifflimit SNIFF_LIMIT
                         Limit CSV dialect sniffing to the specified number of
                         bytes. Specify \(dq0\(dq to disable sniffing entirely, or
@@ -97,6 +112,23 @@ csvjoin \-c 1 examples/join_a.csv examples/join_b.csv
 .fi
 .UNINDENT
 .UNINDENT
+.sp
+Full outer join of three store files on a composite (region, store number) key, renumbering the catalog\(aqs old store numbers for the match only. Original columns are written unchanged:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.nf
+.ft C
+csvjoin \-I \-\-outer \-c "region,store_no;area,shop_code;zone,outlet_id" \e
+    \-\-map\-file 2:examples/stores/catalog_mapping.csv \e
+    examples/stores/transactions.csv examples/stores/catalog.csv \e
+    examples/stores/deliveries.csv
+.ft P
+.fi
+.UNINDENT
+.UNINDENT
+.sp
+With a composite key every file is joined simultaneously. Rows with a blank key component never match another row and remain attributed to their own source. A mapping that collapses two source rows of one input onto the same composite key aborts the batch before any output is written.
 .sp
 Add two empty columns to the right of a CSV:
 .INDENT 0.0

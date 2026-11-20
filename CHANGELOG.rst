@@ -1,6 +1,8 @@
 Unreleased
 ----------
 
+-  feat: :doc:`/scripts/csvjoin` supports composite join keys with semicolon-separated per-file column lists (e.g. :code:`-c "region_a,store_a;region_b,store_b"`), joining all files simultaneously so rows with a blank key component stay attributed to their own source in outer joins.
+-  feat: :doc:`/scripts/csvjoin` adds :code:`--map-file` and :code:`--map-region` options to remap the store-number component of a join key via an explicit old-to-new number mapping. Mapping only affects key matching; original columns are written to the output unchanged, and a mapping that collapses two source rows of one input onto the same key aborts the batch before any output is written.
 -  fix: :doc:`/scripts/csvgrep` treats an empty :code:`--regex` or :code:`--match` pattern as matching every value. Previously, with an empty pattern, :code:`--any-match` matched no rows, and :code:`--any-match --invert-match` matched every row.
 -  feat: :doc:`/scripts/csvcut` adds an :code:`--ignore-unknown-columns` option to skip identifiers in :code:`-c/--columns` that do not match a column in the input.
 -  feat: :doc:`/scripts/csvclean` adds a :code:`--remove-empty-columns` option to remove empty columns from standard output.

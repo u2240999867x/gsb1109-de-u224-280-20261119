@@ -1,0 +1,7 @@
+area,shop_code,sku,category
+华东,001,SKU-A,food
+华南,003,SKU-B,drink
+华南,007,SKU-C,snack
+华东,005,SKU-F,bakery
+华北,010,SKU-D,dairy
+华东,,SKU-E,misc

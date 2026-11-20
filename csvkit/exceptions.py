@@ -41,3 +41,11 @@ class RequiredHeaderError(CustomException):
     Exception raised when an operation requires a CSV file to have a header row.
     """
     pass
+
+
+class JoinKeyConflictError(CustomException):
+    """
+    Exception raised when multiple source rows of one input file resolve to the
+    same join key after an explicit old-to-new number mapping is applied.
+    """
+    pass
