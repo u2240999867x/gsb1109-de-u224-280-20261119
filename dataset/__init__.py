@@ -3,7 +3,19 @@ import warnings
 from typing import Any
 
 from dataset.database import Database
-from dataset.table import Table
+from dataset.filters import (
+    ColumnFilter,
+    Condition,
+    Filter,
+    FilterCounts,
+    FilterGroup,
+    FilterResult,
+    all_of,
+    any_of,
+    column,
+    not_,
+)
+from dataset.table import FilteredTable, Table
 from dataset.util import DatasetError, OutRow, QueryError, RowFactory, row_factory
 
 # shut up useless SA warning:
@@ -15,11 +27,22 @@ warnings.filterwarnings(
 __all__ = [
     "Database",
     "DatasetError",
+    "Filter",
+    "FilterCounts",
+    "FilterResult",
+    "FilteredTable",
+    "ColumnFilter",
+    "Condition",
+    "FilterGroup",
     "OutRow",
     "QueryError",
     "RowFactory",
     "Table",
+    "all_of",
+    "any_of",
+    "column",
     "connect",
+    "not_",
 ]
 __version__ = "2.0.0"
 

@@ -1,10 +1,10 @@
 import logging
 import threading
 import warnings
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlalchemy import false, func, select
+from sqlalchemy import false, func, select, true
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.schema import Column, Index
 from sqlalchemy.schema import Table as SQLATable
@@ -16,6 +16,7 @@ from sqlalchemy.sql.expression import (
     bindparam,
 )
 
+from dataset.filters import Filter, FilterResult, PendingFilter, new_result
 from dataset.types import MYSQL_LENGTH_TYPES, ColumnType, Types
 from dataset.util import (
     QUERY_STEP,
@@ -189,7 +190,7 @@ class Table:
         if self._check_ensure(ensure):
             self.create_index(keys)
         args, _ = self._keys_to_args(row, keys)
-        if self.count(**args) == 0:
+        if self.count(**args) == 0:  # type: ignore[arg-type]
             return self.insert(row, ensure=False)
         return False
 
@@ -715,14 +716,138 @@ class Table:
                 idx.create(self.db.executable)
                 self.db._auto_commit()
 
+    def _query_filter(
+        self,
+        clauses: Iterable[ClauseElement | Filter],
+        filters: Iterable[Filter | Mapping[str, Any]] = (),
+        args: Mapping[str, Any] | None = None,
+    ) -> Filter:
+        """Combine reusable filters with the legacy keyword syntax."""
+        parts: list[Filter] = []
+        for clause in clauses:
+            parts.append(clause if isinstance(clause, Filter) else Filter.raw(clause))
+        for item in filters:
+            parts.append(Filter.from_spec(item))
+        if args:
+            parts.append(Filter.from_spec(dict(args)))
+        return Filter.all(*parts)
+
+    def _split_reserved(
+        self, values: Mapping[str, Any], names: tuple[str, ...]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Separate reserved keyword aliases from real column filters.
+
+        Older tables may legitimately have columns named ``filter``,
+        ``where`` or ``condition``.  A value that is not itself a Filter or
+        mapping is treated as that column filter when the column exists.
+        """
+        reserved: dict[str, Any] = {}
+        columns: dict[str, Any] = {}
+        for name in names:
+            value = values.get(name)
+            if value is None:
+                continue
+            if isinstance(value, (Filter, Mapping)):
+                reserved[name] = value
+            elif self.has_column(name):
+                columns[name] = value
+            else:
+                reserved[name] = value
+        return reserved, columns
+
+    def _filtered_count(self, filter_: Filter, mode: str) -> int:
+        """Run a SQL ``COUNT(*)`` for a filter without retrieving rows."""
+        if not self.exists:
+            return 0
+        if mode == "pending":
+            clause = filter_.pending_clause(self)
+        elif mode == "excluded":
+            clause = filter_.excluded_clause(self)
+        elif mode == "total":
+            clause = true()
+        else:
+            clause = filter_.match_clause(self)
+        query = select(func.count()).where(clause)
+        query = query.select_from(self.table)
+        rp = self.db.executable.execute(query)
+        res = rp.fetchone()
+        return int(res[0]) if res is not None else 0
+
+    def _filter_result(
+        self,
+        filter_: Filter,
+        *,
+        limit: int | None,
+        offset: int,
+        order_by: str | Sequence[str] | None,
+        streamed: bool,
+        step: int | None,
+        page: int | None = None,
+        page_size: int | None = None,
+    ) -> FilterResult:
+        """Execute a filtered query and attach lazy count callbacks."""
+        if not self.exists:
+            return new_result(
+                None,
+                counts=None,
+                row_type=self.db.row_type,
+                page=page,
+                page_size=page_size,
+                offset=offset,
+            )
+        if self.db.engine is None:
+            raise RuntimeError("Cannot run queries when no engine is available.")
+
+        orderings = self._args_to_order_by(order_by)
+        query = (
+            self.table.select()
+            .where(filter_.match_clause(self))
+            .limit(limit)
+            .offset(offset)
+        )
+        if len(orderings):
+            query = query.order_by(*orderings)
+
+        stream_conn = None
+        conn = self.db.executable
+        if streamed:
+            stream_conn = self.db.engine.connect()
+            conn = stream_conn.execution_options(stream_results=True)
+
+        count_filter = (
+            filter_.filter_ if isinstance(filter_, PendingFilter) else filter_
+        )
+        return new_result(
+            conn.execute(query),
+            counts=lambda mode: self._filtered_count(count_filter, mode),
+            row_type=self.db.row_type,
+            step=step,
+            connection=stream_conn,
+            page=page,
+            page_size=page_size,
+            offset=offset,
+        )
+
     def find(
         self,
-        *_clauses: ColumnElement[bool],
+        *_clauses: ColumnElement[bool] | Filter | Mapping[str, Any],
         _limit: int | None = None,
         _offset: int = 0,
         order_by: str | Sequence[str] | None = None,
         _streamed: bool = False,
         _step: int | None = QUERY_STEP,
+        _filter: Filter | Mapping[str, Any] | None = None,
+        filter: Filter | Mapping[str, Any] | None = None,
+        where: Filter | Mapping[str, Any] | None = None,
+        condition: Filter | Mapping[str, Any] | None = None,
+        _page: int | None = None,
+        _page_size: int | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        pending: bool | None = None,
+        _pending: bool = False,
         **kwargs: SQLWriteValue,
     ) -> ResultIter:
         """Perform a simple search on the table.
@@ -749,35 +874,159 @@ class Table:
         You can also submit filters based on criteria other than equality,
         see :ref:`advanced_filters` for details.
 
+        Reusable :class:`dataset.Filter` conditions can be supplied via
+        ``_filter`` (or as a positional argument).  Such results also expose
+        lazily computed ``matched_count`` and ``pending_count`` values for the
+        exact same condition, so paging never changes the reported totals::
+
+            condition = Filter.all(...)
+            page = table.find(_filter=condition, _page=2, _page_size=50)
+            page.matched_count
+            page.pending_count
+
         To run more complex queries with JOINs, or to perform GROUP BY-style
         aggregation, you can also use :py:meth:`db.query() <dataset.Database.query>`
         to run raw SQL queries instead.
         """
-        if not self.exists:
-            return ResultIter(None, row_type=self.db.row_type)
-        if self.db.engine is None:
-            raise RuntimeError("Cannot run queries when no engine is available.")
+        positional: list[Any] = list(_clauses)
+        filters: list[Filter | Mapping[str, Any]] = []
+        for item in positional:
+            if isinstance(item, (Filter, Mapping)):
+                filters.append(item)
+        positional = [
+            item for item in positional if not isinstance(item, (Filter, Mapping))
+        ]
+        if _filter is not None:
+            filters.append(_filter)
+        aliases: dict[str, Any] = {
+            "filter": filter,
+            "where": where,
+            "condition": condition,
+            "pending": pending,
+            "limit": limit,
+            "offset": offset,
+            "page": page,
+            "page_size": page_size,
+        }
+        aliases = {name: value for name, value in aliases.items() if value is not None}
+        reserved, column_args = self._split_reserved(
+            aliases,
+            (
+                "filter",
+                "where",
+                "condition",
+                "pending",
+                "limit",
+                "offset",
+                "page",
+                "page_size",
+            ),
+        )
+        filter_aware = bool(filters)
+        for name in ("pending", "limit", "offset", "page", "page_size"):
+            value = reserved.get(name)
+            if value is None or isinstance(value, (Filter, Mapping)):
+                continue
+            take_as_column = not (
+                filter_aware and name in ("page", "page_size")
+            )
+            if self.has_column(name) and take_as_column:
+                column_args[name] = value
+                del reserved[name]
+        pending = reserved.pop("pending", pending)
+        limit = reserved.pop("limit", limit)
+        offset = reserved.pop("offset", offset)
+        page = reserved.pop("page", page)
+        page_size = reserved.pop("page_size", page_size)
+        filters.extend(reserved.values())
+        if column_args:
+            kwargs = {**column_args, **kwargs}
+
+        if _page_size is not None:
+            if _page_size <= 0:
+                raise QueryError("_page_size must be positive")
+            _page = 1 if _page is None else _page
+            if _page <= 0:
+                raise QueryError("_page must be positive")
+            _offset = (_page - 1) * _page_size
+            _limit = _page_size
+        elif page_size is not None:
+            if page_size <= 0:
+                raise QueryError("page_size must be positive")
+            page = 1 if page is None else page
+            if page <= 0:
+                raise QueryError("page must be positive")
+            _offset = (page - 1) * page_size
+            _limit = page_size
+            _page = page
+            _page_size = page_size
+        if _page_size is None:
+            _page = None
+        if limit is not None:
+            _limit = limit
+        if offset is not None:
+            _offset = offset
 
         if _step is False or _step == 0:
             _step = None
 
-        orderings = self._args_to_order_by(order_by)
-        args = self._args_to_clause(kwargs, clauses=_clauses)
-        query = self.table.select().where(args).limit(_limit).offset(_offset)
-        if len(orderings):
-            query = query.order_by(*orderings)
-
-        stream_conn = None
-        conn = self.db.executable
-        if _streamed:
-            stream_conn = self.db.engine.connect()
-            conn = stream_conn.execution_options(stream_results=True)
-
-        return ResultIter(
-            conn.execute(query),
-            row_type=self.db.row_type,
+        combined = self._query_filter(positional, filters, kwargs)
+        if pending is True or _pending:
+            combined = PendingFilter(combined)
+        return self._filter_result(
+            combined,
+            limit=_limit,
+            offset=_offset,
+            order_by=order_by,
+            streamed=_streamed,
             step=_step,
-            connection=stream_conn,
+            page=_page,
+            page_size=_page_size,
+        )
+
+    def find_page(
+        self,
+        page: int = 1,
+        page_size: int = 50,
+        *,
+        _filter: Filter | Mapping[str, Any] | None = None,
+        filter: Filter | Mapping[str, Any] | None = None,
+        order_by: str | Sequence[str] | None = None,
+        **kwargs: SQLWriteValue,
+    ) -> FilterResult:
+        """Return one page of results plus the totals for the same filter."""
+        result = self.find(
+            _filter=_filter,
+            filter=filter,
+            _page=page,
+            _page_size=page_size,
+            order_by=order_by,
+            **kwargs,  # type: ignore[arg-type]
+        )
+        assert isinstance(result, FilterResult)
+        return result
+
+    def find_pending(
+        self,
+        *condition: Filter | Mapping[str, Any],
+        _filter: Filter | Mapping[str, Any] | None = None,
+        filter: Filter | Mapping[str, Any] | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        order_by: str | Sequence[str] | None = None,
+        **kwargs: SQLWriteValue,
+    ) -> ResultIter:
+        """Return only the rows whose condition could not be decided.
+
+        These are the same rows included in ``count(_pending=True)`` for the
+        same condition, with SQL-side paging.
+        """
+        chosen: Any = _filter if _filter is not None else filter
+        if chosen is None and condition:
+            chosen = condition[0] if len(condition) == 1 else Filter.all(*condition)
+        combined = self.filter(chosen or {}, **kwargs)
+        return combined.find_pending(
+            page=page, page_size=page_size, order_by=order_by
         )
 
     def find_one(
@@ -802,22 +1051,173 @@ class Table:
             resiter.close()
         return None
 
-    def count(self, *_clauses: ColumnElement[bool], **kwargs: SQLWriteValue) -> int:
-        """Return the count of results for the given filter set."""
+    def count(
+        self,
+        *_clauses: ColumnElement[bool] | Filter | Mapping[str, Any],
+        _filter: Filter | Mapping[str, Any] | None = None,
+        filter: Filter | Mapping[str, Any] | None = None,
+        where: Filter | Mapping[str, Any] | None = None,
+        condition: Filter | Mapping[str, Any] | None = None,
+        _pending: bool = False,
+        pending: bool | None = None,
+        **kwargs: SQLWriteValue,
+    ) -> int:
+        """Return the count of results for the given filter set.
+
+        With a :class:`dataset.Filter` condition, the default count is the
+        number of definite matches.  Pass ``_pending=True`` for the number of
+        rows whose condition cannot be decided because referenced evidence
+        is absent.  Both counts run as SQL aggregates; no rows are fetched.
+        """
         # NOTE: this does not have support for limit and offset since I can't
         # see how this is useful. Still, there might be compatibility issues
         # with people using these flags. Let's see how it goes.
         if not self.exists:
             return 0
 
-        args = self._args_to_clause(kwargs, clauses=_clauses)
-        query = select(func.count()).where(args)
-        query = query.select_from(self.table)
-        rp = self.db.executable.execute(query)
-        res = rp.fetchone()
-        if res is not None:
-            return int(res[0])
-        return 0
+        filters: list[Filter | Mapping[str, Any]] = []
+        positional: list[Any] = list(_clauses)
+        for item in positional:
+            if isinstance(item, (Filter, Mapping)):
+                filters.append(item)
+        positional = [
+            item for item in positional if not isinstance(item, (Filter, Mapping))
+        ]
+        if _filter is not None:
+            filters.append(_filter)
+        aliases: dict[str, Any] = {
+            "filter": filter,
+            "where": where,
+            "condition": condition,
+            "pending": pending,
+        }
+        aliases = {name: value for name, value in aliases.items() if value is not None}
+        reserved, column_args = self._split_reserved(
+            aliases,
+            (
+                "filter",
+                "where",
+                "condition",
+                "pending",
+                "limit",
+                "offset",
+                "page",
+                "page_size",
+            ),
+        )
+        if "pending" in reserved:
+            value = reserved.pop("pending")
+            if isinstance(value, bool):
+                pending = value
+            elif self.has_column("pending") and not filters:
+                column_args["pending"] = value
+            else:
+                pending = value
+        filters.extend(reserved.values())
+        if column_args:
+            kwargs = {**column_args, **kwargs}
+
+        combined = self._query_filter(positional, filters, kwargs)
+        return self._filtered_count(
+            combined, "pending" if (_pending or pending is True) else "matched"
+        )
+
+    def count_matches(
+        self,
+        *clauses: ColumnElement[bool] | Filter,
+        _filter: Filter | Mapping[str, Any] | None = None,
+        filter: Filter | Mapping[str, Any] | None = None,
+        **kwargs: SQLWriteValue,
+    ) -> int:
+        """Count definite matches for a filter."""
+        return self.count(
+            *clauses, _filter=_filter, filter=filter, **kwargs  # type: ignore[arg-type]
+        )
+
+    def count_pending(
+        self,
+        *clauses: ColumnElement[bool] | Filter,
+        _filter: Filter | Mapping[str, Any] | None = None,
+        filter: Filter | Mapping[str, Any] | None = None,
+        **kwargs: SQLWriteValue,
+    ) -> int:
+        """Count undecidable rows for a filter."""
+        return self.count(
+            *clauses,
+            _filter=_filter,
+            filter=filter,
+            _pending=True,
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def count_excluded(
+        self,
+        *clauses: ColumnElement[bool] | Filter,
+        _filter: Filter | Mapping[str, Any] | None = None,
+        filter: Filter | Mapping[str, Any] | None = None,
+        **kwargs: SQLWriteValue,
+    ) -> int:
+        """Count rows the condition definitively rejects."""
+        fallback = _filter if _filter is not None else filter
+        combined = self._query_filter(clauses, [fallback or Filter.all()], kwargs)
+        return self._filtered_count(combined, "excluded")
+
+    def counts(
+        self,
+        *clauses: ColumnElement[bool] | Filter,
+        _filter: Filter | Mapping[str, Any] | None = None,
+        filter: Filter | Mapping[str, Any] | None = None,
+        where: Filter | Mapping[str, Any] | None = None,
+        condition: Filter | Mapping[str, Any] | None = None,
+        **kwargs: SQLWriteValue,
+    ) -> dict[str, int]:
+        """Return matched, pending, excluded and total counts for a condition."""
+        filters: list[Filter | Mapping[str, Any]] = []
+        positional = list(clauses)
+        for item in positional:
+            if isinstance(item, Filter):
+                filters.append(item)
+        positional = [item for item in positional if not isinstance(item, Filter)]
+        if _filter is not None:
+            filters.append(_filter)
+        reserved, column_args = self._split_reserved(
+            {"filter": filter, "where": where, "condition": condition},
+            ("filter", "where", "condition"),
+        )
+        filters.extend(reserved.values())
+        if column_args:
+            kwargs = {**column_args, **kwargs}
+        combined = self._query_filter(positional, filters, kwargs)
+        matched = self._filtered_count(combined, "matched")
+        pending = self._filtered_count(combined, "pending")
+        total = self._filtered_count(combined, "total")
+        return {
+            "matched": matched,
+            "pending": pending,
+            "excluded": total - matched - pending,
+            "total": total,
+            "match_count": matched,
+            "pending_count": pending,
+        }
+
+    def filter(
+        self,
+        condition: Filter | Mapping[str, Any],
+        *clauses: ColumnElement[bool],
+        **kwargs: SQLWriteValue,
+    ) -> "FilteredTable":
+        """Bind a reusable condition to this table.
+
+        The returned object supports ``find``, ``count``, ``counts`` and
+        ``paginate`` with the same condition and totals::
+
+            review = table.filter(condition)
+            review.count()
+            review.count(_pending=True)
+            review.paginate(page=2, page_size=25)
+        """
+        combined = self._query_filter(clauses, [condition], kwargs)
+        return FilteredTable(self, combined)
 
     def __len__(self) -> int:
         """Return the number of rows in the table."""
@@ -885,3 +1285,115 @@ class Table:
     def __repr__(self) -> str:
         """Get table representation."""
         return f"<Table({self.table.name})>"
+
+
+class FilteredTable:
+    """A table view with a reusable filter condition bound to it."""
+
+    def __init__(self, table: Table, condition: Filter):
+        self.table = table
+        self.condition = condition
+
+    def find(
+        self,
+        *,
+        page: int | None = None,
+        page_size: int | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        order_by: str | Sequence[str] | None = None,
+        streamed: bool = False,
+        step: int | None = QUERY_STEP,
+    ) -> FilterResult:
+        """Return rows for this condition with the same two totals."""
+        if page_size is not None:
+            if page_size <= 0:
+                raise QueryError("page_size must be positive")
+            page_number = 1 if page is None else page
+            if page_number <= 0:
+                raise QueryError("page must be positive")
+            offset = (page_number - 1) * page_size
+            limit = page_size
+        result = self.table._filter_result(
+            self.condition,
+            limit=limit,
+            offset=offset,
+            order_by=order_by,
+            streamed=streamed,
+            step=None if step is False or step == 0 else step,
+            page=page,
+            page_size=page_size,
+        )
+        return result
+
+    def paginate(
+        self, page: int = 1, page_size: int = 50, **kwargs: Any
+    ) -> FilterResult:
+        """Return one page for this condition."""
+        return self.find(page=page, page_size=page_size, **kwargs)
+
+    def find_pending(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+        limit: int | None = None,
+        offset: int = 0,
+        order_by: str | Sequence[str] | None = None,
+    ) -> FilterResult:
+        """Return pending rows only, still using the shared condition."""
+        if page_size <= 0:
+            raise QueryError("page_size must be positive")
+        if page <= 0:
+            raise QueryError("page must be positive")
+        offset = (page - 1) * page_size
+        limit = page_size
+        query = (
+            self.table.table.select()
+            .where(self.condition.pending_clause(self.table))
+            .limit(limit)
+            .offset(offset)
+        )
+        orderings = self.table._args_to_order_by(order_by)
+        if orderings:
+            query = query.order_by(*orderings)
+        return new_result(
+            self.table.db.executable.execute(query),
+            counts=lambda mode: self.table._filtered_count(self.condition, mode),
+            row_type=self.table.db.row_type,
+            step=QUERY_STEP,
+            page=page,
+            page_size=page_size,
+            offset=offset,
+        )
+
+    def count(self, _pending: bool = False) -> int:
+        """Count matches, or pending rows when ``_pending`` is true."""
+        return self.table._filtered_count(
+            self.condition, "pending" if _pending else "matched"
+        )
+
+    def count_matches(self) -> int:
+        return self.count()
+
+    def count_pending(self) -> int:
+        return self.count(_pending=True)
+
+    def count_excluded(self) -> int:
+        return self.table._filtered_count(self.condition, "excluded")
+
+    def counts(self) -> dict[str, int]:
+        matched = self.count()
+        pending = self.count(_pending=True)
+        excluded = self.count_excluded()
+        return {
+            "matched": matched,
+            "pending": pending,
+            "excluded": excluded,
+            "total": matched + pending + excluded,
+            "match_count": matched,
+            "pending_count": pending,
+        }
+
+    def __iter__(self) -> ResultIter:
+        return self.find()
