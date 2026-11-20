@@ -8,6 +8,13 @@ etlhelper
     :members:
 
 
+etlhelper.abort
+^^^^^^^^^^^^^^^
+
+.. automodule:: etlhelper.abort
+    :members: AbortToken, abort_etlhelper_task, abort_etlhelper_threads
+
+
 etlhelper.row_factories
 ^^^^^^^^^^^^^^^^^^^^^^^
 

@@ -21,9 +21,10 @@ from typing import (
 )
 
 from etlhelper.abort import (
+    get_abort_token,
     raise_for_abort,
-    clear_abort_event,
 )
+from etlhelper.exceptions import ETLHelperAbort
 from etlhelper.db_helper_factory import DB_HELPER_FACTORY
 from etlhelper.exceptions import (
     ETLHelperBadIdentifierError,
@@ -50,13 +51,35 @@ class FailedRow(NamedTuple):
     exception: Exception
 
 
+def _resolve_abort_token(abort_token, abort_event=None, cancel_token=None):
+    """
+    Return the cancellation token for a task, accepting common keyword names.
+
+    ``abort_token`` is the documented argument.  ``abort_event`` and
+    ``cancel_token`` are accepted as aliases for callers that use those names.
+    """
+    aliases = [token for token in (abort_event, cancel_token)
+               if token is not None]
+    if len(aliases) > 1:
+        raise TypeError("Pass only one of abort_event or cancel_token")
+    if aliases:
+        if abort_token is not None:
+            raise TypeError(
+                "Pass abort_token or its aliases, not both")
+        return get_abort_token(aliases[0])
+    return get_abort_token(abort_token)
+
+
 def iter_chunks(
         select_query: str,
         conn: Connection,
         parameters: Parameters = (),
         row_factory: Callable = dict_row_factory,
         transform: Optional[Transform] = None,
-        chunk_size: int = CHUNKSIZE
+        chunk_size: int = CHUNKSIZE,
+        abort_token=None,
+        abort_event=None,
+        cancel_token=None
         ) -> Generator[Chunk, None, None]:
     """
     Run SQL query against connection and return iterator object to loop over
@@ -78,65 +101,94 @@ def iter_chunks(
     :param transform: function that accepts a list of rows and
                       returns an list of rows (possibly of different shape)
     :param chunk_size: size of chunks to group data by
+    :param abort_token: optional cancellation token for this task
     :return: generator returning a list of objects which each
              represent a row of data using the given row_factory
     :raises ETLHelperExtractError: if SQL raises an error
+    :raises ETLHelperAbort: if cancellation is requested for this task
     """
     logger.info("Fetching rows (chunk_size=%s)", chunk_size)
     logger.debug(f"Fetching:\n\n{select_query}\n\nwith parameters:\n\n"
                  f"{parameters}\n\nagainst:\n\n{conn}")
-    clear_abort_event()
+
+    # Create one token for the whole extraction.  Do not clear the global
+    # abort event here: doing so would revive other tasks that were stopped.
+    token = _resolve_abort_token(abort_token, abort_event, cancel_token)
+
+    # An already-cancelled task must not query its source.
+    raise_for_abort("abort_etlhelper_threads() called before iter_chunks", token)
 
     helper = DB_HELPER_FACTORY.from_conn(conn)
-    with helper.cursor(conn) as cursor:
+    try:
+        with helper.cursor(conn) as cursor:
 
-        # Run query
-        try:
-            cursor.execute(select_query, parameters)
-        except helper.sql_exceptions as exc:
-            # Even though we haven't modified data, we have to rollback to
-            # clear the failed transaction before any others can be started.
-            conn.rollback()
-            msg = (f"SQL query raised an error.\n\n{select_query}\n\n"
-                   f"Required paramstyle: {helper.paramstyle}\n\n{exc}\n")
-            raise ETLHelperExtractError(msg)
+            # Run query
+            try:
+                cursor.execute(select_query, parameters)
+            except helper.sql_exceptions as exc:
+                # Even though we haven't modified data, we have to rollback to
+                # clear the failed transaction before any others can be started.
+                conn.rollback()
+                msg = (f"SQL query raised an error.\n\n{select_query}\n\n"
+                       f"Required paramstyle: {helper.paramstyle}\n\n{exc}\n")
+                raise ETLHelperExtractError(msg)
 
-        # Set row factory
-        create_row = row_factory(cursor)
+            # Set row factory
+            create_row = row_factory(cursor)
 
-        # Parse results
-        first_pass = True
-        while True:
-            raise_for_abort("abort_etlhelper_threads() called during iter_chunks")
+            # Parse results
+            first_pass = True
+            while True:
+                raise_for_abort(
+                    "abort_etlhelper_threads() called during iter_chunks", token)
 
-            rows = cursor.fetchmany(chunk_size)
+                rows = cursor.fetchmany(chunk_size)
 
-            # No more rows to process
-            if not rows:
-                if first_pass:
-                    msg = "No rows returned"
-                else:
-                    if cursor.rowcount == -1:
-                        # SQLite3 drive doesn't support row count (always -1)
-                        msg = "All rows returned"
+                # No more rows to process
+                if not rows:
+                    if first_pass:
+                        msg = "No rows returned"
                     else:
-                        msg = f"{cursor.rowcount} rows returned"
-                logger.info(msg)
+                        if cursor.rowcount == -1:
+                            # SQLite3 drive doesn't support row count (always -1)
+                            msg = "All rows returned"
+                        else:
+                            msg = f"{cursor.rowcount} rows returned"
+                    logger.info(msg)
 
-                # Close the active transaction
-                conn.commit()
-                return
+                    # Close the active transaction
+                    conn.commit()
+                    return
 
-            # Apply row_factory
-            rows = (create_row(row) for row in rows)
+                # Apply row_factory
+                rows = (create_row(row) for row in rows)
 
-            # Apply transform
-            if transform:
-                rows = transform(rows)
+                # Apply transform
+                if transform:
+                    rows = transform(rows)
 
-            # Return data
-            yield rows
-            first_pass = False
+                # A cancellation may have been requested while the transform
+                # was running.  Check before the chunk is passed to the loader
+                # so that its second block is not written.
+                raise_for_abort(
+                    "abort_etlhelper_threads() called during iter_chunks", token)
+
+                # Return data.  A cancellation requested while this chunk was
+                # being processed is handled before the next fetch.
+                yield rows
+                first_pass = False
+
+    except ETLHelperAbort:
+        # Discard work from the current, uncommitted chunk.  Only this
+        # connection is rolled back; connections belonging to other tasks are
+        # never touched.  If the caller has already closed the connection,
+        # the driver reports an error that is unrelated to the cancellation,
+        # so it is ignored here.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
 
 
 def iter_rows(
@@ -145,7 +197,10 @@ def iter_rows(
         parameters: Parameters = (),
         row_factory: Callable = dict_row_factory,
         transform: Optional[Transform] = None,
-        chunk_size: int = CHUNKSIZE
+        chunk_size: int = CHUNKSIZE,
+        abort_token=None,
+        abort_event=None,
+        cancel_token=None
         ) -> Iterator[Row]:
     """
     Run SQL query against connection and return iterator object to loop over
@@ -159,13 +214,17 @@ def iter_rows(
     :param transform: function that accepts a list of rows and
                       returns an list of rows (possibly of different shape)
     :param chunk_size: size of chunks to group data by
+    :param abort_token: optional cancellation token for this task
     :return: generator returning a list of objects which each
              represent a row of data using the given row_factory
     """
+    token = _resolve_abort_token(abort_token, abort_event, cancel_token)
     for chunk in iter_chunks(select_query, conn, row_factory=row_factory,
                              parameters=parameters, transform=transform,
-                             chunk_size=chunk_size):
+                             chunk_size=chunk_size, abort_token=token):
         for row in chunk:
+            raise_for_abort("abort_etlhelper_threads() called during iter_chunks",
+                            token)
             yield row
 
 
@@ -175,7 +234,10 @@ def fetchone(
         parameters: Parameters = (),
         row_factory: Callable = dict_row_factory,
         transform: Optional[Transform] = None,
-        chunk_size: int = 1
+        chunk_size: int = 1,
+        abort_token=None,
+        abort_event=None,
+        cancel_token=None
         ) -> Optional[Row]:
     """
     Get first result of query.  See iter_rows for details.  Note: iter_rows is
@@ -189,12 +251,15 @@ def fetchone(
     :param transform: function that accepts a list of rows and
                       returns an list of rows (possibly of different shape)
     :param chunk_size: size of chunks to group data by
+    :param abort_token: optional cancellation token for this task
     :return: None or a row of data using the given row_factory
     """
     try:
         result = next(iter_rows(select_query, conn, row_factory=row_factory,
                                 parameters=parameters, transform=transform,
-                                chunk_size=chunk_size))
+                                chunk_size=chunk_size,
+                                abort_token=_resolve_abort_token(
+                                    abort_token, abort_event, cancel_token)))
     except StopIteration:
         result = None
     finally:
@@ -210,7 +275,10 @@ def fetchall(
         parameters: Parameters = (),
         row_factory: Callable = dict_row_factory,
         transform: Optional[Transform] = None,
-        chunk_size: int = CHUNKSIZE
+        chunk_size: int = CHUNKSIZE,
+        abort_token=None,
+        abort_event=None,
+        cancel_token=None
         ) -> Chunk:
     """
     Get all results of query as a list.  See iter_rows for details.
@@ -223,11 +291,14 @@ def fetchall(
     :param transform: function that accepts a list of rows and
                       returns an list of rows (possibly of different shape)
     :param chunk_size: size of chunks to group data by
+    :param abort_token: optional cancellation token for this task
     :return: a row of data using the given row_factory
     """
     return list(iter_rows(select_query, conn, row_factory=row_factory,
                           parameters=parameters, transform=transform,
-                          chunk_size=chunk_size))
+                          chunk_size=chunk_size,
+                          abort_token=_resolve_abort_token(
+                              abort_token, abort_event, cancel_token)))
 
 
 def executemany(
@@ -238,6 +309,9 @@ def executemany(
         on_error: Optional[Callable[[list[FailedRow]], Any]] = None,
         commit_chunks: bool = True,
         chunk_size: int = CHUNKSIZE,
+        abort_token=None,
+        abort_event=None,
+        cancel_token=None
         ) -> tuple[int, int]:
     """
     Use query to insert/update data from rows to database at conn.  This
@@ -266,74 +340,104 @@ def executemany(
     :param on_error: function to be applied to failed rows in each chunk
     :param commit_chunks: commit after each chunk has been inserted/updated
     :param chunk_size: size of chunks to group data by
+    :param abort_token: optional cancellation token for this task
     :return: the number of rows processed and the number of rows failed
     :raises ETLHelperInsertError: if SQL raises an error
+    :raises ETLHelperAbort: if cancellation is requested for this task
     """
     logger.info("Executing many (chunk_size=%s)", chunk_size)
     logger.debug("Executing:\n\n%s\n\nagainst:\n\n%s", query, conn)
-    clear_abort_event()
+
+    # Create one token for the whole load.  Never clear the global event here.
+    token = _resolve_abort_token(abort_token, abort_event, cancel_token)
+
+    # An already-cancelled task must not read its input or write anything.
+    raise_for_abort("abort_etlhelper_threads() called before executemany", token)
 
     helper = DB_HELPER_FACTORY.from_conn(conn)
     processed = 0
     failed = 0
 
-    with helper.cursor(conn) as cursor:
-        for chunk_with_nones in _chunker(rows, chunk_size):
-            raise_for_abort("abort_etlhelper_threads() called during executemany")
+    try:
+        with helper.cursor(conn) as cursor:
+            for chunk_with_nones in _chunker(rows, chunk_size):
+                raise_for_abort(
+                    "abort_etlhelper_threads() called during executemany", token)
 
-            # Chunker pads to whole chunk with None; remove these
-            chunk = [row for row in chunk_with_nones if row is not None]
+                # Chunker pads to whole chunk with None; remove these
+                chunk = [row for row in chunk_with_nones if row is not None]
 
-            # Apply transform
-            if transform:
-                # Materialise chunk as list as `transform` can return generator
-                chunk = list(transform(chunk))
+                # Apply transform
+                if transform:
+                    # Materialise chunk as list as `transform` can return generator
+                    chunk = list(transform(chunk))
 
-            # Show first row as example of data
-            if processed == 0:
-                logger.debug(f"First row: {chunk[0]}")
+                # Cancellation may have arrived while the transform ran.
+                raise_for_abort(
+                    "abort_etlhelper_threads() called during executemany", token)
 
-            # Run query
-            try:
-                helper.executemany(cursor, query, chunk)
+                # Show first row as example of data
+                if processed == 0:
+                    logger.debug(f"First row: {chunk[0]}")
 
-            except helper.sql_exceptions as exc:
-                # Rollback to clear the failed transaction before any others can
-                # be started.
-                conn.rollback()
+                # Run query
+                try:
+                    helper.executemany(cursor, query, chunk)
 
-                # Collect and process failed rows if on_error function provided
-                if on_error:
-                    # Temporarily disable logging
-                    old_level = logger.level
-                    logger.setLevel(logging.ERROR)
+                except helper.sql_exceptions as exc:
+                    # Rollback to clear the failed transaction before any others can
+                    # be started.
+                    conn.rollback()
 
-                    try:
-                        failed_rows = _execute_by_row(query, conn, chunk)
-                    finally:
-                        # Restore logging
-                        logger.setLevel(old_level)
+                    # Collect and process failed rows if on_error function provided
+                    if on_error:
+                        # Temporarily disable logging
+                        old_level = logger.level
+                        logger.setLevel(logging.ERROR)
 
-                    failed += len(failed_rows)
-                    logger.debug("Calling on_error function on %s failed rows",
-                                 failed)
-                    on_error(failed_rows)
-                else:
-                    msg = (f"SQL query raised an error.\n\n{query}\n\n"
-                           f"Required paramstyle: {helper.paramstyle}\n\n{exc}\n")
-                    raise ETLHelperInsertError(msg)
+                        try:
+                            failed_rows = _execute_by_row(query, conn, chunk)
+                        finally:
+                            # Restore logging
+                            logger.setLevel(old_level)
 
-            processed += len(chunk)
-            logger.info(
-                '%s rows processed (%s failed)', processed, failed)
+                        failed += len(failed_rows)
+                        logger.debug("Calling on_error function on %s failed rows",
+                                     failed)
+                        on_error(failed_rows)
+                    else:
+                        msg = (f"SQL query raised an error.\n\n{query}\n\n"
+                               f"Required paramstyle: {helper.paramstyle}\n\n{exc}\n")
+                        raise ETLHelperInsertError(msg)
 
-            # Commit changes so far
-            if commit_chunks:
-                conn.commit()
+                processed += len(chunk)
+                logger.info(
+                    '%s rows processed (%s failed)', processed, failed)
 
-    # Commit changes where not already committed
-    if not commit_chunks:
-        conn.commit()
+                # Commit changes so far
+                if commit_chunks:
+                    conn.commit()
+
+        # Commit changes where not already committed
+        if not commit_chunks:
+            conn.commit()
+
+    except ETLHelperAbort:
+        # Discard only the current task's uncommitted work.  Chunks committed
+        # by earlier iterations remain committed; connections belonging to
+        # other tasks are never closed or rolled back here.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        # Release the source iterator and its cursor promptly, instead of
+        # waiting for garbage collection.  This is what releases the source
+        # cursor when cancellation happens between chunks.
+        close = getattr(rows, 'close', None)
+        if close is not None:
+            close()
 
     logger.info(f'{processed} rows processed in total')
     return processed, failed
@@ -376,6 +480,9 @@ def copy_rows(
         on_error: Optional[Callable] = None,
         commit_chunks: bool = True,
         chunk_size: int = CHUNKSIZE,
+        abort_token=None,
+        abort_event=None,
+        cancel_token=None
         ) -> tuple[int, int]:
     """
     Copy rows from source_conn to dest_conn.  select_query and insert_query
@@ -408,16 +515,23 @@ def copy_rows(
     :param on_error: function to be applied to failed rows in each chunk
     :param commit_chunks: commit after each chunk (see executemany)
     :param chunk_size: size of chunks to group data by
+    :param abort_token: optional cancellation token for this task
     :return: the number of rows processed and the number of rows failed
     """
+    # Use one token for both the extraction and the load so that cancelling
+    # the task stops it at either checkpoint.
+    token = _resolve_abort_token(abort_token, abort_event, cancel_token)
+
     rows_generator = iter_rows(select_query, source_conn,
                                parameters=parameters, row_factory=row_factory,
-                               transform=transform, chunk_size=chunk_size)
+                               transform=transform, chunk_size=chunk_size,
+                               abort_token=token)
     processed, failed = executemany(insert_query, dest_conn,
                                     rows_generator,
                                     on_error=on_error,
                                     commit_chunks=commit_chunks,
-                                    chunk_size=chunk_size)
+                                    chunk_size=chunk_size,
+                                    abort_token=token)
     return processed, failed
 
 
@@ -462,7 +576,10 @@ def copy_table_rows(
         transform: Optional[Transform] = None,
         on_error: Optional[Callable] = None,
         commit_chunks: bool = True,
-        chunk_size: int = CHUNKSIZE
+        chunk_size: int = CHUNKSIZE,
+        abort_token=None,
+        abort_event=None,
+        cancel_token=None
         ) -> tuple[int, int]:
     """
     Copy rows from 'table' in source_conn to same or target table in dest_conn.
@@ -491,6 +608,7 @@ def copy_table_rows(
     :param on_error: function to be applied to failed rows in each chunk
     :param commit_chunks: commit after each chunk (see executemany)
     :param chunk_size: size of chunks to group data by
+    :param abort_token: optional cancellation token for this task
     :return: the number of rows processed and the number of rows failed
     """
     validate_identifier(table)
@@ -499,10 +617,13 @@ def copy_table_rows(
     if not target:
         target = table
 
+    token = _resolve_abort_token(abort_token, abort_event, cancel_token)
     rows_generator = iter_rows(select_query, source_conn, row_factory=row_factory,
-                               transform=transform, chunk_size=chunk_size)
+                               transform=transform, chunk_size=chunk_size,
+                               abort_token=token)
     processed, failed = load(target, dest_conn, rows_generator, on_error=on_error,
-                             commit_chunks=commit_chunks, chunk_size=chunk_size)
+                             commit_chunks=commit_chunks, chunk_size=chunk_size,
+                             abort_token=token)
     return processed, failed
 
 
@@ -514,6 +635,9 @@ def load(
         on_error: Optional[Callable] = None,
         commit_chunks: bool = True,
         chunk_size: int = CHUNKSIZE,
+        abort_token=None,
+        abort_event=None,
+        cancel_token=None
         ) -> tuple[int, int]:
     """
     Load data from iterable of named tuples or dictionaries into pre-existing
@@ -534,18 +658,28 @@ def load(
     :param on_error: function to be applied to failed rows in each chunk
     :param commit_chunks: commit after each chunk (see executemany)
     :param chunk_size: size of chunks to group data by
+    :param abort_token: optional cancellation token for this task
     :return: the number of rows processed and the number of rows failed
     """
+    token = _resolve_abort_token(abort_token, abort_event, cancel_token)
+
     # Return early if rows is empty
     if not rows:
         return 0, 0
 
+    # An already-cancelled task must not begin reading its input
+    raise_for_abort("abort_etlhelper_threads() called before load", token)
+
     # Get first row without losing it from row iteration, returning early if
     # the generator was empty.
+    row_iterator = None
     try:
-        rows = iter(rows)
-        first_row = next(rows)  # This line throws an exception if empty
-        rows = chain([first_row], rows)
+        row_iterator = iter(rows)
+        first_row = next(row_iterator)  # This line throws an exception if empty
+        rows = chain([first_row], row_iterator)
+
+        # Cancellation may have been requested while the source was read.
+        raise_for_abort("abort_etlhelper_threads() called during load", token)
 
         if transform:
             # next(iter(var)) is equivalent to var[0] but also works for generators,
@@ -562,15 +696,22 @@ def load(
     query = generate_insert_sql(table, first_row_transformed, conn)
 
     # Insert data
-    processed, failed = executemany(
-        query,
-        conn,
-        rows,
-        transform=transform,
-        on_error=on_error,
-        commit_chunks=commit_chunks,
-        chunk_size=chunk_size,
-    )
+    try:
+        processed, failed = executemany(
+            query,
+            conn,
+            rows,
+            transform=transform,
+            on_error=on_error,
+            commit_chunks=commit_chunks,
+            chunk_size=chunk_size,
+            abort_token=token,
+        )
+    finally:
+        # Release the underlying source iterator and its cursor promptly.
+        close = getattr(row_iterator, 'close', None)
+        if close is not None:
+            close()
     return processed, failed
 
 

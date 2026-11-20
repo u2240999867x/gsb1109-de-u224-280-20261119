@@ -103,12 +103,43 @@ background process, e.g. in a GUI application. The
 running in a separate thread by raising an ``ETLHelperAbort`` exception
 within the thread.
 
+To stop just one job while other copies continue, create an
+:class:`AbortToken <etlhelper.AbortToken>` and pass it to the ETL function
+with the ``abort_token`` argument.  Calling ``token.abort()`` (or
+:func:`abort_etlhelper_task() <etlhelper.abort_etlhelper_task>`) stops that
+job only.  ``abort_event`` and ``cancel_token`` are accepted as aliases for
+the ``abort_token`` argument.
+
+.. code-block:: python
+
+    from etlhelper import AbortToken, copy_rows
+
+    token_a = AbortToken()
+    copy_rows(select_sql_a, source_a, insert_sql_a, dest_a,
+              abort_token=token_a)
+
+    # From another thread:
+    token_a.abort()
+
+The token is checked at chunk boundaries.  Cancellation that arrives while
+a driver call or transform is running takes effect when that call returns;
+the uncommitted chunk is rolled back and the task's cursors are released.
+Connections that belong to other tasks are never closed or rolled back.
+Passing an already-cancelled token to an ETL function raises
+``ETLHelperAbort`` before the source is queried.
+
+With no argument, ``abort_etlhelper_threads()`` is the emergency stop for
+every job in the process.  The stop is latched for jobs that are already
+running: starting another job afterwards does not cause the stopped jobs to
+resume.  Jobs started after the global stop are unaffected.
+
 The state of the data when the job is cancelled (or crashes) depends on
 the arguments passed to :func:`executemany() <etlhelper.executemany>` (or the functions that call it
 e.g. :func:`load() <etlhelper.load>`, :func:`copy_rows() <etlhelper.copy_rows>`).
 
 -  If :func:`commit_chunks() <etlhelper.commit_chunks>` is ``True`` (default), all chunks up to the one
-   where the error occured are committed.
+   where the error occured are committed.  These committed chunks are not
+   withdrawn by a later cancellation.
 -  If :func:`commit_chunks() <etlhelper.commit_chunks>` is ``False``, everything is rolled back and the
    database is unchanged.
 -  If an :func:`on_error() <etlhelper.on_error>` function is defined, all rows without errors are
