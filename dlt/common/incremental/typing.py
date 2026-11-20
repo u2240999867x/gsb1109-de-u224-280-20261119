@@ -1,6 +1,12 @@
-from typing import Any, Callable, List, Literal, Optional, Sequence, TypeVar, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, TypeVar, Union
 
-from dlt.common.typing import TSortOrder, TTableHintTemplate, TColumnNames, TypedDict
+from dlt.common.typing import (
+    TSortOrder,
+    TTableHintTemplate,
+    TColumnNames,
+    TypedDict,
+    NotRequired,
+)
 
 TCursorValue = TypeVar("TCursorValue", bound=Any)
 LastValueFunc = Callable[[Sequence[TCursorValue]], Any]
@@ -14,6 +20,9 @@ class IncrementalColumnState(TypedDict):
     last_value: Optional[Any]
     unique_hashes: List[str]
     start_value: Optional[Any]
+    partitions: NotRequired[Dict[str, "IncrementalColumnState"]]
+    """Cursor state of each partition, present only when the incremental uses `partition_key`.
+    Keys are partition identifiers, see `Incremental.partition_state_key`."""
 
 
 class IncrementalArgs(TypedDict, total=False):
@@ -22,6 +31,8 @@ class IncrementalArgs(TypedDict, total=False):
     last_value_func: Optional[Union[LastValueFunc[str], Literal["min", "max"]]]
     """Last value callable or name of built in function"""
     primary_key: Optional[TTableHintTemplate[TColumnNames]]
+    partition_key: Optional[TTableHintTemplate[TColumnNames]]
+    """Column or columns that identify a partition, each partition keeps its own cursor"""
     end_value: Optional[Any]
     row_order: Optional[TSortOrder]
     allow_external_schedulers: Optional[bool]

@@ -106,6 +106,47 @@ def get_events(last_created_at = dlt.sources.incremental("$", last_value_func=by
         yield json.load(f)
 ```
 
+## Keep a cursor per store, tenant, or other partition
+
+One resource may load several entities from the same endpoint, for example the updates of several
+stores. With a single cursor, the store that reports the newest timestamp moves the position for
+every store. A quieter store then starts after its own unseen rows and loads nothing on the next
+run.
+
+Pass `partition_key` to keep one cursor per partition:
+
+```py
+@dlt.resource(primary_key=["store_id", "id"])
+def store_updates(
+    updated_at=dlt.sources.incremental(
+        "updated_at",
+        initial_value="1970-01-01T00:00:00Z",
+        partition_key="store_id",
+    ),
+):
+    for store_id in stores:
+        # with a partition cursor, start_value is the position of that store
+        yield fetch_store_updates(store_id, since=updated_at.start_value)
+```
+
+Every partition has its own `start_value`, `last_value`, and set of boundary hashes, so the
+partitions advance independently. A partition that has no state yet starts from `initial_value`,
+which lets you add a store later without touching the positions of the existing stores.
+
+The partition key may be a column name or a tuple of column names. The state keeps one entry per
+partition, and the partition value is part of the identity of a boundary row. Rows that share a
+timestamp still load when they carry a different business key, addressed by `primary_key`. Set
+`primary_key` to a key that is unique within a partition; a primary key that already contains the
+partition key works as well.
+
+Values of a partitioned cursor:
+
+* `cursor.start_value` and `cursor.last_value` refer to the current data item's partition.
+* `cursor.partition_values()` returns the stored position of every partition.
+
+A partitioned cursor cannot combine `partition_key` with `end_value`, `advance`, or
+`allow_external_schedulers`, because those replace the stored positions with a single range.
+
 ## Using `end_value` for backfill
 
 You can specify both initial and end dates when defining incremental loading. Let's go back to our Github example:

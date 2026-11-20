@@ -84,6 +84,18 @@ class IncrementalPrimaryKeyMissing(PipeException):
         super().__init__(pipe_name, msg)
 
 
+class IncrementalPartitionKeyMissing(PipeException):
+    def __init__(self, pipe_name: str, partition_key: str, item: TDataItem) -> None:
+        self.partition_key = partition_key
+        self.item = item
+        msg = (
+            f"Partition key `{partition_key}` was not found in extracted data item. All data items"
+            " must contain the partition key when `Incremental` is configured with"
+            " `partition_key`."
+        )
+        super().__init__(pipe_name, msg)
+
+
 class JoinSchedulerError(PipeException):
     def __init__(self, pipe_name: str, msg: str) -> None:
         super().__init__(pipe_name, msg)

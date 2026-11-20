@@ -40,6 +40,7 @@ from dlt.extract.incremental.exceptions import (
     IncrementalCursorInvalidCoercion,
     IncrementalCursorPathHasValueNone,
     IncrementalCursorPathMissing,
+    IncrementalPartitionKeyMissing,
     IncrementalPrimaryKeyMissing,
 )
 from dlt.extract.incremental.lag import apply_lag
@@ -5798,3 +5799,207 @@ def test_public_lagged_datetime_range(cursor_type: type[datetime], use_lag: bool
     assert end is None
     assert type(incr._start_value) is datetime
     assert type(incr._cached_state["last_value"]) is datetime
+
+
+def test_partitioned_cursor_keeps_a_position_per_store() -> None:
+    """An active store reporting a new cursor does not advance a quiet store past its own rows."""
+
+    @dlt.resource(primary_key="id")
+    def events(
+        day: int,
+        cursor=dlt.sources.incremental("updated_at", partition_key="store", initial_value=0),
+    ):
+        if day == 1:
+            yield [
+                {"store": "active", "id": "a1", "updated_at": 100},
+                {"store": "active", "id": "a2", "updated_at": 200},
+                {"store": "low", "id": "l1", "updated_at": 10},
+            ]
+        elif day == 2:
+            yield [
+                {"store": "active", "id": "a2", "updated_at": 200},
+                {"store": "active", "id": "a3", "updated_at": 300},
+                {"store": "low", "id": "l1", "updated_at": 10},
+                {"store": "low", "id": "l2", "updated_at": 10},
+                {"store": "low", "id": "l3", "updated_at": 11},
+            ]
+        else:
+            yield [
+                {"store": "active", "id": "a3", "updated_at": 300},
+                {"store": "low", "id": "l3", "updated_at": 11},
+                {"store": "new", "id": "n1", "updated_at": 1},
+                {"store": "new", "id": "n2", "updated_at": 1},
+            ]
+
+    with Container().injectable_context(StateInjectableContext(state={})):
+        # the active store moves far ahead
+        assert [(r["store"], r["id"]) for r in list(events(1))] == [
+            ("active", "a1"),
+            ("active", "a2"),
+            ("low", "l1"),
+        ]
+        # the quiet store still loads rows at its old boundary and a same-second new business key
+        assert [(r["store"], r["id"]) for r in list(events(2))] == [
+            ("active", "a3"),
+            ("low", "l2"),
+            ("low", "l3"),
+        ]
+        # a new store starts from initial_value and sees all of its rows
+        assert [(r["store"], r["id"]) for r in list(events(3))] == [
+            ("new", "n1"),
+            ("new", "n2"),
+        ]
+
+        state = events.state["incremental"]["updated_at"]
+        assert state["partitions"]["active"]["last_value"] == 300
+        assert state["partitions"]["low"]["last_value"] == 11
+        assert state["partitions"]["new"]["last_value"] == 1
+        # the top level does not carry a shared position that could mask a partition
+        assert state["last_value"] == 0
+
+
+@pytest.mark.parametrize("item_type", ALL_TEST_DATA_ITEM_FORMATS)
+def test_partitioned_cursor_state_per_item_format(item_type: TestDataItemFormat) -> None:
+    @dlt.resource(primary_key="id")
+    def events(
+        day: int,
+        cursor=dlt.sources.incremental("updated_at", partition_key="store", initial_value=0),
+    ):
+        rows = (
+            [
+                {"store": "a", "id": "1", "updated_at": 10},
+                {"store": "b", "id": "1", "updated_at": 1},
+            ]
+            if day == 1
+            else [
+                {"store": "a", "id": "1", "updated_at": 10},
+                {"store": "a", "id": "2", "updated_at": 20},
+                {"store": "b", "id": "1", "updated_at": 1},
+                {"store": "b", "id": "2", "updated_at": 1},
+            ]
+        )
+        yield data_to_item_format(item_type, rows)
+
+    with Container().injectable_context(StateInjectableContext(state={})):
+        assert data_item_length(list(events(1))) == 2
+        # both stores advance independently, same-second row of store b is not deduped
+        assert data_item_length(list(events(2))) == 2
+
+
+def test_partitioned_cursor_isolation_from_other_state() -> None:
+    """Adding a partition does not reset the state of partitions that already have one."""
+
+    @dlt.resource(primary_key="id")
+    def events(
+        stores: List[str],
+        ts: int,
+        cursor=dlt.sources.incremental("updated_at", partition_key="store", initial_value=0),
+    ):
+        yield [{"store": store, "id": f"{store}-{ts}", "updated_at": ts} for store in stores]
+
+    with Container().injectable_context(StateInjectableContext(state={})):
+        assert len(list(events(["a", "b"], 10))) == 2
+        assert len(list(events(["a", "b"], 20))) == 2
+        # only c is new, a and b continue from their position and skip the replay
+        assert len(list(events(["a", "b", "c"], 20))) == 1
+        state = events.state["incremental"]["updated_at"]["partitions"]
+        assert state["a"]["last_value"] == 20
+        assert state["b"]["last_value"] == 20
+        assert state["c"]["last_value"] == 20
+
+
+def test_partitioned_cursor_rejects_end_value() -> None:
+    incremental = dlt.sources.incremental(
+        "updated_at", partition_key="store", initial_value=0, end_value=10
+    )
+    with pytest.raises(ConfigurationValueError):
+        incremental.resolve()
+
+
+def test_partitioned_cursor_requires_partition_key_column() -> None:
+    @dlt.resource(primary_key="id")
+    def events(cursor=dlt.sources.incremental("updated_at", partition_key="store", initial_value=0)):
+        yield {"id": "1", "updated_at": 1}
+
+    with Container().injectable_context(StateInjectableContext(state={})):
+        with pytest.raises(IncrementalPartitionKeyMissing):
+            list(events())
+
+
+@pytest.mark.parametrize("use_dict", [False, True])
+def test_partitioned_cursor_composite_key_and_values(use_dict: bool) -> None:
+    """A composite partition key keeps one cursor per key combination."""
+
+    config: Any = (
+        {
+            "cursor_path": "updated_at",
+            "partition_key": ["store", "region"],
+            "initial_value": 0,
+        }
+        if use_dict
+        else dlt.sources.incremental(
+            "updated_at", partition_key=["store", "region"], initial_value=0
+        )
+    )
+
+    @dlt.resource(primary_key="id", incremental=config)
+    def events(day: int):
+        if day == 1:
+            yield [
+                {"store": 1, "region": "eu", "id": "a", "updated_at": 10},
+                {"store": 2, "region": "eu", "id": "a", "updated_at": 10},
+            ]
+        else:
+            yield [
+                {"store": 1, "region": "eu", "id": "a", "updated_at": 10},
+                {"store": 1, "region": "eu", "id": "b", "updated_at": 10},
+                {"store": 2, "region": "eu", "id": "b", "updated_at": 20},
+            ]
+
+    with Container().injectable_context(StateInjectableContext(state={})):
+        assert len(list(events(1))) == 2
+        # (1, eu) is at its boundary and gets the same-second business key b
+        assert [(r["store"], r["id"]) for r in list(events(2))] == [(1, "b"), (2, "b")]
+        resource = events(1)
+        list(resource)
+        assert resource.incremental.partition_values() == {
+            'json:[1,"eu"]': 10,
+            'json:[2,"eu"]': 20,
+        }
+
+
+def test_partitioned_cursor_as_resource_hint() -> None:
+    """Partition cursor configured with `apply_hints` filters and keeps state."""
+
+    @dlt.resource(primary_key="id")
+    def events(day: int):
+        rows = (
+            [
+                {"store": "a", "id": "1", "updated_at": 10},
+                {"store": "b", "id": "1", "updated_at": 1},
+            ]
+            if day == 1
+            else [
+                {"store": "a", "id": "1", "updated_at": 10},
+                {"store": "a", "id": "2", "updated_at": 20},
+                {"store": "b", "id": "1", "updated_at": 1},
+                {"store": "b", "id": "2", "updated_at": 1},
+            ]
+        )
+        yield rows
+
+    def with_hint(day: int) -> DltResource:
+        resource = events(day)
+        resource.apply_hints(
+            incremental=dlt.sources.incremental(
+                "updated_at", partition_key="store", initial_value=0
+            )
+        )
+        return resource
+
+    with Container().injectable_context(StateInjectableContext(state={})):
+        assert len(list(with_hint(1))) == 2
+        assert len(list(with_hint(2))) == 2
+        state = with_hint(1).state["incremental"]["updated_at"]
+        assert state["partitions"]["a"]["last_value"] == 20
+        assert state["partitions"]["b"]["last_value"] == 1

@@ -17,8 +17,9 @@ import inspect
 from functools import wraps
 
 from dlt.common import logger
+from dlt.common.json import json
 from dlt.common.pendulum import pendulum, ensure_pendulum_dt
-from dlt.common.time import to_py_datetime
+from dlt.common.time import datetime_to_timestamp_us, to_py_datetime
 from dlt.common.data_types.typing import TDataType
 from dlt.common.exceptions import (
     PipelineStateNotAvailable,
@@ -26,7 +27,7 @@ from dlt.common.exceptions import (
     ValueErrorWithKnownValues,
 )
 from dlt.common.libs import is_arrow_object, is_pandas_frame, is_polars_frame
-from dlt.common.jsonpath import compile_path, extract_simple_field_name
+from dlt.common.jsonpath import compile_path, extract_simple_field_name, find_values
 from dlt.common.typing import (
     TDataItem,
     TDataItems,
@@ -63,6 +64,7 @@ from dlt.extract.exceptions import IncrementalUnboundError
 from dlt.extract.incremental.exceptions import (
     ExternalSchedulerNotAvailable,
     IncrementalCursorPathMissing,
+    IncrementalPartitionKeyMissing,
     IncrementalPrimaryKeyMissing,
     JoinSchedulerError,
 )
@@ -127,6 +129,7 @@ class Incremental(
         initial_value: Optional value used for `last_value` when no state is available, e.g. on the first run of the pipeline. If not provided `last_value` will be `None` on the first run.
         last_value_func: Callable used to determine which cursor value to save in state. It is called with a list of the stored state value and all cursor vals from currently processing items. Default is `max`
         primary_key: Optional primary key used to deduplicate data. If not provided, a primary key defined by the resource will be used. Pass a tuple to define a compound key. Pass empty tuple to disable unique checks
+        partition_key: Optional column name or tuple of column names that identify a partition, for example a store id. When set, every partition keeps its own cursor value, start value and deduplication hashes, so a partition that reports newer cursor values does not advance the position of other partitions. A partition that does not have any state yet starts from `initial_value`; partitions with state keep their position. `primary_key` must identify a row within a partition (typically a business key). Partitioned cursors do not support `end_value` or `advance`.
         end_value: Optional value used to load a limited range of records between `initial_value` and `end_value`.
             Use in conjunction with `initial_value`, e.g. load records from given month `incremental(initial_value="2022-01-01T00:00:00Z", end_value="2022-02-01T00:00:00Z")`
             Note, when this is set the incremental filtering is stateless and `initial_value` always supersedes any previous incremental value in state.
@@ -151,6 +154,7 @@ class Incremental(
     cursor_path: str = None
     # TODO: Support typevar here
     initial_value: Optional[Any] = None
+    partition_key: Optional[TTableHintTemplate[TColumnNames]] = None
     end_value: Optional[Any] = None
     row_order: Optional[TSortOrder] = None
     allow_external_schedulers: Optional[bool] = None
@@ -177,11 +181,19 @@ class Incremental(
         lag: Optional[float] = None,
         range_start: TIncrementalRange = "closed",
         range_end: TIncrementalRange = "open",
+        partition_key: Optional[TTableHintTemplate[TColumnNames]] = None,
     ) -> None:
         # make sure that path is valid
         if cursor_path:
             compile_path(cursor_path)
+        if partition_key:
+            if isinstance(partition_key, str):
+                compile_path(partition_key)
+            elif not callable(partition_key):
+                for key in partition_key:
+                    compile_path(key)
         self.cursor_path = cursor_path
+        self.partition_key = partition_key
         if isinstance(last_value_func, str):
             if last_value_func == "min":
                 last_value_func = min
@@ -242,6 +254,10 @@ class Incremental(
         self._advanced: bool = False
         """If true, stops processing further rows"""
         self._current_last_value: Any = None
+        self._partition_cursors: Dict[str, "Incremental[Any]"] = {}
+        """Cursors of the partitions seen so far, keyed by canonical partition value"""
+        self._no_pipe_close: bool = False
+        """Partition cursors must not close the shared pipe when one partition runs out of range"""
 
     @property
     def primary_key(self) -> Optional[TTableHintTemplate[TColumnNames]]:
@@ -294,12 +310,14 @@ class Incremental(
             last_value_func=self.last_value_func,
             primary_key=self._primary_key,
             lag=self.lag,
+            partition_key=self.partition_key,
         )
         for key, value in dict(
             other,
             last_value_func=other.last_value_func,
             primary_key=other._primary_key,
             lag=other.lag,
+            partition_key=other.partition_key,
         ).items():
             if value is not None:
                 kwargs[key] = value
@@ -343,6 +361,10 @@ class Incremental(
                 new._cached_state = copy(state)
                 new._current_last_value = self._current_last_value
                 new._start_value = self._start_value
+                new._partition_cursors = {
+                    key: cursor.copy(with_transient_state=True)
+                    for key, cursor in self._partition_cursors.items()
+                }
             except (IncrementalUnboundError, SourceSectionNotAvailable, PipelineStateNotAvailable):
                 pass
         return new
@@ -361,6 +383,9 @@ class Incremental(
         """
         new = self.copy(with_transient_state=True)
         new.cursor_path = cursor
+        # partition cursors read the parent cursor path, keep them in sync
+        for partition_cursor in new._partition_cursors.values():
+            partition_cursor.cursor_path = cursor
         return new
 
     def advance(self, last_value: TCursorValue) -> Self:
@@ -375,6 +400,11 @@ class Incremental(
         Returns:
             Incremental[TCursorValue]: This instance, so calls can be chained.
         """
+        if self.is_partitioned:
+            raise ValueError(
+                "`advance()` is not supported on an `Incremental` with `partition_key`. Each"
+                " partition has its own range."
+            )
         if last_value is not None:
             self._current_last_value = last_value
             if self._cached_state is not None:
@@ -458,6 +488,29 @@ class Incremental(
 
     def on_resolved(self) -> None:
         compile_path(self.cursor_path)
+        if self.partition_key is not None:
+            if callable(self.partition_key):
+                raise ConfigurationValueError(
+                    "Incremental `partition_key` must be a column name or a tuple of column"
+                    " names, not a callable. The partition key is read from every data item."
+                )
+            if not self._partition_key_columns():
+                raise ConfigurationValueError(
+                    "Incremental `partition_key` must name at least one column."
+                )
+            for key in self._partition_key_columns():
+                compile_path(key)
+            if self.end_value is not None:
+                raise ConfigurationValueError(
+                    "Incremental `end_value` is not supported together with `partition_key`."
+                    " A partitioned cursor keeps state per partition and has no shared range."
+                )
+            if self.allow_external_schedulers:
+                raise ConfigurationValueError(
+                    "Incremental `allow_external_schedulers` is not supported together with"
+                    " `partition_key`. An external scheduler replaces the stored cursor with one"
+                    " shared range, which would defeat per-partition positions."
+                )
         if self.end_value is not None and self.initial_value is None:
             raise ConfigurationValueError(
                 "Incremental `end_value` was specified without `initial_value`."
@@ -506,6 +559,7 @@ class Incremental(
             merged = self.merge(native_value)
             self.cursor_path = merged.cursor_path
             self.initial_value = merged.initial_value
+            self.partition_key = merged.partition_key
             self.last_value_func = merged.last_value_func
             self.end_value = merged.end_value
             self.resource_name = merged.resource_name
@@ -546,15 +600,100 @@ class Incremental(
         bound_state = Incremental._get_state(self.resource_name, self.cursor_path)
         if len(bound_state) == 0:
             # set the default like this, setdefault evaluates the default no matter if it is needed or not. and our default is heavy
-            bound_state.update(
-                {
-                    "initial_value": self.initial_value,
-                    "last_value": self.initial_value,
-                    "unique_hashes": [],
-                    "start_value": self.initial_value,
-                }
-            )
+            bound_state.update(self._new_state())
+        if self.is_partitioned:
+            bound_state.setdefault("partitions", {})
         return bound_state
+
+    def _partition_key_columns(self) -> List[str]:
+        """Partition key as a list of column names or JSON paths"""
+        if isinstance(self.partition_key, str):
+            return [self.partition_key]
+        if callable(self.partition_key) or self.partition_key is None:
+            return []
+        return list(self.partition_key)
+
+    @property
+    def is_partitioned(self) -> bool:
+        """True when the cursor keeps a separate position for every partition"""
+        return self.partition_key is not None
+
+    @staticmethod
+    def partition_state_key(value: Any) -> str:
+        """State key of a partition value.
+
+        Non-string values use their canonical JSON rendering prefixed with `json:`, so `1` and
+        `"1"` do not share a state entry. A string that would look like such a rendering is
+        escaped with a `str:` prefix.
+        """
+        if isinstance(value, str):
+            return "str:" + value if value.startswith("json:") else value
+        return "json:" + json.dumps(
+            value, sort_keys=True, datetime_encoder=datetime_to_timestamp_us
+        )
+
+    def _get_partition_cursor(self, partition_value: Any) -> "Incremental[TCursorValue]":
+        """Returns the cursor of `partition_value`, creating it in the persisted state on first use"""
+        partition_id = self.partition_state_key(partition_value)
+        cursor = self._partition_cursors.get(partition_id)
+        if cursor is not None:
+            return cursor
+
+        # the state exists only while bound; unbound cursors work without it
+        state = self._cached_state
+        if state is not None:
+            state.setdefault("partitions", {})
+            partition_state = state["partitions"].setdefault(partition_id, self._new_state())
+        else:
+            partition_state = self._new_state()
+
+        cursor = self.copy()
+        if self.partition_key is not None:
+            cursor.partition_key = None
+        cursor._partition_cursors = {}
+        cursor._no_pipe_close = True
+        cursor._cached_state = partition_state
+        cursor._cached_state_start_value = partition_state["last_value"]
+        cursor._start_value = cursor._get_last_value()
+        cursor._advanced = False
+        cursor._current_last_value = None
+        # a partition has its own start value, so it decides on its own range
+        cursor._transformers.clear()
+        self._partition_cursors[partition_id] = cursor
+        return cursor
+
+    def _new_state(self) -> IncrementalColumnState:
+        """Fresh cursor state, starting from `initial_value`"""
+        return {
+            "initial_value": self.initial_value,
+            "last_value": self.initial_value,
+            "unique_hashes": [],
+            "start_value": self.initial_value,
+        }
+
+    def _resolve_partition_value(self, row: TDataItem) -> Any:
+        """Reads the partition key from a JSON or Arrow row, keeping its shape for hashing"""
+        values: List[Any] = []
+        for key in self._partition_key_columns():
+            simple = extract_simple_field_name(key)
+            if simple is not None:
+                try:
+                    value = row[simple]
+                except (KeyError, IndexError, TypeError):
+                    try:
+                        value = getattr(row, simple)
+                    except AttributeError:
+                        raise IncrementalPartitionKeyMissing(self.resource_name, simple, row)
+            else:
+                path = compile_path(key)
+                found = find_values(path, row)
+                if not found:
+                    raise IncrementalPartitionKeyMissing(self.resource_name, key, row)
+                value = found[0]
+            if value is None:
+                raise IncrementalPartitionKeyMissing(self.resource_name, key, row)
+            values.append(value)
+        return values[0] if len(values) == 1 else values
 
     @staticmethod
     def _get_state(resource_name: str, cursor_path: str) -> IncrementalColumnState:
@@ -589,6 +728,23 @@ class Incremental(
         """Current cursor value, respecting the cursor's datetime type."""
         return self._public_cursor_value(self._get_last_value())
 
+    def partition_values(self) -> Dict[str, Optional[Any]]:
+        """Current cursor value of every partition that has persisted state.
+
+        Only `partition_key` cursors keep more than one position. The keys are partition state
+        keys, see `partition_state_key`.
+        """
+        if not self.is_partitioned:
+            return {}
+        try:
+            state = self._cached_state if self._cached_state is not None else self.get_state()
+        except (IncrementalUnboundError, SourceSectionNotAvailable, PipelineStateNotAvailable):
+            return {}
+        return {
+            partition_key: self._public_cursor_value(partition_state["last_value"])
+            for partition_key, partition_state in state.get("partitions", {}).items()
+        }
+
     def _get_last_value(self) -> Optional[TCursorValue]:
         # if incremental advanced - return as is
         if self._current_last_value is not None:
@@ -614,7 +770,7 @@ class Incremental(
         # TODO: we cannot close partially evaluated transformer gen. to implement that
         # we'd need to pass the source gen along with each yielded item and close this particular gen
         # NOTE: with that implemented we could implement add_limit as a regular transform having access to gen
-        if self.can_close() and not self._bound_pipe.has_parent:
+        if self.can_close() and not self._no_pipe_close and not self._bound_pipe.has_parent:
             self._bound_pipe.close()
         return row
 
@@ -713,6 +869,27 @@ class Incremental(
         self._current_last_value = None
         self._cached_state = None
         self._advanced = False
+        # a partition cursor lives in the `partitions` node of the parent state, nothing to bind
+        if self.is_partitioned:
+            ctx = get_interval_context()
+            if self.allow_external_schedulers is None and ctx and ctx.allow_external_schedulers:
+                logger.warning(
+                    f"External scheduler is available but ignored on {self.resource_name}:"
+                    " `partition_key` keeps per-partition positions instead of one scheduler"
+                    " range."
+                )
+            self._partition_cursors.clear()
+            self._cached_state = self.get_state()
+            self.start_value = self.initial_value
+            self._cached_state_start_value = self._cached_state["last_value"]
+            self._transformers.clear()
+            logger.info(
+                f"Bind partitioned incremental on {self.resource_name} with columns:"
+                f" {self._partition_key_columns()}, initial_value: {self.initial_value}, func:"
+                f" {self.last_value_func.__name__}, range_start: {self.range_start}, range_end:"
+                f" {self.range_end}"
+            )
+            return self
         ctx = get_interval_context()
         if self.allow_external_schedulers is not None:
             should_join = self.allow_external_schedulers
@@ -766,6 +943,7 @@ class Incremental(
             "end_value": self.end_value,
             "last_value_func": getattr(self.last_value_func, "__name__", None),
             "primary_key": self._primary_key,
+            "partition_key": self.partition_key,
             "lag": self.lag,
             "range_start": None if self.range_start == "closed" else self.range_start,
             "range_end": None if self.range_end == "open" else self.range_end,
@@ -831,6 +1009,9 @@ class Incremental(
         if self._advanced:
             return rows
 
+        if self.is_partitioned:
+            return self._filter_partitioned(rows)
+
         transformer = self._get_transform(rows)
         if isinstance(rows, list):
             rows = [
@@ -879,6 +1060,136 @@ class Incremental(
         else:
             cached_state["unique_hashes"] = []
         return rows
+
+    def _filter_partitioned(self, rows: TDataItems) -> Optional[TDataItems]:
+        """Splits a batch by partition and filters every partition with its own cursor"""
+        # a list of dicts is a list of rows, a list of frames is a list of batches
+        if isinstance(rows, list) and not self._is_frame_list(rows):
+            # process consecutive rows of the same partition together, preserving row order
+            filtered: List[TDataItem] = []
+            run_partition: Optional[str] = None
+            run_value: Any = None
+            run_rows: List[TDataItem] = []
+
+            def _flush_run() -> None:
+                if not run_rows:
+                    return
+                cursor = self._get_partition_cursor(run_value)
+                part = cursor(run_rows)
+                if isinstance(part, list):
+                    filtered.extend(part)
+                elif part is not None:
+                    filtered.append(part)
+
+            for row in rows:
+                if row is None:
+                    continue
+                partition_value = self._resolve_partition_value(row)
+                partition_id = self.partition_state_key(partition_value)
+                if run_partition is not None and partition_id != run_partition:
+                    _flush_run()
+                    run_rows = []
+                run_partition = partition_id
+                run_value = partition_value
+                run_rows.append(row)
+            _flush_run()
+            return filtered or None
+
+        if not isinstance(rows, list):
+            if not (is_arrow_object(rows) or is_pandas_frame(rows) or is_polars_frame(rows)):
+                cursor = self._get_partition_cursor(self._resolve_partition_value(rows))
+                return cursor(rows)
+            return self._filter_partitioned_frame(rows)
+
+        filtered_frames: List[TDataItem] = []
+        for frame in rows:
+            part = self._filter_partitioned_frame(frame)
+            if part is not None:
+                filtered_frames.extend(part)
+        return filtered_frames or None
+
+    @staticmethod
+    def _is_frame_list(items: List[TDataItem]) -> bool:
+        return all(
+            is_arrow_object(item) or is_pandas_frame(item) or is_polars_frame(item)
+            for item in items
+        )
+
+    def _filter_partitioned_frame(self, frame: TDataItem) -> Optional[List[TDataItem]]:
+        """Filters an Arrow, pandas or polars frame partition by partition"""
+        from dlt.dataset.relation import Relation
+
+        if isinstance(frame, Relation):
+            raise ValueError(
+                "`Incremental` with `partition_key` does not support `Relation` items yet. Use a"
+                " cursor argument in the resource body or yield Python rows."
+            )
+        if is_pandas_frame(frame):
+            from dlt.common.libs.pandas import pandas_to_arrow
+
+            is_pandas = True
+            is_polars = False
+            table = pandas_to_arrow(frame)
+        elif is_polars_frame(frame):
+            from dlt.common.libs.polars import polars_to_arrow
+
+            is_pandas = False
+            is_polars = True
+            table = polars_to_arrow(frame)
+        elif is_arrow_object(frame):
+            from dlt.common.libs.pyarrow import pyarrow as pa
+
+            is_pandas = is_polars = False
+            table = frame if isinstance(frame, pa.Table) else pa.Table.from_batches([frame])
+        else:
+            raise ValueError(
+                f"Unsupported data item type for `Incremental` with `partition_key`:"
+                f" `{type(frame).__name__}`"
+            )
+
+        column_names = self._partition_key_columns()
+        missing = [name for name in column_names if name not in table.schema.names]
+        if missing:
+            raise IncrementalPartitionKeyMissing(self.resource_name, missing[0], frame)
+
+        grouped: Dict[str, Tuple[Any, List[int]]] = {}
+        for index, row in enumerate(table.select(column_names).to_pylist()):
+            # the same composite shape as object rows, so both formats share state keys
+            partition_value = (
+                row[column_names[0]]
+                if len(column_names) == 1
+                else [row[name] for name in column_names]
+            )
+            if partition_value is None:
+                raise IncrementalPartitionKeyMissing(self.resource_name, column_names[0], frame)
+            partition_id = self.partition_state_key(partition_value)
+            grouped.setdefault(partition_id, (partition_value, []))[1].append(index)
+
+        from dlt.common.libs.pyarrow import pyarrow as pa
+
+        all_indices = list(range(table.num_rows))
+        out: List[TDataItem] = []
+        for partition_value, indices in grouped.values():
+            cursor = self._get_partition_cursor(partition_value)
+            if len(indices) == len(all_indices):
+                part = table
+            else:
+                selected = set(indices)
+                part = table.filter(pa.array([i in selected for i in all_indices]))
+            filtered = cursor(part)
+            if filtered is None:
+                continue
+            if isinstance(frame, pa.RecordBatch):
+                out.extend(filtered.to_batches())
+            elif is_pandas:
+                out.append(filtered.to_pandas())
+            elif is_polars:
+                from dlt.common.libs import get_polars_module
+
+                out.append(get_polars_module().from_arrow(filtered))
+            else:
+                out.append(filtered)
+        return out
 
     def _check_duplicate_cursor_threshold(
         self, initial_hash_count: int, final_hash_count: int
@@ -1125,6 +1436,7 @@ __all__ = [
     "IncrementalResourceWrapper",
     "IncrementalColumnState",
     "IncrementalCursorPathMissing",
+    "IncrementalPartitionKeyMissing",
     "IncrementalPrimaryKeyMissing",
     "IncrementalUnboundError",
     "TIncrementalconfig",
