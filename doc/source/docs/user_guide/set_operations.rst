@@ -213,6 +213,42 @@ More examples
 A larger set of examples of the use of :meth:`~geopandas.GeoDataFrame.overlay` can be found `here <https://nbviewer.jupyter.org/github/geopandas/geopandas/blob/main/doc/source/gallery/overlays.ipynb>`_
 
 
+Reconcilable line intersections
+-------------------------------
+
+When two line networks (for example a construction road network and an
+existing inspection network) are overlaid, one source pair can meet in several
+disconnected places at once: isolated point crossings (inspection events) and
+coincident line segments (length that has to be patrolled). With the default
+``keep_geom_type=True``, the point parts are dropped from
+:meth:`~geopandas.GeoDataFrame.overlay`; even with
+``keep_geom_type=False`` both kinds of components are packed into one geometry
+collection per source pair and cannot be reconciled separately.
+
+:func:`~geopandas.line_intersection_views` leaves the default ``overlay``
+behaviour untouched and returns two independently reconcilable views:
+
+* ``segments`` holds the atomic, mutually exclusive pieces of the shared
+  physical network, with one row per piece and covering left/right source
+  pair. A piece covered by several source pairs is repeated with
+  ``shared_segment=True``, so the physical length is counted once per
+  ``segment_id`` while every source-pair claim is retained.
+* ``events`` holds one row per original point intersection, tagged with its
+  owning source pair. A point that lies on another source pair's coincident
+  segment keeps its identity as a point event
+  (``on_other_coincident_segment=True``).
+
+Both views carry the original left/right index labels (``left_idx`` /
+``right_idx``) together with positional source rows (``left_row`` /
+``right_row``), so duplicated index labels never break provenance and
+flattened output row numbers are never used as source identifiers. Source
+pairs without an intersection produce no inspection components at all.
+
+The views also provide reconciliation helpers:
+``LineIntersectionViews.unique_length_by_route`` sums the de-duplicated
+patrol length along each original route, while
+``LineIntersectionViews.pair_reconciliation`` reports the attributed line
+length and number of point events for every source pair.
 
 .. toctree::
    :maxdepth: 2

@@ -2,6 +2,14 @@
 
 ## Development version
 
+New features and improvements:
+
+- Added ``geopandas.line_intersection_views``, which builds two independently
+  reconcilable views of a line/line intersection: atomic shared segments with
+  per-source-pair provenance and de-duplicated physical length, and one event
+  row per original point intersection (flagged when it lies on another source
+  pair's coincident segment). The default ``overlay`` behaviour is unchanged.
+
 Bug fixes:
 
 - Fix the colorbar being shrunk when plotting with a ``"compressed"`` matplotlib

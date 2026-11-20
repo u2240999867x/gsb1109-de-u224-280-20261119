@@ -10,6 +10,7 @@ Tools
    sjoin
    sjoin_nearest
    overlay
+   line_intersection_views
    clip
    geocode
    reverse_geocode
