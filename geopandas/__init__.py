@@ -15,6 +15,7 @@ from geopandas.tools import (
     sjoin_nearest,
     overlay,
     clip,
+    coverage_audit,
     geocode,
     make_grid,
     reverse_geocode,

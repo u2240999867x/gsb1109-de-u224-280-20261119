@@ -1,4 +1,5 @@
 from .clip import clip
+from .coverage_audit import coverage_audit
 from .geocoding import geocode, reverse_geocode
 from .make_grid import make_grid
 from .overlay import overlay
@@ -8,6 +9,7 @@ from .util import collect
 __all__ = [
     "clip",
     "collect",
+    "coverage_audit",
     "geocode",
     "make_grid",
     "overlay",

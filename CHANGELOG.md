@@ -2,6 +2,15 @@
 
 ## Development version
 
+New features and improvements:
+
+- Added ``coverage_audit``, which clips parcel geometries against one or more
+  delivery-zone masks and accounts the covered area per mask and per feature.
+  It reports positive-area intersections, boundary-only contacts and actual
+  non-intersections separately, counts overlapping masks only once in the
+  per-feature totals, and keeps source and mask geometries as provenance for
+  every coverage value.
+
 Bug fixes:
 
 - Fix the colorbar being shrunk when plotting with a ``"compressed"`` matplotlib
