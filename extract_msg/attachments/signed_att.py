@@ -30,13 +30,27 @@ logger.addHandler(logging.NullHandler())
 
 
 class SignedAttachment:
-    def __init__(self, msg, data: bytes, name: str, mimetype: str, node: email.message.Message):
+    def __init__(self, msg, data: bytes, name: str, mimetype: str, node: email.message.Message,
+                 layer: str = 'signed', role: str = 'business', container = None,
+                 complete: bool = True, partIndex: Optional[int] = None, ambiguous: bool = False,
+                 **kwargs):
         """
         :param msg: The MSGFile instance this attachment is associated with.
         :param data: The bytes that compose this attachment.
         :param name: The reported name of the attachment.
         :param mimetype: The reported mimetype of the attachment.
         :param node: The email Message instance for this node.
+        :param layer: The layer of the message that this attachment came from.
+            ``"signed"`` for attachments inside a signed container and
+            ``"signature"`` for the detached signature part.
+        :param role: Either ``"business"`` or ``"signature"``. Signature parts
+            are made available for lookup but are not business attachments.
+        :param container: The raw attachment that acted as the signed
+            container, if any.
+        :param complete: Whether the signed container this attachment came from
+            was parsed completely.
+        :param partIndex: The position of the part inside the multipart data.
+        :param ambiguous: Whether the source container is ambiguous.
         """
         self.__asBytes = data
         self.__name = name
@@ -44,6 +58,12 @@ class SignedAttachment:
         self.__msg = makeWeakRef(msg)
         self.__node = node
         self.__treePath = msg.treePath + [makeWeakRef(self)]
+        self.__layer = layer
+        self.__role = role
+        self.__container = container
+        self.__complete = complete
+        self.__partIndex = partIndex
+        self.__ambiguous = ambiguous
 
         self.__data = b''
         # To add support for embedded MSG files, we are going to completely
@@ -206,10 +226,96 @@ class SignedAttachment:
         return self.__asBytes
 
     @property
+    def ambiguous(self) -> bool:
+        """
+        Whether the signed container this attachment came from could not be
+        unambiguously identified.
+
+        When this is ``True`` the attachment is preserved as ambiguous material
+        rather than being selected as the successful result of a search.
+        """
+        return self.__ambiguous
+
+    @property
+    def isAmbiguous(self) -> bool:
+        """
+        Alias of :attr:`ambiguous`.
+        """
+        return self.ambiguous
+
+    @property
+    def complete(self) -> bool:
+        """
+        Whether the signed container this attachment came from was parsed
+        completely.
+
+        ``False`` means the container was truncated or otherwise malformed and
+        must not be treated as a complete signed message. Any parts that could
+        still be read are still made available.
+        """
+        return self.__complete
+
+    @property
+    def isComplete(self) -> bool:
+        """
+        Alias of :attr:`complete`.
+        """
+        return self.complete
+
+    @property
+    def container(self):
+        """
+        The raw attachment that was identified as the signed container, if any.
+        """
+        return self.__container
+
+    containerAttachment = container
+
+    @property
     def contentID(self) -> None:
         return None
 
+    @property
+    def contentId(self) -> None:
+        return None
+
     cid = contentID
+
+    @property
+    def layer(self) -> str:
+        """
+        The layer of the message this attachment belongs to.
+
+        ``"signed"`` for business attachments found inside the signed
+        container, ``"signature"`` for the detached signature part.
+        """
+        return self.__layer
+
+    @property
+    def partIndex(self) -> Optional[int]:
+        """
+        The position of this part within the multipart data it was read from.
+        """
+        return self.__partIndex
+
+    @property
+    def role(self) -> str:
+        """
+        The role of this part: ``"business"`` or ``"signature"``.
+
+        Signature parts are available for lookup but are not counted as
+        business attachments.
+        """
+        return self.__role
+
+    @property
+    def isSignature(self) -> bool:
+        """
+        Whether this attachment is the detached signature part.
+
+        The signature part can be looked up but is not a business attachment.
+        """
+        return self.role == 'signature'
 
     @property
     def data(self) -> Union[bytes, MSGFile]:

@@ -323,8 +323,13 @@ class MessageBase(MSGFile):
                                            maintype = mainType,
                                            subtype = subType,
                                            cid = att.contentId)
+                    # SignedAttachment has no hidden or getFilename() because
+                    # those are properties of MSG attachments, so fall back to
+                    # sensible defaults for those.
+                    hidden = getattr(att, 'hidden', False)
+                    filename = att.getFilename() if hasattr(att, 'getFilename') else (att.name or '')
                     # This is just a very basic check.
-                    attachment['Content-Disposition'] = f'{"inline" if att.hidden else "attachment"}; filename="{att.getFilename()}"'
+                    attachment['Content-Disposition'] = f'{"inline" if hidden else "attachment"}; filename="{filename}"'
 
                     # Add the attachment.
                     msgMain.attach(attachment)

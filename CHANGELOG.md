@@ -1,3 +1,13 @@
+**Unreleased**
+* Signed messages are no longer assumed to store their signed container as the first (and only) attachment. Every binary attachment is examined as a possible container, so an ordinary attachment stored before the container no longer prevents the message from being read.
+* The detached signature part is no longer reported as a business attachment. `SignedAttachment.role`/`isSignature`, `MessageSignedBase.signatureParts`, and `MessageSignedBase.businessAttachments` make the distinction explicit while keeping the signature available for lookup.
+* `SignedAttachment` now reports the layer (`layer`), part index (`partIndex`), completeness (`complete`), ambiguity (`ambiguous`), and source container (`container`) of each part. Ordinary MSG attachments report the `"message"` layer through `AttachmentBase`.
+* `MessageSignedBase` now exposes `signedContainer`, `signedContainers`, `signedContainerComplete`, `signedMessageComplete`, `signedAmbiguous`, `ordinaryAttachments`, `rawSignedAttachments`, and `containerAttachments`.
+* Truncated or otherwise incomplete containers are no longer treated as complete signed messages. The readable parts are still returned, but `signedContainerComplete`/`signedMessageComplete` are `False` and every part of the container is marked incomplete.
+* If two attachments can each be explained as the signed container and the original file is not enough to decide, none is selected. Both candidates and their original positions are preserved as ambiguous material rather than choosing the one that happened to parse successfully.
+* `MessageSignedBase.attachments` no longer clobbers itself when `rawAttachments` is accessed first, and `signedBody`/`signedHtmlBody` can be read without triggering the attachment cache.
+* Signed parsing only describes the parts a message actually contains. It does not verify, validate, or otherwise determine the authenticity of a signature.
+
 **v0.58.2**
 * [[Advisory GHSA-6p33-92hw-4v86](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-6p33-92hw-4v86)] [[Advisory GHSA-cxpg-prmv-g4pp](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-cxpg-prmv-g4pp)] Fixed further attack vectors regarding the original advisory that were previously undiscovered. Most changes suggested in the new advisory were accepted as is, however a change was made to the handling of `srcset` to prevent it from being used at all if external files are not allowed.
 * Changed `setup.py` to exclude `extract_msg_tests` from installed packages.

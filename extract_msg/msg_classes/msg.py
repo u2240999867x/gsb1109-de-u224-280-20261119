@@ -917,10 +917,13 @@ class MSGFile:
             return any(x[-1].upper().endswith('001F') for x in self.listDir())
         return (val & 0x40000) != 0
 
-    @functools.cached_property
-    def attachments(self) -> Union[List[AttachmentBase], List[SignedAttachment]]:
+    def _getAttachments(self) -> List[AttachmentBase]:
         """
-        A list of all attachments.
+        Creates the list of attachments without caching it.
+
+        This exists so subclasses can access the raw (non-signed) attachments
+        without clobbering the cached ``attachments`` property with a different
+        result.
         """
         # Get the attachments.
         attachmentDirs = []
@@ -936,6 +939,13 @@ class MSGFile:
         self.__attachmentsReady = True
 
         return attachments
+
+    @functools.cached_property
+    def attachments(self) -> Union[List[AttachmentBase], List[SignedAttachment]]:
+        """
+        A list of all attachments.
+        """
+        return self._getAttachments()
 
     @property
     def attachmentsDelayed(self) -> bool:

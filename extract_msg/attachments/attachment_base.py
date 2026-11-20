@@ -584,6 +584,71 @@ class AttachmentBase(abc.ABC):
         """
         return self.getStringStream('__substg1.0_3001')
 
+    @property
+    def ambiguous(self) -> bool:
+        """
+        Whether this attachment's role in a signed message is ambiguous.
+
+        An attachment can be ambiguous when it could be the signed container but
+        the original message does not contain enough information to choose
+        between it and another candidate. Ordinary attachments are not
+        ambiguous.
+        """
+        return getattr(self, '_ambiguous', False)
+
+    @property
+    def complete(self) -> bool:
+        """
+        Whether the container this attachment belongs to was parsed completely.
+
+        Ordinary attachments are always considered complete. A signed container
+        that was truncated is marked incomplete instead.
+        """
+        return getattr(self, '_complete', True)
+
+    @property
+    def isAmbiguous(self) -> bool:
+        """
+        Alias of :attr:`ambiguous`.
+        """
+        return self.ambiguous
+
+    @property
+    def isComplete(self) -> bool:
+        """
+        Alias of :attr:`complete`.
+        """
+        return self.complete
+
+    @property
+    def isSignature(self) -> bool:
+        """
+        Whether this attachment is a detached signature part.
+
+        Ordinary MSG attachments are never signature parts.
+        """
+        return self.role == 'signature'
+
+    @property
+    def layer(self) -> str:
+        """
+        The layer of the message this attachment belongs to.
+
+        Ordinary MSG attachments belong to the ``"message"`` layer. Signed
+        containers and the parts inside them use a different layer on their
+        own attachment classes.
+        """
+        return 'message'
+
+    @property
+    def role(self) -> str:
+        """
+        The role of this attachment.
+
+        Ordinary MSG attachments are business attachments.
+        """
+        return 'business'
+
     @cached_property
     def exceptionReplaceTime(self) -> Optional[datetime.datetime]:
         """

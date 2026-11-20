@@ -1172,20 +1172,65 @@ def unwrapMsg(msg: MSGFile) -> Dict[str, List]:
     }
 
 
+_BOUNDARY_DEFECTS = frozenset({
+    'CloseBoundaryNotFoundDefect',
+    'MultipartInvariantViolationDefect',
+    'NoBoundaryInMultipartDefect',
+    'StartBoundaryNotFoundDefect',
+})
+
+# Content types that represent a detached signature rather than an ordinary
+# attachment. The second part of a multipart/signed message is treated as a
+# signature even when it does not use one of these types.
+_SIGNATURE_TYPES = frozenset({
+    'application/pgp-signature',
+    'application/pkcs7-signature',
+    'application/x-pkcs7-signature',
+})
+
+
+def _isSignatureType(contentType: str) -> bool:
+    """
+    Whether the specified content type represents a detached signature.
+    """
+    contentType = (contentType or '').lower()
+    return contentType in _SIGNATURE_TYPES or contentType.endswith('-signature')
+
+
+def _nodeHasBoundaryDefect(node: email.message.Message) -> bool:
+    """
+    Whether a node has a defect that indicates an incomplete MIME boundary.
+    """
+    return any(type(defect).__name__ in _BOUNDARY_DEFECTS for defect in getattr(node, 'defects', ()))
+
+
 def unwrapMultipart(mp: Union[bytes, str, email.message.Message]) -> Dict:
     """
     Unwraps a recursive multipart structure into a dictionary of linear lists.
 
-    Similar to unwrapMsg, but for multipart. The dictionary contains 3 keys:
-    "attachments" which contains a list of ``dict``\\s containing processed
-    attachment data as well as the Message instance associated with it,
-    "plain_body" which contains the plain text body, and "html_body" which
-    contains the HTML body.
+    Similar to unwrapMsg, but for multipart. The dictionary contains the
+    following keys:
+
+    * ``"attachments"``: a list of ``dict``\\s for business attachments. The
+      detached signature part is *not* included here.
+    * ``"signature_parts"``: a list of ``dict``\\s for detached signature
+      parts. These can be looked up but are not business attachments.
+    * ``"plain_body"``: the plain text body, if found.
+    * ``"html_body"``: the HTML body, if found.
+    * ``"complete"``: ``False`` when a multipart boundary was incomplete or a
+      multipart/signed node did not contain a usable signature part.
+    * ``"has_signed_container"``: whether a multipart/signed node was found.
 
     For clarification, each instance of processed attachment data is a ``dict``
     with keys identical to the args used for the ``SignedAttachment``
-    constructor. This makes it easy to expand for use in constructing a
-    ``SignedAttachment``. The only argument missing is "msg" to ensure this function will not require one.
+    constructor, plus the layer, role, part index, and completeness of the
+    source. This makes it easy to expand for use in constructing a
+    ``SignedAttachment``. The only argument missing is "msg" to ensure this
+    function will not require one.
+
+    This function only describes the parts that are actually present. It does
+    not verify, validate, or otherwise determine the authenticity of a
+    signature.
 
     :param mp: The bytes that make up a multipart, the string that makes up a
         multipart, or a ``Message`` instance from the ``email`` module created
@@ -1213,35 +1258,81 @@ def unwrapMultipart(mp: Union[bytes, str, email.message.Message]) -> Dict:
     else:
         raise TypeError(f'Unsupported type "{type(mp)}" provided to unwrapMultipart.')
 
-    # Okay, now that we have it in a useable form, let's do the most basic
-    # unwrapping possible. Once the most basic unwrapping is done, we can
-    # actually process the data. For this, we only care if the section is
-    # multipart or not. If it is, it get's unwrapped too.
-    #
-    # In case you are curious, this is effectively doing a breadth first
-    # traversal of the tree.
-    dataNodes = []
-
-    toProcess = collections.deque((mpMessage,))
-    # I do know about the walk method, but it might *also* walk embedded
-    # messages which we very much don't want.
+    # Do a breadth first traversal of the tree, keeping track of each node's
+    # parent and its original position. We do not use ``walk`` because that can
+    # also walk embedded messages, which we very much do not want.
+    allNodes: List[tuple] = []
+    toProcess = collections.deque(((mpMessage, None, 0),))
     while len(toProcess) > 0:
-        currentItem = toProcess.popleft()
+        currentNode, parent, position = toProcess.popleft()
+        allNodes.append((currentNode, parent, position))
         # 'multipart' indicates that it shouldn't contain any data itself, just
         # other nodes to go through.
-        if currentItem.get_content_maintype() == 'multipart':
-            payload = currentItem.get_payload()
+        if currentNode.get_content_maintype() == 'multipart':
+            payload = currentNode.get_payload()
             # For multipart, the payload should be a list, but handle it not
             # being one.
             if isinstance(payload, list):
-                toProcess.extend(payload)
+                for index, child in enumerate(payload):
+                    toProcess.append((child, currentNode, index))
             else:
                 logging.warning('Found multipart node that did not return a list. Appending as a data node.')
-                dataNodes.append(currentItem)
-        else:
-            # The opposite is *not* true. If it's not multipart, always add as a
-            # data node.
-            dataNodes.append(currentItem)
+
+    # Determine completeness and identify the detached signature parts. A
+    # multipart/signed node is expected to end with a single, non-multipart
+    # signature part. Anything else means the container was not parsed in full.
+    complete = True
+    hasSignedContainer = False
+    signatureIds = set()
+    for node, _, _ in allNodes:
+        if _nodeHasBoundaryDefect(node):
+            complete = False
+
+        contentType = node.get_content_type()
+        if contentType != 'multipart/signed':
+            continue
+
+        hasSignedContainer = True
+        if not node.is_multipart():
+            # The container was declared but could not be parsed as multipart.
+            complete = False
+            continue
+
+        payload = node.get_payload()
+        if not isinstance(payload, list) or len(payload) < 2:
+            # A clear signed message must have content and a signature.
+            complete = False
+            continue
+
+        signaturePart = payload[-1]
+        if signaturePart.is_multipart():
+            complete = False
+            continue
+
+        # The last part of a multipart/signed node is the signature, even if it
+        # does not use a conventional signature content type.
+        signatureIds.add(id(signaturePart))
+        if not _isSignatureType(signaturePart.get_content_type()) and signaturePart.get_filename():
+            # A signature part should not present itself as an ordinary
+            # attachment. If it does, the container is unusual enough that we
+            # cannot call it completely parsed.
+            complete = False
+
+    # A signature-typed part is only treated as a detached signature when it is
+    # inside a multipart/signed subtree. Elsewhere it may just be an ordinary
+    # attachment that happens to use a signature content type.
+    parents = {id(node): parent for node, parent, _ in allNodes}
+
+    def isSignatureNode(node: email.message.Message) -> bool:
+        if id(node) in signatureIds:
+            return True
+        if _isSignatureType(node.get_content_type()):
+            current = parents.get(id(node))
+            while current is not None:
+                if current.get_content_type() == 'multipart/signed':
+                    return True
+                current = parents.get(id(current))
+        return False
 
     # At this point, all of our nodes should have processed and we should now
     # have data nodes. Now let's process them. For anything that was parsed as
@@ -1249,16 +1340,24 @@ def unwrapMultipart(mp: Union[bytes, str, email.message.Message]) -> Dict:
     # If they user wants to process that message in some way, they can do it
     # themself.
     attachments = []
+    signatureParts = []
     plainBody = None
     htmlBody = None
 
-    for node in dataNodes:
+    for partIndex, (node, _, _) in enumerate((x for x in allNodes if not x[0].is_multipart())):
+        isSignature = isSignatureNode(node)
+
         # Let's setup our attachment we are going to use.
         attachment = {
             'data': None,
             'name': node.get_filename(),
             'mimetype': node.get_content_type(),
             'node': node,
+            'layer': 'signature' if isSignature else 'signed',
+            'role': 'signature' if isSignature else 'business',
+            'partIndex': partIndex,
+            'complete': complete,
+            'ambiguous': False,
         }
 
         # Finally, we need to get the data. As we need to ensure it is bytes,
@@ -1282,25 +1381,30 @@ def unwrapMultipart(mp: Union[bytes, str, email.message.Message]) -> Dict:
 
         attachment['data'] = data
 
+        if isSignature:
+            signatureParts.append(attachment)
         # Now for the fun part, figuring out if we actually have an attachment.
-        if attachment['name']:
+        elif attachment['name']:
             attachments.append(attachment)
         elif attachment['mimetype'] == 'text/plain':
-            if plainBody:
+            if plainBody is not None:
                 logger.warning('Found multiple candidates for plain text body.')
             # We need to get the content again and ensure it is a string. If
             # not, decode it to one.
             content = inputToString(node.get_content(), node.get_content_charset('utf-8'))
             plainBody = content
         elif attachment['mimetype'] == 'text/html':
-            if htmlBody:
+            if htmlBody is not None:
                 logger.warning('Found multiple candidates for HTML body.')
             htmlBody = data
 
     return {
         'attachments': attachments,
+        'signature_parts': signatureParts,
         'plain_body': plainBody,
         'html_body': htmlBody,
+        'complete': complete,
+        'has_signed_container': hasSignedContainer,
     }
 
 
