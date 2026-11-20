@@ -8,6 +8,15 @@ etlhelper
     :members:
 
 
+etlhelper.provenance
+^^^^^^^^^^^^^^^^^^^^
+
+.. automodule:: etlhelper.provenance
+    :members: Provenance, SourceRef, Output, NO_SOURCE, with_source,
+              with_sources, with_provenance, no_source, unwrap_row,
+              get_sources, get_provenance
+
+
 etlhelper.row_factories
 ^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -43,3 +52,4 @@ Exceptions
 .. autoclass:: etlhelper.exceptions.ETLHelperAbort
 .. autoclass:: etlhelper.exceptions.ETLHelperHelperError
 .. autoclass:: etlhelper.exceptions.ETLHelperBadIdentifierError
+.. autoclass:: etlhelper.exceptions.ETLHelperInvalidSourceError

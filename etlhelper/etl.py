@@ -16,7 +16,6 @@ from collections.abc import (
 )
 from typing import (
     Any,
-    NamedTuple,
     Optional,
 )
 
@@ -30,6 +29,13 @@ from etlhelper.exceptions import (
     ETLHelperExtractError,
     ETLHelperInsertError,
     ETLHelperQueryError,
+)
+from etlhelper.provenance import (
+    Output,
+    get_provenance,
+    pragmatic_output_row,
+    prepare_output,
+    unwrap_row,
 )
 from etlhelper.row_factories import dict_row_factory
 from etlhelper.types import (
@@ -45,9 +51,67 @@ logger = logging.getLogger('etlhelper')
 CHUNKSIZE = 5000
 
 
-class FailedRow(NamedTuple):
-    row: Row
-    exception: Exception
+class FailedRow(tuple):
+    """
+    A row that failed to insert, along with its exception and source rows.
+
+    For backwards compatibility this is a two-item tuple: iterating over it,
+    indexing it or unpacking it yields only ``(row, exception)``.  Source
+    information is available via the ``sources`` / ``source_rows`` attributes
+    and is ``None`` when the row has no recorded provenance.
+    """
+
+    _fields = ("row", "exception")
+    __match_args__ = ("row", "exception")
+
+    def __new__(cls, row, exception, sources=None, provenance=None):
+        self = super().__new__(cls, (row, exception))
+        self.sources = sources
+        self.provenance = provenance
+        return self
+
+    @property
+    def row(self):
+        return self[0]
+
+    @property
+    def exception(self):
+        return self[1]
+
+    @property
+    def source_rows(self):
+        return self.sources
+
+    @property
+    def inputs(self):
+        return self.sources
+
+    @property
+    def source(self):
+        """The only source row, or all sources when there are several."""
+        if not self.sources:
+            return None
+        if len(self.sources) == 1:
+            return self.sources[0]
+        return self.sources
+
+    def _asdict(self):
+        return {"row": self.row, "exception": self.exception}
+
+    def _replace(self, **changes):
+        return type(self)(
+            changes.get("row", self.row),
+            changes.get("exception", self.exception),
+            sources=changes.get("sources", self.sources),
+            provenance=changes.get("provenance", self.provenance),
+        )
+
+    def __repr__(self):
+        if self.sources is None:
+            return f"FailedRow(row={self.row!r}, exception={self.exception!r})"
+        return (f"FailedRow(row={self.row!r}, exception={self.exception!r}, "
+                f"sources={self.sources!r})")
+
 
 
 def iter_chunks(
@@ -128,11 +192,13 @@ def iter_chunks(
                 return
 
             # Apply row_factory
-            rows = (create_row(row) for row in rows)
+            rows = [create_row(row) for row in rows]
 
-            # Apply transform
+            # Apply transform.  The exact input row objects are retained so
+            # that provenance references can be validated by identity rather
+            # than by value, ID or position.
             if transform:
-                rows = transform(rows)
+                rows = _transform_chunk(rows, transform)
 
             # Return data
             yield rows
@@ -230,6 +296,76 @@ def fetchall(
                           chunk_size=chunk_size))
 
 
+def _transform_chunk(chunk: Chunk, transform: Transform) -> Chunk:
+    """
+    Apply ``transform`` to ``chunk`` and normalise any provenance wrappers
+    that it returns.
+
+    Source rows are validated against the exact objects passed to the
+    transform.  An invalid reference raises
+    :class:`~etlhelper.exceptions.ETLHelperInvalidSourceError` before the
+    output is returned for writing.
+    """
+    input_rows = list(chunk)
+    transformed = transform(chunk)
+
+    outputs = []
+    for item in transformed:
+        outputs.append(prepare_output(item, input_rows))
+    return outputs
+
+
+def _normalise_chunk(chunk: Chunk) -> Chunk:
+    """
+    Normalise rows when no transform is applied.
+
+    Anything that is already an :class:`Output` was validated when it was
+    created (e.g. by a transform or by the caller) and is left untouched.
+    Other explicit wrapper forms are coerced against the rows in this chunk.
+    """
+    input_rows = list(chunk)
+    return [
+        item if isinstance(item, Output)
+        else prepare_output(item, input_rows)
+        for item in chunk
+    ]
+
+
+def _unwrap_chunk(chunk: Chunk) -> tuple[Chunk, list]:
+    """
+    Split a chunk into database rows and their provenance metadata.
+
+    :param chunk: transform outputs, which may include provenance wrappers
+    :return: tuple of (rows to send to the database, provenance list)
+    """
+    rows = []
+    provenance = []
+    for item in chunk:
+        rows.append(unwrap_row(item))
+        provenance.append(get_provenance(item))
+    return rows, provenance
+
+
+def _execute_with_provenance(
+        query: str,
+        conn: Connection,
+        chunk: Chunk,
+        provenance: list,
+        ) -> list[FailedRow]:
+    """Retry a chunk row-by-row, retaining each row's provenance."""
+    failed_rows: list[FailedRow] = []
+
+    for row, prov in zip(chunk, provenance):
+        try:
+            execute(query, conn, parameters=row)
+        except ETLHelperQueryError as exc:
+            sources = None if prov is None else prov.sources
+            failed_rows.append(FailedRow(row, exc, sources=sources,
+                                         provenance=prov))
+
+    return failed_rows
+
+
 def executemany(
         query: str,
         conn: Connection,
@@ -257,6 +393,12 @@ def executemany(
     a long-running insert do not require all data to be loaded again.  The
     disadvantage is that investigation may be required to determine exactly
     which records have been successfully transferred.
+
+    A transform may wrap output rows with source information via
+    :func:`~etlhelper.with_source` or :func:`~etlhelper.with_sources`.  Only
+    the business rows are written; each failed row returned to ``on_error``
+    carries the corresponding source rows in its ``sources`` attribute.  This
+    is independent of ``chunk_size``.
 
     :param query: SQL insert command with placeholders for data
     :param conn: dbapi connection
@@ -287,7 +429,20 @@ def executemany(
             # Apply transform
             if transform:
                 # Materialise chunk as list as `transform` can return generator
-                chunk = list(transform(chunk))
+                chunk = _transform_chunk(chunk, transform)
+            else:
+                chunk = _normalise_chunk(chunk)
+
+            # Separate business rows from optional provenance.  Only rows are
+            # ever sent to the database.
+            chunk, provenance = _unwrap_chunk(chunk)
+
+            # Nothing to insert (e.g. transform filtered every row)
+            if not chunk:
+                logger.info('%s rows processed (%s failed)', processed, failed)
+                if commit_chunks:
+                    conn.commit()
+                continue
 
             # Show first row as example of data
             if processed == 0:
@@ -309,7 +464,8 @@ def executemany(
                     logger.setLevel(logging.ERROR)
 
                     try:
-                        failed_rows = _execute_by_row(query, conn, chunk)
+                        failed_rows = _execute_with_provenance(
+                            query, conn, chunk, provenance)
                     finally:
                         # Restore logging
                         logger.setLevel(old_level)
@@ -348,21 +504,17 @@ def _execute_by_row(
     Retry execution of rows individually and return failed rows along with
     their errors. Successful inserts are committed.
 
+    Rows may include provenance wrappers; these are unwrapped before being
+    sent to the database but their source information is retained on any
+    resulting :class:`FailedRow`.
+
     :param query: SQL query with placeholders for data
     :param conn: dbapi connection
     :param chunk: list of rows
     :return: a list failed rows
     """
-    failed_rows: list[FailedRow] = []
-
-    for row in chunk:
-        try:
-            # Use etlhelper execute to isolate transactions
-            execute(query, conn, parameters=row)
-        except ETLHelperQueryError as exc:
-            failed_rows.append(FailedRow(row, exc))
-
-    return failed_rows
+    rows, provenance = _unwrap_chunk(chunk)
+    return _execute_with_provenance(query, conn, rows, provenance)
 
 
 def copy_rows(
@@ -551,9 +703,12 @@ def load(
             # next(iter(var)) is equivalent to var[0] but also works for generators,
             # which may be returned by the transform.
             # We need a deepcopy to stop the first row being transformed twice.
+            # This probe only determines the insert columns, so provenance is
+            # unwrapped but not validated.
             first_row_transformed = next(iter(transform([deepcopy(first_row)])))
+            first_row_transformed = pragmatic_output_row(first_row_transformed)
         else:
-            first_row_transformed = first_row
+            first_row_transformed = unwrap_row(first_row)
 
     except StopIteration:
         return 0, 0

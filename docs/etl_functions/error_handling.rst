@@ -78,6 +78,59 @@ The IDs of failed rows can be written to a file.
 take an ``on_error`` parameter. They each return a tuple containing the
 number of rows processed and the number of rows that failed.
 
+.. _source_rows:
+
+Source rows of failed outputs
+-----------------------------
+
+When a transform function creates output rows from input rows, it can attach
+the input rows that produced each output.  If the database rejects an output,
+the corresponding failed row carries this source information in its
+``sources`` (also available as ``source_rows``) attribute.  This makes it
+possible to trace a rejected output back to the original records.
+
+Attach sources with :func:`with_sources <etlhelper.with_sources>` (several
+inputs), :func:`with_source <etlhelper.with_source>` (one input) or
+:func:`no_source <etlhelper.no_source>` (explicitly no confirmable source):
+
+.. code:: python
+
+   from etlhelper import with_source, with_sources, no_source
+
+   def transform(chunk):
+       by_station = {row["station"]: row for row in chunk if not row["void"]}
+
+       comparison = {"kind": "comparison", "value": 20.0}
+       flag_a = {"kind": "flag", "value": 1.0}
+       flag_b = {"kind": "flag", "value": 1.0}
+
+       yield with_source(flag_a, by_station["A"])
+       yield with_sources(comparison, [by_station["A"], by_station["B"]])
+       yield with_sources(flag_b, [by_station["B"]])
+
+   def on_error(failed_rows):
+       for failed in failed_rows:
+           row, exception = failed
+           print(f"Rejected {row} due to {exception}")
+           print(f"Source rows: {failed.sources}")
+
+Sources must be rows from the same transform input.  They are matched by
+object identity, never by field values, record IDs or position in the chunk.
+Two outputs with identical fields remain distinct, and a source must have
+been part of the input block; an
+:class:`ETLHelperInvalidSourceError <etlhelper.exceptions.ETLHelperInvalidSourceError>`
+is raised before any output from that block is written if a source was not.
+
+Only business rows are sent to the database: provenance wrappers are removed
+before the query parameters are built.  A transform that returns only rows,
+and an ``on_error`` function that expects ``(row, exception)`` tuples, continue
+to work unchanged.  ``FailedRow`` still behaves as a two-item tuple when
+unpacked; source information is available as an attribute.
+
+Source information is recorded per output, not per write batch.  A rejected
+output therefore reports the same sources regardless of the ``chunk_size``
+used to write it.
+
 
 Error handling via SQL
 ----------------------

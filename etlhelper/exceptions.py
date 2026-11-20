@@ -41,3 +41,16 @@ class ETLHelperBadIdentifierError(ETLHelperError):
     Exception raised when identifier contains invalid characters.  This may
     indicate an attempt at SQL injection.
     """
+
+
+class ETLHelperInvalidSourceError(ETLHelperError, ValueError):
+    """
+    Exception raised when a transform output refers to a source row that was
+    not part of the same transform input chunk.
+    """
+
+
+# Aliases used in different parts of the documentation/codebase.
+ETLHelperProvenanceError = ETLHelperInvalidSourceError
+ETLHelperInvalidReferenceError = ETLHelperInvalidSourceError
+ETLHelperSourceError = ETLHelperInvalidSourceError
