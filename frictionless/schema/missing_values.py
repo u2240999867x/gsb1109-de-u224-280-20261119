@@ -101,6 +101,57 @@ def export(
     ]
 
 
+# Legacy (Data Package v1) export
+#
+# A v1 descriptor only accepts plain string `missingValues` entries: the
+# object form `{value, label?}` is a v2 addition. A legacy export therefore
+# keeps the plain string tokens (which carry the missing/real distinction)
+# and moves the labels — the missing *reasons* a v1 reader cannot store — to
+# a side-car custom property a v1 repository simply ignores.
+#
+# The two pieces are deliberately split, never merged into the tokens
+# themselves: renaming a token to encode its reason (e.g. "9999" ->
+# "NOT_MEASURED") would change which source cells are recognized as missing,
+# and collapsing two labeled tokens into one would conflate two reasons.
+
+LEGACY_LABELS_KEY = "x-missingValueLabels"
+"""Custom descriptor property carrying the `value -> label` (reason) side-car
+of a legacy export, at schema level and (for field-scoped entries) on the
+field itself. Unknown to v1 readers, which ignore custom properties."""
+
+
+def legacy_sidecar(values: List[str], labels: Dict[str, str]) -> Dict[str, str]:
+    """Render the reason side-car of a legacy export (empty if no labels)"""
+    return {value: labels[value] for value in values if value in labels}
+
+
+def legacy_conflict_notes(
+    scope: str, canonical: List[str], configured: List[str]
+) -> List[str]:
+    """Notes when a configured legacy token set changes the missing judgments
+
+    A legacy export is lossless only when its plain string tokens recognize
+    exactly the same cells as the v2 descriptor: every extra token would turn
+    a currently valid value into a missing one, every dropped token would
+    turn a documented missing value into a real one. Returns one note per
+    diverging token (an empty list means the configuration is lossless).
+    """
+    notes: List[str] = []
+    canonical_set = set(canonical)
+    configured_set = set(configured)
+    for value in sorted(configured_set - canonical_set):
+        notes.append(
+            f'{scope}: legacy missing value "{value}" is not a missing value '
+            "in the source descriptor and would turn a valid value into missing"
+        )
+    for value in sorted(canonical_set - configured_set):
+        notes.append(
+            f'{scope}: missing value "{value}" would be dropped from the legacy '
+            "descriptor and turn a documented missing value into a real one"
+        )
+    return notes
+
+
 def _duplicates(values: List[str]) -> List[str]:
     """Values appearing more than once, each reported once in order"""
     seen: set[str] = set()

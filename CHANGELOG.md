@@ -2,6 +2,18 @@
 
 Here described only the breaking and most significant changes. The full changelog and documentation for all released versions could be found in nicely formatted [commit history](https://github.com/frictionlessdata/frictionless-py/commits/main).
 
+## Unreleased
+
+- feat: export validated v2 schemas and rows for legacy (Data Package v1)
+  readers through `LegacyExporter`. Labeled `missingValues` objects are
+  downgraded to the plain string tokens a v1 repository understands, while the
+  labels (missing reasons) move to an ignored `x-missingValueLabels` side-car
+  so reasons stay traceable per source row and are never rewritten. A
+  configured legacy token set that would change a true/missing judgment
+  (e.g. swallow a real device number) raises with the full list of conflicts
+  and delivers nothing; required-field missing inputs are kept as traceable
+  rejection records.
+
 ## v5.21.0
 
 - feat: Data Package v2, support `exclusiveMinimum`, `exclusiveMaximum` 

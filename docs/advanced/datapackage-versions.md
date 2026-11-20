@@ -85,3 +85,51 @@ resolves to `"unknown"` (permissive).
 package = Package("package-v1.json")
 v2_package = package.upgrade()  # a new, v2 instance
 ```
+
+## Exporting to a legacy (v1) repository
+
+A v1 repository only understands plain string `missingValues` entries: the v2
+object form `{value, label?}` cannot be written into a v1 descriptor, and a
+label carries the *reason* of a missing value (e.g. "not measured" vs
+"downtime"), which feeds different downstream statistics and must never be
+rewritten into another reason. `LegacyExporter` performs a lossless split:
+
+- the plain string tokens stay in `missingValues`, so the v1 reader keeps
+  distinguishing real values from missing ones exactly as the v2 descriptor
+  does — a cell is missing if and only if its string is one of the tokens;
+- the labels move to an `x-missingValueLabels` side-car (a custom property a
+  v1 reader ignores), at schema scope and on each field declaring its own
+  `missingValues`, keeping every reason recoverable per token and therefore
+  per source row;
+- rows are written as plain strings: missing inputs are written back as their
+  declared token, and a missing input on a required field is additionally
+  kept as a traceable rejection record carrying the original reason.
+
+```python
+from frictionless import Schema
+from frictionless import LegacyExporter
+
+schema = Schema.from_descriptor("schema-v2.json")
+exporter = LegacyExporter(schema=schema)
+legacy_descriptor = exporter.to_descriptor()  # plain strings + reason side-car
+rows = exporter.write_rows(source_rows)
+```
+
+The delivered descriptor carries no `$schema` (an absent `$schema` is itself
+an explicit v1), reopens unchanged in a v1 repository, and keeps the same
+missing and required judgments as the source.
+
+A configured legacy token set is accepted only when it recognizes exactly the
+same cells as the v2 descriptor. Any extra token — for instance a legacy
+missing word that would turn a real device number into a missing value — or
+any dropped token, which would resurrect a documented missing value, is a
+conflict: the exporter raises `FrictionlessException` with one reason per
+conflict and delivers neither a descriptor nor data, instead of silently
+changing the true/missing judgments.
+
+```python
+LegacyExporter(
+    schema=schema,
+    field_missing_values={"device": ["", "9999"]},  # 9999 is a real device number
+).to_descriptor()  # raises: the valid value would vanish
+```

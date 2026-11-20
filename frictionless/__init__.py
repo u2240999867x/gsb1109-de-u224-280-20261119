@@ -38,6 +38,10 @@ from .report import Report as Report
 from .report import ReportTask as ReportTask
 from .resource import Resource as Resource
 from .schema import Field as Field
+from .schema import LegacyExporter as LegacyExporter
+from .schema import LegacyMissingCell as LegacyMissingCell
+from .schema import LegacyRejection as LegacyRejection
+from .schema import LegacyRow as LegacyRow
 from .schema import Schema as Schema
 from .settings import VERSION as __version__
 from .system import Adapter as Adapter
