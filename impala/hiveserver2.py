@@ -33,7 +33,7 @@ from impala._thrift_gen.TCLIService.ttypes import (
     TFetchOrientation, TGetResultSetMetadataReq, TStatusCode,
     TGetColumnsReq, TGetSchemasReq, TGetTablesReq, TGetFunctionsReq,
     TGetOperationStatusReq, TOperationState, TCancelOperationReq,
-    TCloseOperationReq, TGetLogReq, TProtocolVersion)
+    TCloseOperationReq, TGetLogReq, TProtocolVersion, TStringColumn)
 from impala._thrift_gen.ImpalaService.ImpalaHiveServer2Service import (
     TGetRuntimeProfileReq, TGetExecSummaryReq, TCloseImpalaOperationReq)
 from impala._thrift_api import (
@@ -83,7 +83,7 @@ class HiveServer2Connection(Connection):
 
     def cursor(self, user=None, configuration=None, convert_types=True,
                dictify=False, fetch_error=True, close_finished_queries=True,
-               convert_strings_to_unicode=True):
+               convert_strings_to_unicode=True, raw_columnar=False):
         """Get a cursor from the HiveServer2 (HS2) connection.
 
         Parameters
@@ -130,6 +130,22 @@ class HiveServer2Connection(Connection):
             Before closing the query GetLog() is called as this will be no longer
             possible after closing.
             The Default option is `True`.
+        raw_columnar : bool, optional
+            When `True`, columnar result batches (`fetchcbatch` /
+            `fetchcolumnar`) preserve the payload exactly as delivered by
+            the server instead of converting it to Python objects: no
+            `datetime`/`Decimal`/`date` parsing is applied, DECIMAL and
+            TIMESTAMP values stay as their transported text (never going
+            through float), and BINARY values stay as `bytes`. Each returned
+            `CBatch` exposes `column_records`, a list of `ColumnTypeRecord`
+            objects keyed by column position (so duplicate column aliases
+            never overwrite each other) describing the declared SQL type,
+            the transport representation, the logical Python interpretation
+            and whether a lossy conversion took place. Type declarations
+            always come from the result-set metadata, never from sampled
+            values, and null-masked placeholder values are not exposed as
+            data. Only applies when using HS2 protocol versions > 6.
+            The Default option is `False`.
 
 
         Returns
@@ -157,7 +173,8 @@ class HiveServer2Connection(Connection):
         cursor = cursor_class(session, convert_types=convert_types,
                               fetch_error=fetch_error,
                               close_finished_queries=close_finished_queries,
-                              convert_strings_to_unicode=convert_strings_to_unicode)
+                              convert_strings_to_unicode=convert_strings_to_unicode,
+                              raw_columnar=raw_columnar)
 
         if self.default_db is not None:
             log.info('Using database %s as default', self.default_db)
@@ -175,10 +192,11 @@ class HiveServer2Cursor(Cursor):
     # they are instantiated with alive session_handles
 
     def __init__(self, session, convert_types=True, fetch_error=True, close_finished_queries=True,
-                 convert_strings_to_unicode=True):
+                 convert_strings_to_unicode=True, raw_columnar=False):
         self.session = session
         self.convert_types = convert_types
         self.convert_strings_to_unicode = convert_strings_to_unicode
+        self.raw_columnar = raw_columnar
         self.fetch_error = fetch_error
         self.close_finished_queries = close_finished_queries
 
@@ -586,7 +604,8 @@ class HiveServer2Cursor(Cursor):
                          self.description,
                          self.buffersize,
                          convert_types=self.convert_types,
-                         convert_strings_to_unicode=self.convert_strings_to_unicode))
+                         convert_strings_to_unicode=self.convert_strings_to_unicode,
+                         raw_columnar=self.raw_columnar))
             if len(batch) == 0:
                return None
             return batch
@@ -637,7 +656,8 @@ class HiveServer2Cursor(Cursor):
                          self.description,
                          self.buffersize,
                          convert_types=self.convert_types,
-                         convert_strings_to_unicode=self.convert_strings_to_unicode))
+                         convert_strings_to_unicode=self.convert_strings_to_unicode,
+                         raw_columnar=self.raw_columnar))
             if len(batch) == 0:
                 if not batch.expect_more_rows:
                     break
@@ -680,7 +700,8 @@ class HiveServer2Cursor(Cursor):
                 self._buffer = self._last_operation.fetch(self.description,
                     self.buffersize,
                     convert_types=self.convert_types,
-                    convert_strings_to_unicode=self.convert_strings_to_unicode)
+                    convert_strings_to_unicode=self.convert_strings_to_unicode,
+                    raw_columnar=self.raw_columnar)
                 if len(self._buffer) > 0:
                     return
                 if not self._buffer.expect_more_rows:
@@ -828,29 +849,162 @@ class HiveServer2DictCursor(HiveServer2Cursor):
 
 
 # mapping between the schema types (based on
-# com.cloudera.impala.catalog.PrimitiveType) and TColumnValue (in returned
-# rows) helper object for converting from TRow to something friendlier
-_TTypeId_to_TColumnValue_getters = {
-    'BOOLEAN': operator.attrgetter('boolVal'),
-    'TINYINT': operator.attrgetter('byteVal'),
-    'SMALLINT': operator.attrgetter('i16Val'),
-    'INT': operator.attrgetter('i32Val'),
-    'BIGINT': operator.attrgetter('i64Val'),
-    'TIMESTAMP': operator.attrgetter('stringVal'),
-    'FLOAT': operator.attrgetter('doubleVal'),
-    'DOUBLE': operator.attrgetter('doubleVal'),
-    'STRING': operator.attrgetter('stringVal'),
-    'DECIMAL': operator.attrgetter('stringVal'),
-    'BINARY': operator.attrgetter('binaryVal'),
-    'VARCHAR': operator.attrgetter('stringVal'),
-    'CHAR': operator.attrgetter('stringVal'),
-    'MAP': operator.attrgetter('stringVal'),
-    'ARRAY': operator.attrgetter('stringVal'),
-    'STRUCT': operator.attrgetter('stringVal'),
-    'UNIONTYPE': operator.attrgetter('stringVal'),
-    'NULL': operator.attrgetter('stringVal'),
-    'DATE': operator.attrgetter('stringVal')
+# com.cloudera.impala.catalog.PrimitiveType) and the TColumnValue field that
+# carries the values on the wire
+_TTypeId_to_TColumnValue_fields = {
+    'BOOLEAN': 'boolVal',
+    'TINYINT': 'byteVal',
+    'SMALLINT': 'i16Val',
+    'INT': 'i32Val',
+    'BIGINT': 'i64Val',
+    'TIMESTAMP': 'stringVal',
+    'FLOAT': 'doubleVal',
+    'DOUBLE': 'doubleVal',
+    'STRING': 'stringVal',
+    'DECIMAL': 'stringVal',
+    'BINARY': 'binaryVal',
+    'VARCHAR': 'stringVal',
+    'CHAR': 'stringVal',
+    'MAP': 'stringVal',
+    'ARRAY': 'stringVal',
+    'STRUCT': 'stringVal',
+    'UNIONTYPE': 'stringVal',
+    'NULL': 'stringVal',
+    'DATE': 'stringVal'
 }
+
+# helper objects for converting from TRow to something friendlier
+_TTypeId_to_TColumnValue_getters = {
+    type_: operator.attrgetter(field)
+    for (type_, field) in _TTypeId_to_TColumnValue_fields.items()
+}
+
+# mapping between the schema types and the logical Python interpretation
+# applied by impyla when converting values
+_TTypeId_to_python_type = {
+    'BOOLEAN': 'bool',
+    'TINYINT': 'int',
+    'SMALLINT': 'int',
+    'INT': 'int',
+    'BIGINT': 'int',
+    'TIMESTAMP': 'datetime.datetime',
+    'FLOAT': 'float',
+    'DOUBLE': 'float',
+    'STRING': 'str',
+    'DECIMAL': 'decimal.Decimal',
+    'BINARY': 'bytes',
+    'VARCHAR': 'str',
+    'CHAR': 'str',
+    'MAP': 'str',
+    'ARRAY': 'str',
+    'STRUCT': 'str',
+    'UNIONTYPE': 'str',
+    'NULL': 'NoneType',
+    'DATE': 'datetime.date'
+}
+
+# types that HS2 transmits as strings
+_HS2_STRING_TYPES = ("STRING", "LIST", "MAP", "STRUCT", "UNIONTYPE", "NULL",
+                     "VARCHAR", "CHAR", "TIMESTAMP", "DECIMAL", "DATE")
+# subset of _HS2_STRING_TYPES that convert_types parses into Python objects
+_CONVERTED_TYPES = ("TIMESTAMP", "DECIMAL", "DATE")
+
+# HS2 delivers values of types impyla does not model as strings
+_FALLBACK_TRANSPORT_FIELD = 'stringVal'
+
+
+class ColumnTypeRecord(object):
+    """Per-position record of how a result column was declared by the
+    server, transported by HS2 and interpreted by impyla.
+
+    Records are keyed by column position, not by name, so duplicate column
+    aliases in a query never overwrite each other.
+
+    Attributes
+    ----------
+    position : int
+        Zero-based position of the column in the result set.
+    name : str
+        Column name or alias as declared by the server.
+    sql_type : str
+        SQL type as declared in the result-set metadata. Never inferred
+        from sampled values.
+    transport_type : str
+        Name of the TColumnValue field that carries the values on the wire
+        (e.g. 'stringVal', 'binaryVal').
+    python_type : str or None
+        Name of the logical Python interpretation impyla applies when
+        converting values, or None if impyla does not model this SQL type.
+    precision, scale : int or None
+        Declared DECIMAL precision and scale. None when the server did not
+        declare type qualifiers.
+    qualifiers_present : bool
+        Whether the server declared type qualifiers (precision/scale) for
+        this column.
+    recognized : bool
+        Whether impyla knows how to interpret this SQL type. Unrecognized
+        types are still delivered with their raw payload.
+    lossy : bool
+        Whether the values delivered in the owning batch lost information
+        that was present in the transported payload (e.g. TIMESTAMP
+        nanoseconds truncated to Python datetime microseconds).
+    """
+
+    def __init__(self, position, name, sql_type, transport_type, python_type,
+                 precision=None, scale=None, qualifiers_present=False,
+                 recognized=False, lossy=False):
+        self.position = position
+        self.name = name
+        self.sql_type = sql_type
+        self.transport_type = transport_type
+        self.python_type = python_type
+        self.precision = precision
+        self.scale = scale
+        self.qualifiers_present = qualifiers_present
+        self.recognized = recognized
+        self.lossy = lossy
+
+    def __repr__(self):
+        return ('ColumnTypeRecord(position={0}, name={1!r}, sql_type={2!r}, '
+                'transport_type={3!r}, python_type={4!r}, precision={5}, '
+                'scale={6}, qualifiers_present={7}, recognized={8}, '
+                'lossy={9})').format(
+                    self.position, self.name, self.sql_type,
+                    self.transport_type, self.python_type, self.precision,
+                    self.scale, self.qualifiers_present, self.recognized,
+                    self.lossy)
+
+    def __eq__(self, other):
+        return isinstance(other, ColumnTypeRecord) and \
+            self.__dict__ == other.__dict__
+
+    def __ne__(self, other):
+        return not (self == other)
+
+
+def _build_column_type_records(schema):
+    """Build one ColumnTypeRecord per result column, keyed by position.
+
+    The declarations come solely from the result-set metadata (`schema`),
+    never from sampled values, so they are stable across fetch pages even
+    when a page carries no non-null values.
+    """
+    records = []
+    for position, column in enumerate(schema):
+        name, sql_type = column[0], column[1]
+        precision, scale = column[4], column[5]
+        transport_type = _TTypeId_to_TColumnValue_fields.get(sql_type)
+        recognized = transport_type is not None
+        if not recognized:
+            transport_type = _FALLBACK_TRANSPORT_FIELD
+        records.append(ColumnTypeRecord(
+            position=position, name=name, sql_type=sql_type,
+            transport_type=transport_type,
+            python_type=_TTypeId_to_python_type.get(sql_type),
+            precision=precision, scale=scale,
+            qualifiers_present=(precision is not None and scale is not None),
+            recognized=recognized))
+    return records
 
 _pre_columnar_protocols = [
     TProtocolVersion.HIVE_CLI_SERVICE_PROTOCOL_V1,
@@ -871,6 +1025,10 @@ def err_if_rpc_not_ok(resp):
 # datetime only supports 6 digits of microseconds but Impala supports 9.
 # If present, the trailing 3 digits will be ignored without warning.
 _TIMESTAMP_PATTERN = re.compile(r'(\d+-\d+-\d+ \d+:\d+:\d+(\.\d{,6})?)')
+
+# Matches timestamps whose fractional second precision exceeds what
+# Python datetime can represent; converting them is lossy.
+_TIMESTAMP_LOSSY_PATTERN = re.compile(r'\.\d{7,}')
 
 # Regex to extract year/month/date from date.
 _DATE_PATTERN = re.compile(r'(\d+)-(\d+)-(\d+)')
@@ -1032,12 +1190,25 @@ class Column(object):
 class CBatch(Batch):
 
     def __init__(self, trowset, expect_more_rows, schema, convert_types=True,
-                 convert_strings_to_unicode=True):
+                 convert_strings_to_unicode=True, raw_columnar=False):
         self.expect_more_rows = expect_more_rows
         self.schema = schema
+        self.raw_columnar = raw_columnar
+        # Per-position type records, bound to the values below by column
+        # position. Declarations come from the schema metadata only.
+        self.column_records = _build_column_type_records(schema)
         if trowset:
-            tcols = [_TTypeId_to_TColumnValue_getters[schema[i][1]](col)
-                     for (i, col) in enumerate(trowset.columns)]
+            tcols = []
+            for (i, col) in enumerate(trowset.columns):
+                getter = _TTypeId_to_TColumnValue_getters.get(schema[i][1])
+                if getter is None:
+                    # SQL type impyla does not model: HS2 still delivers a
+                    # readable payload as strings.
+                    getter = operator.attrgetter(_FALLBACK_TRANSPORT_FIELD)
+                tcol = getter(col)
+                if tcol is None:
+                    tcol = TStringColumn(values=[], nulls=b'')
+                tcols.append(tcol)
             num_cols = len(tcols)
             num_rows = len(tcols[0].values)
         else:
@@ -1049,9 +1220,6 @@ class CBatch(Batch):
 
         log.debug('CBatch: input TRowSet num_cols=%s num_rows=%s tcols=%s',
                   num_cols, num_rows, tcols)
-        
-        HS2_STRING_TYPES = ["STRING", "LIST", "MAP", "STRUCT", "UNIONTYPE", "NULL", "VARCHAR", "CHAR", "TIMESTAMP", "DECIMAL", "DATE"]
-        CONVERTED_TYPES=["TIMESTAMP", "DECIMAL", "DATE"]
 
         self.columns = []
         for j in range(num_cols):
@@ -1070,15 +1238,42 @@ class CBatch(Batch):
             # STRING columns are read as binary and decoded here to be able to handle
             # non-valid utf-8 strings in Python 3.
 
-            if convert_strings_to_unicode:
-                self._convert_strings_to_unicode(type_, is_null, values, types=HS2_STRING_TYPES)
-            elif convert_types:
-                self._convert_strings_to_unicode(type_, is_null, values, types=CONVERTED_TYPES)
+            if raw_columnar:
+                values = self._raw_values(type_, is_null, values)
+            else:
+                if convert_strings_to_unicode:
+                    self._convert_strings_to_unicode(type_, is_null, values, types=_HS2_STRING_TYPES)
+                elif convert_types:
+                    self._convert_strings_to_unicode(type_, is_null, values, types=_CONVERTED_TYPES)
 
-            if convert_types:
-                values = self._convert_values(type_, is_null, values)
+                if convert_types:
+                    values = self._convert_values(type_, is_null, values,
+                                                  record=self.column_records[j])
 
             self.columns.append(Column(type_, values, is_null))
+
+    def _raw_values(self, type_, is_null, values):
+        """Preserve the payload as delivered by the server: string payloads
+        are decoded to readable text when possible (BINARY and undecodable
+        payloads stay as bytes), but nothing is parsed into Python
+        datetime/Decimal/date objects. Positions masked by the null bitmap
+        are placeholders, not data, and are blanked out.
+        """
+        if (type_ in _HS2_STRING_TYPES or
+                type_ not in _TTypeId_to_TColumnValue_fields):
+            for i in range(len(values)):
+                value = values[i]
+                if isinstance(value, bytes):
+                    try:
+                        # See _convert_strings_to_unicode: if decoding fails
+                        # then keep the original bytearray.
+                        values[i] = value.decode("UTF-8")
+                    except UnicodeDecodeError:
+                        pass
+        for i in range(len(values)):
+            if is_null[i]:
+                values[i] = None
+        return values
 
     def _convert_strings_to_unicode(self, type_, is_null, values, types):
         if type_ in types:
@@ -1094,12 +1289,19 @@ class CBatch(Batch):
                 except UnicodeDecodeError:
                     pass
 
-    def _convert_values(self, type_, is_null, values):
+    def _convert_values(self, type_, is_null, values, record=None):
         # pylint: disable=consider-using-enumerate
         if type_ == 'TIMESTAMP':
             for i in range(len(values)):
-                values[i] = (None if is_null[i] else
-                             _parse_timestamp(values[i]))
+                if is_null[i]:
+                    values[i] = None
+                    continue
+                if (record is not None and isinstance(values[i], str) and
+                        _TIMESTAMP_LOSSY_PATTERN.search(values[i])):
+                    # Python datetime cannot carry nanosecond precision;
+                    # the conversion below truncates the transported value.
+                    record.lossy = True
+                values[i] = _parse_timestamp(values[i])
         elif type_ == 'DECIMAL':
             for i in range(len(values)):
                 values[i] = (None if is_null[i] else Decimal(values[i]))
@@ -1494,7 +1696,8 @@ class Operation(ThriftRPC):
 
     def fetch(self, schema=None, max_rows=1024,
               orientation=TFetchOrientation.FETCH_NEXT,
-              convert_types=True, convert_strings_to_unicode=True):
+              convert_types=True, convert_strings_to_unicode=True,
+              raw_columnar=False):
         if not self.has_result_set:
             log.debug('fetch_results: has_result_set=False')
             return None
@@ -1510,18 +1713,21 @@ class Operation(ThriftRPC):
         # results are kept around for retry to be successful.
         resp = self._rpc('FetchResults', req, False)
         return self._wrap_results(resp.results, resp.hasMoreRows, schema,
-                                  convert_types=convert_types, 
-                                  convert_strings_to_unicode=convert_strings_to_unicode)
+                                  convert_types=convert_types,
+                                  convert_strings_to_unicode=convert_strings_to_unicode,
+                                  raw_columnar=raw_columnar)
 
-    def _wrap_results(self, results, expect_more_rows, schema, convert_types=True, 
-                      convert_strings_to_unicode=True):
+    def _wrap_results(self, results, expect_more_rows, schema, convert_types=True,
+                      convert_strings_to_unicode=True, raw_columnar=False):
         if self.is_columnar:
             log.debug('fetch_results: constructing CBatch')
-            return CBatch(results, expect_more_rows, schema, convert_types=convert_types, 
-                          convert_strings_to_unicode=convert_strings_to_unicode)
+            return CBatch(results, expect_more_rows, schema, convert_types=convert_types,
+                          convert_strings_to_unicode=convert_strings_to_unicode,
+                          raw_columnar=raw_columnar)
         else:
             log.debug('fetch_results: constructing RBatch')
-            # TODO: RBatch ignores 'convert_types' and 'convert_strings_to_unicode'
+            # TODO: RBatch ignores 'convert_types', 'convert_strings_to_unicode'
+            # and 'raw_columnar'
             return RBatch(results, expect_more_rows, schema)
 
     @property
@@ -1544,9 +1750,13 @@ class Operation(ThriftRPC):
             entry = column.typeDesc.types[0].primitiveEntry
             type_ = TTypeId._VALUES_TO_NAMES[entry.type].split('_')[0]
             if type_ == 'DECIMAL':
-                qualifiers = entry.typeQualifiers.qualifiers
-                precision = qualifiers['precision'].i32Value
-                scale = qualifiers['scale'].i32Value
+                precision = None
+                scale = None
+                if entry.typeQualifiers is not None:
+                    qualifiers = entry.typeQualifiers.qualifiers
+                    if 'precision' in qualifiers and 'scale' in qualifiers:
+                        precision = qualifiers['precision'].i32Value
+                        scale = qualifiers['scale'].i32Value
                 schema.append((name, type_, None, None,
                                precision, scale, None))
             else:

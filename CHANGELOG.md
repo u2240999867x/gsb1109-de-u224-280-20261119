@@ -1,6 +1,15 @@
 Changelog
 =========
 
+Unreleased
+----------
+* **Improvements**
+  - Add `raw_columnar` cursor option for columnar fetching: result batches
+    keep the payload as delivered by the server (no datetime/Decimal
+    parsing, BINARY stays bytes) and expose per-position `column_records`
+    describing the declared SQL type, transport representation, logical
+    Python interpretation and whether a lossy conversion occurred
+
 0.24
 ------
 * **Breaking changes**
