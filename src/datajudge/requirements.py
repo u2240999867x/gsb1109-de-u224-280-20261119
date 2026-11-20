@@ -2195,6 +2195,7 @@ class BetweenRequirement(Requirement):
         condition2: Condition | None = None,
         name: str | None = None,
         significance_level: float = 0.05,
+        min_sample_size: int = stats_constraints.MIN_SAMPLE_SIZE,
         cache_size=None,
     ) -> None:
         """
@@ -2203,6 +2204,12 @@ class BetweenRequirement(Requirement):
         The constraint is fulfilled, when the resulting p-value of the test is higher than the significance level
         (default is 0.05, i.e., 5%).
         The significance_level must be a value between 0.0 and 1.0.
+
+        Only rows with a non-NULL value in the compared columns take part in the
+        test; NULL values are treated as unobserved and counted separately. If
+        either side provides fewer than ``min_sample_size`` observed values, the
+        test reports insufficient evidence instead of taking a decision based on
+        a p-value.
         """
         if not column1 or not column2:
             raise ValueError(
@@ -2223,5 +2230,6 @@ class BetweenRequirement(Requirement):
                 significance_level,
                 name=name,
                 cache_size=cache_size,
+                min_sample_size=min_sample_size,
             )
         )

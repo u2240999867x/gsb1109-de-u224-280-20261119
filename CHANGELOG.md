@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+**Bug fixes**
+
+- Fix the effective sample semantics of the two-sample Kolmogorov-Smirnov test
+  ([`datajudge.BetweenRequirement.add_ks_2sample_constraint`][datajudge.requirements.BetweenRequirement.add_ks_2sample_constraint]).
+  NULL values are now treated as unobserved: they are excluded from the test
+  statistic and only counted separately, so duplicate observations keep their
+  full weight. Sample sizes are derived from the observed (non-NULL) rows rather
+  than the total row count, and the test reports insufficient evidence instead
+  of taking a p-value based decision when either side contains fewer than the
+  minimum usable sample size (35 by default, configurable via
+  `min_sample_size`).
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

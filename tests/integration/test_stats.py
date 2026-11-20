@@ -59,12 +59,18 @@ def test_ks_2sample_calculate_statistic(engine, random_normal_table, configurati
         p_value,
         n_samples,
         m_samples,
+        _n_total,
+        _m_total,
         _,
     ) = KolmogorovSmirnov2Sample._calculate_statistic(engine, ref, ref2)
 
     assert abs(d_statistic - expected_d) <= 1e-10, (
         f"The test statistic does not match: {expected_d} vs {d_statistic}"
     )
+
+    # the columns hold no NULLs, so observed and total sample sizes coincide
+    assert (n_samples, m_samples) == (10_000, 10_000)
+    assert (_n_total, _m_total) == (10_000, 10_000)
 
     # 1e-05 should cover common p_values; if scipy is installed, a very accurate p_value is automatically calculated
     assert abs(p_value - expected_p) <= 1e-05, (

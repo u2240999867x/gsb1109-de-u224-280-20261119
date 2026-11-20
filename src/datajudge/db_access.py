@@ -756,6 +756,26 @@ def get_row_count(
     return result, [final_selection]
 
 
+def get_observed_row_count(
+    engine: sa.engine.Engine, ref: DataReference
+) -> tuple[int, int, list[sa.Select]]:
+    """Return the observed and total row counts for a `DataReference`.
+
+    The observed count excludes rows with a NULL value in the relevant column,
+    which cannot take part in a statistical test over observed values. The
+    total count counts every row, including unobserved (NULL) ones.
+    """
+    subquery = ref.get_selection(engine).subquery()
+    column = subquery.c[ref.get_column(engine)]
+    selection = sa.select(
+        sa.cast(sa.func.count(column), sa.BigInteger),
+        sa.cast(sa.func.count(), sa.BigInteger),
+    ).select_from(subquery)
+    with engine.connect() as connection:
+        observed_count, total_count = connection.execute(selection).one()
+    return int(str(observed_count)), int(str(total_count)), [selection]
+
+
 def get_column(
     engine: sa.engine.Engine,
     ref: DataReference,
@@ -1169,15 +1189,22 @@ def _cdf_selection(
     Concretely, create a selection with values from ``value_label`` as well as
     the empirical cumulative didistribution function values, labeled as
     ``cdf_label``.
+
+    Rows with a NULL value are excluded because unobserved values cannot take part
+    in the empirical distribution.
     """
     col = ref.get_column(engine)
     selection = ref.get_selection(engine).subquery()
 
-    # Step 1: Calculate the CDF over the value column.
-    cdf_selection = sa.select(
-        selection.c[col].label(value_label),
-        sa.func.cume_dist().over(order_by=col).label(cdf_label),
-    ).subquery()
+    # Step 1: Calculate the CDF over the non-NULL values of the value column.
+    cdf_selection = (
+        sa.select(
+            selection.c[col].label(value_label),
+            sa.func.cume_dist().over(order_by=col).label(cdf_label),
+        )
+        .where(selection.c[col].is_not(None))
+        .subquery()
+    )
 
     # Step 2: Aggregate rows s.t. every value occurs only once.
     grouped_cdf_selection = (
@@ -1287,6 +1314,9 @@ def get_ks_2sample(
 ) -> tuple[float, list[sa.Select]]:
     """
     Run the query for the two-sample Kolmogorov-Smirnov test and return the test statistic d.
+
+    Only rows with a non-NULL value in the relevant columns take part in the test;
+    unobserved (NULL) values are ignored and must be counted separately.
 
     For a raw-sql version of this query, please see this PR:
     https://github.com/Quantco/datajudge/pull/28/
