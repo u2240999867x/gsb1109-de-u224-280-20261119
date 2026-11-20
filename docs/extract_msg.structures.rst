@@ -108,6 +108,14 @@ extract\_msg.structures.report\_tag module
    :undoc-members:
    :show-inheritance:
 
+extract\_msg.structures.string\_stream module
+-----------------------------------------------
+
+.. automodule:: extract_msg.structures.string_stream
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 extract\_msg.structures.system\_time module
 -------------------------------------------
 

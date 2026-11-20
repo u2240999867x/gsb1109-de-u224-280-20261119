@@ -7,6 +7,7 @@ __all__ = [
     'OleWriterExportTests',
     'PropTests',
     'SignedTests',
+    'StringFallbackTests',
     'UtilTests',
     'ValidationTests',
     'WkTests',
@@ -19,6 +20,7 @@ from .msg_base_tests import MSGBaseTests
 from .ole_writer_tests import OleWriterEditingTests, OleWriterExportTests
 from .prop_tests import PropTests
 from .signed_tests import SignedTests
+from .string_fallback_tests import StringFallbackTests
 from .util_tests import UtilTests
 from .validation_tests import ValidationTests
 from .wk_tests import WkTests

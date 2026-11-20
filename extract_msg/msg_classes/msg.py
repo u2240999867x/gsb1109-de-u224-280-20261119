@@ -38,12 +38,13 @@ from ..enums import (
     )
 from ..exceptions import (
         ConversionError, InvalidFileFormatError, PrefixError,
-        StandardViolationError
+        StandardViolationError, UnknownCodepageError, UnsupportedEncodingError
     )
 from ..msg_path import MSGPath
 from ..properties.named import Named, NamedProperties
 from ..properties.properties_store import PropertiesStore
 from ..structures.contact_link_entry import ContactLinkEntry
+from ..structures.string_stream import StringStreamKind, StringStreamResult
 from ..utils import (
         divide, guessEncoding, makeWeakRef, parseType, verifyPropertyId,
         verifyType
@@ -89,6 +90,15 @@ class MSGFile:
             have the ``chardet`` module installed, an attempt will be made to
             auto-detect the encoding based on some of the string properties. Do
             not report encoding errors caused by this.
+        :param stringFallback: Optional, enables field-level encoding fallback
+            for string streams. When enabled, each string field is read from
+            both its Unicode (``001F``) and legacy code page (``001E``)
+            representations as needed: if the preferred representation is
+            missing or cannot be decoded in its declared encoding, the other
+            representation is tried instead. The detailed outcome of each read
+            is available through :meth:`getStringStreamWithFallback`. This does
+            not change the behavior of the existing string reading methods when
+            the option is not selected.
         :param treePath: Internal variable used for giving representation of the
             path, as a tuple of objects, of the ``MSGFile``. When passing, this
             is the path to the parent object of this instance.
@@ -116,6 +126,7 @@ class MSGFile:
         """
         # Retrieve all the kwargs that we need.
         self.__inscFeat: InsecureFeatures = kwargs.get('insecureFeatures', InsecureFeatures.NONE)
+        self.__stringFallback: bool = bool(kwargs.get('stringFallback', False))
         prefix: MSGPath = MSGPath(kwargs.get('prefix', ''))
         self.__parentMsg = makeWeakRef(cast(MSGFile, kwargs.get('parentMsg')))
         self.__treePath = kwargs.get('treePath', []) + [weakref.ref(self)]
@@ -801,6 +812,138 @@ class MSGFile:
 
         return None if tmp is None else tmp.decode(self.stringEncoding)
 
+    def _getLegacyStringEncoding(self) -> str:
+        """
+        Determines the encoding to use for a legacy code page (``001E``) string
+        stream.
+
+        Unlike :attr:`stringEncoding`, this always resolves the code page
+        rather than returning the Unicode encoding. A concrete override
+        encoding is honored; a ``"chardet"`` override does not name a codec and
+        so falls through to the message's own code page basis.
+
+        :raises UnknownCodepageError: The code page property names a code page
+            that is not recognized.
+        :raises UnsupportedEncodingError: The code page is recognized but has
+            no supported encoding.
+        """
+        override = self.overrideEncoding
+        if override is not None and override.lower() != 'chardet':
+            return override
+        if '3FFD0003' not in self.props:
+            # If this property is not set by the client, we SHOULD set it to
+            # ISO-8859-15, but MAY set it to ISO-8859-1.
+            logger.warning('Encoding property not found. Defaulting to ISO-8859-15.')
+            return 'iso-8859-15'
+        return lookupCodePage(cast(int, self.getPropertyVal('3FFD0003')))
+
+    def _readStringRepresentation(self, filename: MSGPath, type_: str) -> Tuple[Optional[bytes], Optional[str], Optional[str], Optional[str]]:
+        """
+        Reads and strictly decodes one string stream representation.
+
+        :param filename: The stream name including the type suffix.
+        :param type_: Either ``"001F"`` for Unicode or ``"001E"`` for the
+            legacy code page.
+
+        :returns: A tuple of the raw bytes (``None`` if the stream does not
+            exist), the decoded value (``None`` when it could not be decoded),
+            the encoding used (``None`` if it could not be determined), and an
+            error reason (``None`` on success or when the stream is absent).
+        """
+        raw = self.getStream(filename, prefix = False)
+        if raw is None:
+            return None, None, None, None
+
+        if type_ == '001F':
+            encoding = 'utf-16-le'
+        else:
+            try:
+                encoding = self._getLegacyStringEncoding()
+            except (UnknownCodepageError, UnsupportedEncodingError) as e:
+                return raw, None, None, f'No usable code page for the legacy (001E) stream: {e}'
+
+        try:
+            value = raw.decode(encoding)
+        except UnicodeDecodeError as e:
+            return raw, None, encoding, f'The {type_} stream could not be decoded with {encoding}: {e}'
+
+        return raw, value, encoding, None
+
+    def getStringStreamWithFallback(self, filename: MSG_PATH, prefix: bool = True) -> StringStreamResult:
+        """
+        Reads a string stream with field-level encoding fallback.
+
+        Both the Unicode (``001F``) and legacy code page (``001E``)
+        representations are considered. The preferred representation is read
+        first; if it is missing or cannot be decoded in its declared encoding,
+        the other representation is tried. Every decode is strict, so text
+        produced through decode replacement is never reported as a valid
+        original value.
+
+        The returned :class:`StringStreamResult` records which physical stream
+        was actually read, the encoding used, whether fallback occurred, and
+        distinguishes a missing stream from one that is present but genuinely
+        empty. When no representation can be interpreted, the result carries the
+        raw reason instead of a value.
+
+        :param prefix: Bool, whether to search for the entry at the root of the
+            MSG file (``False``) or look in the current child MSG file
+            (``True``). (Default: ``True``)
+        """
+        filename = self.fixPath(filename, prefix)
+        # The preferred representation follows the message's own string flag,
+        # but both representations are always inspected.
+        if self.areStringsUnicode:
+            orderedTypes = ('001F', '001E')
+        else:
+            orderedTypes = ('001E', '001F')
+
+        streamName = str(filename)
+        failures: List[str] = []
+        sawStream = False
+
+        for index, type_ in enumerate(orderedTypes):
+            raw, value, encoding, reason = self._readStringRepresentation(filename.add(type_), type_)
+            if raw is None and reason is None:
+                # The stream simply does not exist.
+                continue
+
+            sawStream = True
+            kind = StringStreamKind.UNICODE if type_ == '001F' else StringStreamKind.ANSI
+
+            # A present but empty stream is a definitive empty value; it must
+            # not be confused with a missing stream or replaced by fallback
+            # data from the other representation.
+            if raw == b'':
+                return StringStreamResult(
+                    streamName, '', kind, encoding, index != 0,
+                    empty = True,
+                )
+
+            if reason is None:
+                return StringStreamResult(
+                    streamName,
+                    cast(str, value),
+                    kind,
+                    cast(str, encoding),
+                    index != 0,
+                )
+
+            failures.append(reason)
+
+        if not sawStream:
+            return StringStreamResult(
+                streamName, None, StringStreamKind.MISSING, None, False,
+                missing = True,
+                reason = 'Neither the Unicode (001F) nor the legacy code page (001E) stream is present.',
+            )
+
+        return StringStreamResult(
+            streamName, None, StringStreamKind.UNDECODABLE, None, False,
+            undecodable = True,
+            reason = '; '.join(failures) if failures else 'No representation of the stream could be decoded.',
+        )
+
     def getStringStreamAs(self, streamID: MSG_PATH, overrideClass: OVERRIDE_CLASS[_T]) -> Optional[_T]:
         """
         Returns the specified string stream, modifying it to the specified
@@ -1120,6 +1263,13 @@ class MSGFile:
         used for string streams.
         """
         return self.__overrideEncoding
+
+    @property
+    def stringFallback(self) -> bool:
+        """
+        Whether field-level encoding fallback is enabled for string streams.
+        """
+        return self.__stringFallback
 
     @property
     def path(self):
