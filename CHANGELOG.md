@@ -2,6 +2,15 @@
 
 ## Development version
 
+New features and improvements:
+
+- Added ``sjoin_effective`` for joining records to the version of a service area
+  that was in effect at an explicit observation time. It returns the assignment,
+  a per-candidate audit table, conflict groups for ambiguous overlapping
+  versions, and separate out-of-area / missing-time records. It can also be
+  enabled through ``sjoin(..., effective=spec)``; the legacy sjoin output is
+  unchanged when the option is not used.
+
 Bug fixes:
 
 - Fix the colorbar being shrunk when plotting with a ``"compressed"`` matplotlib

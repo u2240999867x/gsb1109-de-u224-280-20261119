@@ -147,6 +147,56 @@ Note more complicated spatial relationships can be studied by combining geometri
 To find all polygons within a given distance of a point, for example, one can first use the :meth:`~geopandas.GeoSeries.buffer` method to expand each
 point into a circle of appropriate radius, then intersect those buffered circles with the polygons in question.
 
+Temporally effective joins
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A plain spatial join returns every geometric candidate. When the right-hand
+frame contains several versions of the same service area, one of which was
+actually in effect at the time recorded on each left-hand row, use
+:func:`sjoin_effective`. It keeps the usual GeoPandas spatial index query, then
+applies an explicit validity interval and type rule.
+
+.. code-block:: python
+
+   from geopandas import sjoin_effective
+   from geopandas.tools.sjoin_effective import EffectiveJoinSpec
+
+   spec = EffectiveJoinSpec(
+       left_time="observed_at",
+       right_valid_from="valid_from",
+       right_valid_to="valid_to",
+       area_id="area_code",
+       rank="priority",
+       boundary="start_closed_end_open",
+       left_id="store_id",
+       right_id="version_id",
+       left_type="store_type",
+       right_type="service_type",
+   )
+   result = sjoin_effective(stores, service_areas, spec)
+
+``boundary`` is required and must be stated by the caller: use
+``"start_closed_end_open"`` for ``start <= time < end`` or
+``"start_open_end_closed"`` for ``start < time <= end``.
+
+The result has four frames:
+
+* ``assignments``: one row per left record, with ``status`` and
+  ``selection_reason`` plus the selected right-hand attributes.
+* ``candidates``: one row per geometric candidate, with ``time_valid``,
+  ``type_valid``, ``effective``, ``selected`` and ``reason``. This is the audit
+  trail for candidates that matched geometrically but were expired, not yet
+  effective, had the wrong type, or lost to a higher-ranked area.
+* ``conflicts``: overlapping versions with the same rank and area id but
+  different effective attribution. These are left unselected for review.
+* ``unmatched``: left records with status ``"out_of_area"`` (no spatial
+  candidate) or ``"missing_time"``.
+
+Selection uses the highest ``rank``, then the lowest stable ``area_id``.
+Input row order is never used as a priority, and both input frames may have
+duplicate indexes. Passing ``effective=spec`` to :func:`sjoin` is equivalent;
+without it, :func:`sjoin` returns the legacy spatial join unchanged.
+
 Nearest joins
 ~~~~~~~~~~~~~
 

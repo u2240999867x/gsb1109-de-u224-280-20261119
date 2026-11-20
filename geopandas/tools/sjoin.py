@@ -18,6 +18,7 @@ def sjoin(
     rsuffix="right",
     distance=None,
     on_attribute=None,
+    effective=None,
     **kwargs,
 ):
     """Spatial join of two GeoDataFrames.
@@ -71,6 +72,13 @@ def sjoin(
         of the spatial predicate. These must be found in both DataFrames.
         If set, observations are joined only if the predicate applies
         and values in specified columns match.
+    effective : EffectiveJoinSpec or mapping, optional
+        Opt in to a temporally effective join. When given, the spatial
+        candidates are filtered by the validity interval and type rules in
+        ``effective`` and the result is an
+        :class:`~geopandas.tools.sjoin_effective.EffectiveJoinResult` with
+        assignments, an audit table and conflict groups. When omitted (the
+        default), the legacy join below is returned unchanged.
 
     Examples
     --------
@@ -114,6 +122,7 @@ def sjoin(
     --------
     overlay : overlay operation resulting in a new geometry
     GeoDataFrame.sjoin : equivalent method
+    sjoin_effective : explicit temporally effective spatial join
 
     Notes
     -----
@@ -125,6 +134,28 @@ def sjoin(
         raise TypeError(f"sjoin() got an unexpected keyword argument '{first}'")
 
     on_attribute = _maybe_make_list(on_attribute)
+
+    if effective is not None:
+        from geopandas.tools.sjoin_effective import sjoin_effective
+
+        if how != "inner":
+            raise ValueError(
+                "The effective join always retains one row per left record; "
+                "`how` must be 'inner' (the default) when `effective` is used."
+            )
+        if lsuffix != "left" or rsuffix != "right":
+            raise ValueError(
+                "`lsuffix` and `rsuffix` are not supported with `effective`; "
+                "use the column names in `spec` instead."
+            )
+        return sjoin_effective(
+            left_df,
+            right_df,
+            effective,
+            predicate=predicate,
+            distance=distance,
+            on_attribute=on_attribute,
+        )
 
     _basic_checks(left_df, right_df, how, lsuffix, rsuffix, on_attribute=on_attribute)
 

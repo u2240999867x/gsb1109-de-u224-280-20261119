@@ -8,6 +8,7 @@ Tools
 
    make_grid
    sjoin
+   sjoin_effective
    sjoin_nearest
    overlay
    clip

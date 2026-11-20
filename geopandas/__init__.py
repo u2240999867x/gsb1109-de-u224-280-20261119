@@ -12,6 +12,7 @@ from geopandas.io.arrow import _read_feather as read_feather
 from geopandas.io.sql import _read_postgis as read_postgis
 from geopandas.tools import (
     sjoin,
+    sjoin_effective,
     sjoin_nearest,
     overlay,
     clip,

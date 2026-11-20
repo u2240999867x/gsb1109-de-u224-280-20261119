@@ -2628,6 +2628,11 @@ default 'snappy'
             of the spatial predicate. These must be found in both DataFrames.
             If set, observations are joined only if the predicate applies
             and values in specified columns match.
+        effective : EffectiveJoinSpec or mapping, optional
+            Opt in to a temporally effective join. When given, the result is
+            an :class:`~geopandas.tools.sjoin_effective.EffectiveJoinResult`
+            with assignments, candidate audit rows and conflict groups.
+            When omitted, the legacy join is returned unchanged.
 
         Examples
         --------
