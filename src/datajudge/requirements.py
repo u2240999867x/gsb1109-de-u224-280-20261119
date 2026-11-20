@@ -10,6 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.sql import selectable
 
 from .condition import Condition
+from .constraints import aliases as aliases_constraints
 from .constraints import column as column_constraints
 from .constraints import date as date_constraints
 from .constraints import groupby as groupby_constraints
@@ -967,6 +968,24 @@ class WithinRequirement(Requirement):
         | list[OutputProcessor]
         | None = output_processor_limit,
         cache_size=None,
+        *,
+        alias_data_source: DataSource | str | tuple | None = None,
+        region_equivalence_data_source: DataSource | str | tuple | None = None,
+        alias_namespace_column: str = "source_namespace",
+        alias_code_column: str = "alias",
+        alias_target_namespace_column: str = "target_namespace",
+        alias_target_code_column: str = "target_code",
+        equivalence_region_column: str = "region",
+        equivalence_canonical_column: str = "canonical_region",
+        detail_identity_columns: list[str] | None = None,
+        detail_report_id_column: str | None = None,
+        detail_confirmed_column: str | None = None,
+        detail_confirmed_values: tuple = (True, 1, "true", "TRUE", "yes", "Y"),
+        unknown_region_values: tuple = (None, ""),
+        strip_region_whitespace: bool = False,
+        fail_on_unknown: bool = False,
+        fail_on_unconfirmable: bool = False,
+        max_evidence_per_region: int = 1,
     ):
         """Expresses a functional dependency, a constraint where the `value_columns` are uniquely determined by the `key_columns`.
 
@@ -983,7 +1002,52 @@ class WithinRequirement(Requirement):
         on how the output is sorted and how many counterexamples are shown is available as ``output_processors``.
 
         For more information on functional dependencies, see https://en.wikipedia.org/wiki/Functional_dependency.
+
+        If ``alias_data_source`` is omitted, the constraint is evaluated exactly
+        as before, on the literal ``key_columns``. If it is supplied, the first
+        two key columns are interpreted as a namespaced identity
+        ``(namespace, code)``, and the single value column as its region. Each
+        record is then attributed through the alias table and checked against the
+        resolved canonical store instead of the literal key. See
+        ``add_alias_dependency_constraint`` for the alias and equivalence rules.
         """
+        if alias_data_source is not None:
+            if len(key_columns) != 2:
+                raise ValueError(
+                    "Alias-aware functional dependencies require exactly two key "
+                    "columns: the source namespace and the source code."
+                )
+            if len(value_columns) != 1:
+                raise ValueError(
+                    "Alias-aware functional dependencies require exactly one value "
+                    "column: the region."
+                )
+            self.add_alias_dependency_constraint(
+                alias_data_source,
+                region_equivalence_data_source=region_equivalence_data_source,
+                detail_namespace_column=key_columns[0],
+                detail_code_column=key_columns[1],
+                detail_region_column=value_columns[0],
+                alias_namespace_column=alias_namespace_column,
+                alias_code_column=alias_code_column,
+                alias_target_namespace_column=alias_target_namespace_column,
+                alias_target_code_column=alias_target_code_column,
+                equivalence_region_column=equivalence_region_column,
+                equivalence_canonical_column=equivalence_canonical_column,
+                detail_identity_columns=detail_identity_columns,
+                detail_report_id_column=detail_report_id_column,
+                detail_confirmed_column=detail_confirmed_column,
+                detail_confirmed_values=detail_confirmed_values,
+                unknown_region_values=unknown_region_values,
+                strip_region_whitespace=strip_region_whitespace,
+                fail_on_unknown=fail_on_unknown,
+                fail_on_unconfirmable=fail_on_unconfirmable,
+                max_evidence_per_region=max_evidence_per_region,
+                condition=condition,
+                name=name,
+                cache_size=cache_size,
+            )
+            return
         relevant_columns = key_columns + value_columns
         ref = DataReference(self._data_source, relevant_columns, condition)
         self._constraints.append(
@@ -991,6 +1055,129 @@ class WithinRequirement(Requirement):
                 ref,
                 key_columns=key_columns,
                 output_processors=output_processors,
+                name=name,
+                cache_size=cache_size,
+            )
+        )
+
+    def add_alias_dependency_constraint(
+        self,
+        alias_data_source: DataSource | str | tuple,
+        *,
+        region_equivalence_data_source: DataSource | str | tuple | None = None,
+        detail_namespace_column: str = "source_namespace",
+        detail_code_column: str = "source_code",
+        detail_region_column: str = "region",
+        alias_namespace_column: str = "source_namespace",
+        alias_code_column: str = "alias",
+        alias_target_namespace_column: str = "target_namespace",
+        alias_target_code_column: str = "target_code",
+        equivalence_region_column: str = "region",
+        equivalence_canonical_column: str = "canonical_region",
+        detail_identity_columns: list[str] | None = None,
+        detail_report_id_column: str | None = None,
+        detail_confirmed_column: str | None = None,
+        detail_confirmed_values: tuple = (True, 1, "true", "TRUE", "yes", "Y"),
+        unknown_region_values: tuple = (None, ""),
+        strip_region_whitespace: bool = False,
+        fail_on_unknown: bool = False,
+        fail_on_unconfirmable: bool = False,
+        max_evidence_per_region: int = 1,
+        condition: Condition | None = None,
+        name: str | None = None,
+        cache_size=None,
+    ):
+        """Express a store-to-region dependency through namespaced aliases.
+
+        The detail source identifies records by a ``(source_namespace,
+        source_code)`` pair. The alias source maps such pairs to target pairs and
+        may contain several hops. Alias resolution is namespaced: the same code
+        in two registration systems is resolved independently. A detail record
+        that reaches more than one terminal store, or whose alias chain cannot be
+        resolved, is reported as *unconfirmable* instead of being attributed to
+        any store, and is excluded from the dependency result.
+
+        Terminal stores are the keys of this dependency, and the
+        ``detail_region_column`` is its value. Rows without a region are reported
+        separately as *unknown* and excluded from the dependency. Duplicate
+        re-reports do not add relations. ``region_equivalence_data_source`` can
+        supply an approved table merging different spellings of one region: the
+        merged relation keeps every original spelling for lookup.
+
+        Each conflicting store reports one real registration row per distinct
+        canonical region, including the alias path that attributed the row to the
+        store. If more candidate rows exist than are shown, the selected rows are
+        the deterministic minimum keys, so reruns over the same data reproduce
+        the same evidence rows.
+
+        This is an additive constraint. The ordinary
+        ``add_functional_dependency_constraint`` keeps its original semantics.
+        """
+        if max_evidence_per_region < 1:
+            raise ValueError("max_evidence_per_region must be at least one.")
+        config = aliases_constraints.AliasDependencyConfig(
+            detail_namespace_column=detail_namespace_column,
+            detail_code_column=detail_code_column,
+            detail_region_column=detail_region_column,
+            detail_identity_columns=(
+                None
+                if detail_identity_columns is None
+                else tuple(detail_identity_columns)
+            ),
+            detail_report_id_column=detail_report_id_column,
+            detail_confirmed_column=detail_confirmed_column,
+            detail_confirmed_values=detail_confirmed_values,
+            alias_namespace_column=alias_namespace_column,
+            alias_code_column=alias_code_column,
+            alias_target_namespace_column=alias_target_namespace_column,
+            alias_target_code_column=alias_target_code_column,
+            equivalence_region_column=equivalence_region_column,
+            equivalence_canonical_column=equivalence_canonical_column,
+            unknown_region_values=unknown_region_values,
+            strip_region_whitespace=strip_region_whitespace,
+            fail_on_unknown=fail_on_unknown,
+            fail_on_unconfirmable=fail_on_unconfirmable,
+            max_evidence_per_region=max_evidence_per_region,
+        )
+        detail_columns = [
+            detail_namespace_column,
+            detail_code_column,
+            detail_region_column,
+            *(detail_identity_columns or ()),
+            *([detail_report_id_column] if detail_report_id_column else []),
+            *([detail_confirmed_column] if detail_confirmed_column else []),
+        ]
+        alias_columns = [
+            alias_namespace_column,
+            alias_code_column,
+            alias_target_namespace_column,
+            alias_target_code_column,
+        ]
+        ref = DataReference(
+            self._data_source,
+            None
+            if detail_identity_columns is None
+            else list(dict.fromkeys(detail_columns)),
+            condition,
+        )
+        alias_ref = DataReference(
+            aliases_constraints.coerce_data_source(alias_data_source),
+            alias_columns,
+        )
+        region_equivalence_ref = (
+            DataReference(
+                aliases_constraints.coerce_data_source(region_equivalence_data_source),
+                [equivalence_region_column, equivalence_canonical_column],
+            )
+            if region_equivalence_data_source is not None
+            else None
+        )
+        self._constraints.append(
+            aliases_constraints.AliasFunctionalDependency(
+                ref,
+                alias_ref,
+                region_equivalence_ref=region_equivalence_ref,
+                config=config,
                 name=name,
                 cache_size=cache_size,
             )

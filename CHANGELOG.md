@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**New features**
+
+- Add optional alias-aware evaluation to
+  [`datajudge.WithinRequirement.add_functional_dependency_constraint`][datajudge.requirements.WithinRequirement.add_functional_dependency_constraint]
+  via `alias_data_source`, with an additional
+  [`datajudge.WithinRequirement.add_alias_dependency_constraint`][datajudge.requirements.WithinRequirement.add_alias_dependency_constraint]
+  entry point. Namespaced alias chains are resolved per registration system,
+  approved region spellings are merged, missing regions are listed as unknown,
+  and ambiguous alias targets are listed as unconfirmable with deterministic
+  two-row evidence. Calls without alias arguments keep their previous semantics.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

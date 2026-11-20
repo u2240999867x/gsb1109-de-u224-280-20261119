@@ -91,6 +91,47 @@ date_growth := (max_date_table_2 - min_date_table_2) / (max_date_table_1 - min_d
 
 This example revolving around `NRowsMinGain` generalizes to many `Constraint` s concerned with growth, gain, loss or shrinkage limitations.
 
+## Alias-aware store dependencies
+
+A functional dependency can be checked through a namespaced alias table when the
+same business code means different stores in different registration systems. Pass
+`alias_data_source` to [`WithinRequirement.add_functional_dependency_constraint`][datajudge.requirements.WithinRequirement.add_functional_dependency_constraint];
+the first key column is the source namespace, the second the source code, and the
+single value column is the region.
+
+```python
+store_req.add_functional_dependency_constraint(
+    key_columns=["source_namespace", "source_code"],
+    value_columns=["region"],
+    alias_data_source="store_alias",
+    region_equivalence_data_source="approved_region_equivalence",
+)
+```
+
+The alias table maps `(source_namespace, alias)` to
+`(target_namespace, target_code)` and may contain several hops. Alias resolution
+is scoped by namespace, so the same code in two systems resolves independently.
+When `alias_data_source` is omitted, the constraint keeps its original,
+literal-key semantics.
+
+The check reports three separate kinds of result:
+
+- A **conflict** is one canonical store with more than one canonical region.
+  Each conflict includes one real registration row per region, with its alias
+  path, so the original registration system can be traced. If more candidate rows
+  exist, the selected rows are the deterministic minimum keys and reruns select
+  the same rows.
+- **Unknown** rows have a region that matches the configured missing-region
+  values (by default `NULL` and the empty string). They are excluded from the
+  dependency and listed separately.
+- **Unconfirmable** rows reach more than one terminal store through the alias
+  chain. They are excluded from the dependency and never declare any of the
+  candidate stores in conflict.
+
+Approved region spellings are merged transitively. The store's relation keeps
+every original spelling for lookup, and each evidence row retains its raw region
+value. Duplicate re-reports do not add relations.
+
 ## Testing a specification
 
 In order to test whether the `Constraint` s expressed in a specification hold true, you can simply run
