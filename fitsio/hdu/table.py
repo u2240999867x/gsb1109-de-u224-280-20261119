@@ -47,6 +47,55 @@ if IS_PY3:
     xrange = range
 
 
+class RowBatchResult(object):
+    """
+    One successfully read row produced by a combined row read.
+
+    Each result corresponds to a single request position and can be traced to
+    the actual HDU and row that were read.  Equal-valued rows read from
+    different HDUs are never merged: they produce distinct ``RowBatchResult``
+    objects, and each one owns an independent copy of the row data, so
+    post-processing one result never affects another.
+
+    attributes
+    ----------
+    hdu: integer
+        The zero-offset HDU/extension number the row was read from.
+    row: integer
+        The zero-offset row number within that HDU.
+    data: numpy.void
+        The row as a single-element numpy record.  This is an independent copy
+        owned by this result; in-place modification does not affect other
+        results or subsequent combined reads.
+    dtype: numpy.dtype
+        The record dtype of the table this row was read from.  This differs
+        between HDUs, e.g. a variable length column stored as an object field
+        versus a fixed length vector field.
+    extname: string
+        The extension name, possibly an empty string.
+    """
+
+    __slots__ = ('hdu', 'row', 'data', 'dtype', 'extname')
+
+    def __init__(self, hdu, row, data, dtype, extname):
+        self.hdu = hdu
+        self.row = row
+        self.data = data
+        self.dtype = dtype
+        self.extname = extname
+
+    @property
+    def ext(self):
+        """Alias for `hdu`, the zero-offset extension number."""
+        return self.hdu
+
+    def __repr__(self):
+        return (
+            "RowBatchResult(hdu=%d, row=%d, extname='%s', dtype=%s)"
+            % (self.hdu, self.row, self.extname, self.dtype)
+        )
+
+
 class TableHDU(HDUBase):
     """
     A table HDU
@@ -112,6 +161,9 @@ class TableHDU(HDUBase):
         self.case_sensitive = case_sensitive
         self._iter_row_buffer = iter_row_buffer
         self.write_bitcols = write_bitcols
+
+        # cache backing combined row reads; see _get_cached_row_records
+        self._row_batch_cache = None
 
         if self._info['hdutype'] == ASCII_TBL:
             self._table_type_str = 'ascii'
@@ -339,6 +391,7 @@ class TableHDU(HDUBase):
                 self.write_var_column(name, data_list[i], firstrow=firstrow)
 
         self._cached_info = None  # invalidate info cache
+        self._reset_row_batch_cache()
 
     def write_column(self, column, data, firstrow=0, **keys):
         """
@@ -402,6 +455,7 @@ class TableHDU(HDUBase):
 
         del data_send
         self._cached_info = None  # invalidate info cache
+        self._reset_row_batch_cache()
 
     def _verify_column_data(self, colnum, data):
         """
@@ -497,6 +551,7 @@ class TableHDU(HDUBase):
             self._ext + 1, colnum + 1, data, firstrow=firstrow + 1
         )
         self._cached_info = None  # invalidate info cache
+        self._reset_row_batch_cache()
 
     def insert_column(
         self, name, data, colnum=None, write_bitcols=None, **keys
@@ -576,6 +631,7 @@ class TableHDU(HDUBase):
         self._FITS.insert_col(self._ext + 1, new_colnum, name, fmt, tdim=dims)
 
         self._cached_info = None  # invalidate info cache
+        self._reset_row_batch_cache()
 
         self.write_column(name, data)
 
@@ -662,6 +718,7 @@ class TableHDU(HDUBase):
             self._FITS.delete_rows(self._ext + 1, rows)
 
         self._cached_info = None  # invalidate info cache
+        self._reset_row_batch_cache()
 
     def resize(self, nrows, front=False):
         """
@@ -708,6 +765,7 @@ class TableHDU(HDUBase):
             self._FITS.insert_rows(self._ext + 1, firstrow, rowdiff)
 
         self._cached_info = None  # invalidate info cache
+        self._reset_row_batch_cache()
 
     def read(
         self,
@@ -1075,6 +1133,143 @@ class TableHDU(HDUBase):
         self._maybe_trim_strings(array, trim_strings=trim_strings)
 
         return array
+
+    def _row_batch_cache_key(self, vstorage):
+        """
+        Structure signature used to invalidate the cached row records.
+
+        The cache is rebuilt whenever the row count, column layout or the
+        effective variable length storage mode changes.  All table-mutating
+        methods invalidate ``_cached_info`` anyway, so ``nrows`` and the
+        column ``tform`` values are always current when this is evaluated.
+        """
+        info = self._info
+        tforms = tuple(col['tform'] for col in info['colinfo'])
+        return (
+            info['nrows'],
+            tforms,
+            vstorage,
+            self._ignore_scaling,
+            self.lower,
+            self.upper,
+            self.trim_strings,
+        )
+
+    def _reset_row_batch_cache(self):
+        """Drop all cached row records."""
+        self._row_batch_cache = None
+
+    def _get_cached_row_records(self, rows, vstorage):
+        """
+        Return the per-row record cache, reading only the rows not yet cached.
+
+        Each distinct source row is read from disk at most once: rows already
+        in the cache are served from memory and only the missing, unique rows
+        are read in one call to ``read_rows`` and stored as independent
+        records.  The full table is never read, regardless of which rows are
+        requested.
+
+        Returns a dict mapping row number to an independent numpy record.
+        """
+        rows = np.array(rows, ndmin=1, copy=copy_if_needed, dtype='i8')
+
+        key = self._row_batch_cache_key(vstorage)
+        if self._row_batch_cache is None or self._row_batch_cache[0] != key:
+            self._row_batch_cache = (key, {})
+
+        record_cache = self._row_batch_cache[1]
+        missing = [
+            int(row)
+            for row in np.unique(rows)
+            if int(row) not in record_cache
+        ]
+
+        if missing:
+            # one read for all currently missing rows; read_rows handles
+            # variable length columns, bit flags and scalings
+            read_rows = np.array(missing, dtype='i8')
+            array = self.read_rows(read_rows, vstorage=vstorage)
+            for row, record in zip(missing, array):
+                # copy makes the record own its fixed width data and outlive
+                # the temporary read array
+                record_cache[row] = record.copy()
+
+        return record_cache
+
+    def read_rows_batch(self, rows, vstorage=None):
+        """
+        Read the requested rows, reusing one underlying read per source row.
+
+        This is the per-HDU building block for the combined reader on
+        ``FITS``.  Distinct row numbers are read from disk at most once and
+        cached; duplicate requests for the same row are served from the cache
+        and copied, so each returned record is independent.  Modifying one
+        result never changes another one or the cached source record.
+
+        parameters
+        ----------
+        rows: sequence of integers
+            Zero-offset row numbers.  Every row must be in
+            ``[0, nrows - 1]`` for this HDU.
+        vstorage: string, optional
+            Over-ride the storage method for variable length columns.  Can be
+            'fixed' or 'object'.  Defaults to the HDU's configured setting.
+
+        returns
+        -------
+        tuple
+            ``(records, dtype)`` where ``records`` is a numpy recarray with one
+            independently owned record per requested row, in request order.
+        """
+        if vstorage is None:
+            vstorage = self._vstorage
+
+        rows = np.array(rows, ndmin=1, copy=copy_if_needed, dtype='i8')
+
+        maxrow = self._info['nrows'] - 1
+        if rows.size > 0:
+            bad = rows[(rows < 0) | (rows > maxrow)]
+            if bad.size > 0:
+                raise ValueError(
+                    "rows must be in [%d,%d], got row %d"
+                    % (0, maxrow, int(bad[0]))
+                )
+
+        record_cache = self._get_cached_row_records(rows, vstorage)
+        if rows.size == 0:
+            any_row = next(iter(record_cache)) if record_cache else None
+            if any_row is None:
+                # derive a dtype without reading data, applying the same bit
+                # column conversion read_rows performs
+                colnums = self._extract_colnums()
+                dtype, _, _ = self.get_rec_dtype(
+                    colnums=colnums, vstorage=vstorage
+                )
+                empty = np.zeros(0, dtype=dtype)
+                if self._check_tbit(colnums=colnums):
+                    empty = self._fix_tbit_dtype(empty, colnums)
+                return empty, empty.dtype
+            dtype = record_cache[any_row].dtype
+            return np.zeros(0, dtype=dtype), dtype
+
+        first = record_cache[int(rows[0])]
+        dtype = first.dtype
+        records = np.empty(rows.size, dtype=dtype)
+        for i, row in enumerate(rows):
+            records[i] = record_cache[int(row)]
+
+        # record assignment copies fixed width bytes, but object (variable
+        # length) fields only copy references; deep copy those so duplicate
+        # rows never share a mutable array and cached records stay untouched
+        for name in dtype.names:
+            if dtype.fields[name][0].kind == 'O':
+                field = records[name]
+                for i in xrange(records.size):
+                    value = field[i]
+                    if hasattr(value, 'copy'):
+                        field[i] = value.copy()
+
+        return records, dtype
 
     def read_columns(
         self,
@@ -2430,6 +2625,13 @@ class CompressedTableHDU(TableHDU):
         self._not_supported()
 
     def read_rows(self, *args, **keys):
+        """
+        Reading is not supported for tile-compressed tables, see the class
+        docs
+        """
+        self._not_supported()
+
+    def read_rows_batch(self, *args, **keys):
         """
         Reading is not supported for tile-compressed tables, see the class
         docs

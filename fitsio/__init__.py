@@ -34,6 +34,7 @@ from .fitslib import (
 
 from .header import FITSHDR, FITSRecord, FITSCard
 from .hdu import BINARY_TBL, ASCII_TBL, IMAGE_HDU
+from .hdu.table import RowBatchResult
 
 from . import util
 from .util import (

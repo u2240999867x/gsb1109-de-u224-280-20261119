@@ -32,6 +32,7 @@ from .util import (
     array_to_native,
     isstring,
     copy_if_needed,
+    _itypes as _batch_itypes,
     _nonfinite_as_cfitsio_floating_null_value,
 )
 from .header import FITSHDR
@@ -44,6 +45,7 @@ from .hdu import (
     AsciiTableHDU,
     TableHDU,
     CompressedTableHDU,
+    RowBatchResult,
     _table_npy2fits_form,
     _npy2fits,
     _hdu_type_map,
@@ -1687,6 +1689,172 @@ class FITS(object):
 
     def __exit__(self, exception_type, exception_value, traceback):
         self.close()
+
+    def read_rows_batch(self, requests, vstorage=None):
+        """
+        Read rows from multiple table HDUs in one combined request.
+
+        Each request is an explicit ``(hdu, row)`` pair of zero-offset HDU
+        number and zero-offset row number.  Requests may be interleaved across
+        HDUs and may repeat the same source row; the underlying read of each
+        distinct source row is performed only once and the cached record is
+        copied for every request.  The whole table is never returned to the
+        caller and rows are never re-read once per request.
+
+        Results are returned in the order of the original requests; rows that
+        compare equal but come from different HDUs are never merged.  Each
+        result is an independent copy carrying the actual HDU number, row
+        number, extension name and table dtype, so it can be traced back to its
+        source and post-processed without affecting any other result.
+
+        An illegal request (unknown HDU, non-table HDU, or a row outside the
+        HDU's valid range) raises an error at the position of that request
+        only; it does not invalidate the valid results at other positions.
+
+        parameters
+        ----------
+        requests: sequence of (hdu, row) pairs
+            Each pair is an explicit zero-offset HDU number and row number.
+            HDUs may be repeated and the same ``(hdu, row)`` pair may appear
+            more than once.
+        vstorage: string, optional
+            Over-ride the storage method for variable length columns.  Can be
+            'fixed' or 'object'.  Defaults to the HDU's configured setting.
+
+        returns
+        -------
+        results: list of RowBatchResult
+            One result per request, in request order.  Every result owns an
+            independent copy of its row record.
+        errors: dict
+            Maps request position to the exception raised for that illegal
+            request.  Empty when every request is valid.
+        """
+        requests = list(requests)
+        results = [None] * len(requests)
+        errors = {}
+
+        # group request positions by HDU so each HDU is read at most once;
+        # distinct source rows inside an HDU are read only once via its cache
+        groups = {}
+        for position, request in enumerate(requests):
+            try:
+                ext, row = self._parse_row_batch_request(request)
+            except ValueError as err:
+                errors[position] = err
+                continue
+
+            if isinstance(row, bool) or not isinstance(row, _batch_itypes):
+                errors[position] = ValueError(
+                    "row number must be an integer, got %r" % (row,)
+                )
+                continue
+
+            groups.setdefault(ext, []).append((position, int(row)))
+
+        for ext in groups:
+            try:
+                hdu = self._get_row_batch_hdu(ext)
+            except (IOError, IndexError, TypeError) as err:
+                for position, _row in groups[ext]:
+                    errors[position] = IOError(
+                        "cannot read rows from HDU %d: %s" % (ext, err)
+                    )
+                continue
+
+            try:
+                positions = [item[0] for item in groups[ext]]
+                rows = numpy.array(
+                    [item[1] for item in groups[ext]], dtype='i8'
+                )
+
+                nrows = hdu._info['nrows']
+                valid = (rows >= 0) & (rows < nrows)
+                if not valid.all():
+                    bad_index = numpy.nonzero(~valid)[0]
+                    for idx in bad_index:
+                        position = positions[int(idx)]
+                        errors[position] = ValueError(
+                            "row %d out of range for HDU %d with %d rows; "
+                            "valid rows are [%d,%d]"
+                            % (
+                                int(rows[idx]),
+                                ext,
+                                nrows,
+                                0,
+                                nrows - 1,
+                            )
+                        )
+
+                valid_positions = [
+                    positions[i] for i in xrange(rows.size) if valid[i]
+                ]
+                valid_rows = rows[valid]
+                if valid_rows.size == 0:
+                    continue
+
+                records, dtype = hdu.read_rows_batch(
+                    valid_rows, vstorage=vstorage
+                )
+                extname = hdu.get_extname()
+                for i, position in enumerate(valid_positions):
+                    results[position] = RowBatchResult(
+                        hdu=ext,
+                        row=int(valid_rows[i]),
+                        data=records[i],
+                        dtype=dtype,
+                        extname=extname,
+                    )
+            except Exception as err:
+                for position, _row in groups[ext]:
+                    if position not in errors:
+                        errors[position] = err
+
+        return results, errors
+
+    def _parse_row_batch_request(self, request):
+        """
+        Validate and unpack one combined-read request into (ext, row).
+        """
+        try:
+            ext, row = request
+        except (TypeError, ValueError):
+            raise ValueError(
+                "each request must be an (hdu, row) pair, got %r"
+                % (request,)
+            )
+
+        if isinstance(ext, bool) or not isinstance(ext, _batch_itypes):
+            raise ValueError(
+                "hdu number must be an integer, got %r" % (ext,)
+            )
+        return int(ext), row
+
+    def _get_row_batch_hdu(self, ext):
+        """
+        Resolve an HDU number for a combined row read and confirm it is a
+        readable table.
+        """
+        if ext < 0:
+            raise IndexError("hdu numbers must be >= 0, got %d" % ext)
+
+        if (not hasattr(self, 'hdu_list')) or (not hasattr(self, "hdu_map")):
+            self.update_hdu_list()
+
+        if ext >= len(self.hdu_list):
+            raise IndexError(
+                "hdu %d not found; file has %d HDUs"
+                % (ext, len(self.hdu_list))
+            )
+
+        hdu = self.hdu_list[ext]
+        if not isinstance(hdu, TableHDU) or isinstance(
+            hdu, CompressedTableHDU
+        ):
+            raise IOError(
+                "HDU %d is not a readable binary or ascii table" % ext
+            )
+        return hdu
 
 
 def check_extver(extver):

@@ -1,5 +1,21 @@
 # Changes
 
+## Unreleased
+
+New Features
+
+- Added `FITS.read_rows_batch`, a combined reader that extracts individual
+  rows from multiple table HDUs in one request.  Each request is an explicit
+  `(hdu, row)` pair; requests can interleave HDUs and repeat source rows.
+  Distinct source rows are read from disk only once and cached per HDU, so
+  repeated candidates reuse the underlying read instead of re-reading the row
+  or loading the whole table.  Results are returned in request order as
+  `RowBatchResult` objects carrying the actual HDU number, row number,
+  extension name and table dtype; each result owns an independent copy, so
+  equal-valued rows from different HDUs are never merged and post-processing
+  one result never affects another.  Illegal requests report an error at their
+  own position while valid results at other positions are still delivered.
+
 ## 1.4.3
 
 New Features
