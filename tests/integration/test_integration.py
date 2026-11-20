@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import re
 import textwrap
 
 import pytest
@@ -17,6 +18,7 @@ from datajudge.db_access import (
     is_postgresql,
     is_snowflake,
 )
+from datajudge.equivalence import DIGIT_WIDTH, EXACT, supports_digit_width_normalization
 from datajudge.utils import (
     filternull_element,
     filternull_element_or_tuple_all,
@@ -2563,6 +2565,158 @@ def test_varchar_regex_counterexample_invalid(
         )
     with pytest.raises(ValueError):
         req[0].test(engine)
+
+
+def _regex_absolute_terms(result):
+    match = re.search(
+        r"In absolute terms, (\d+) of the (\d+) samples",
+        result.failure_message or "",
+    )
+    assert match is not None, result.failure_message
+    return int(match.group(1)), int(match.group(2))
+
+
+def _build_width_constraint(engine, table, *, computation_in_db, aggregated, mode):
+    req = requirements.WithinRequirement.from_table(*table)
+    not_null = Condition(raw_string="col_varchar IS NOT NULL")
+    if computation_in_db:
+        req.add_varchar_regex_constraint_db(
+            "col_varchar",
+            r"^[0-9]{3}$",
+            condition=not_null,
+            relative_tolerance=0,
+            aggregated=aggregated,
+            n_counterexamples=-1,
+            equivalence_mode=mode,
+        )
+    else:
+        req.add_varchar_regex_constraint(
+            "col_varchar",
+            r"^[0-9]{3}$",
+            condition=not_null,
+            allow_none=True,
+            relative_tolerance=0,
+            aggregated=aggregated,
+            n_counterexamples=-1,
+            equivalence_mode=mode,
+        )
+    return req[0]
+
+
+@pytest.mark.parametrize("computation_in_db", [True, False])
+@pytest.mark.parametrize("aggregated", [True, False])
+def test_varchar_regex_digit_width_equivalence(
+    engine, varchar_width_table, computation_in_db, aggregated
+):
+    if computation_in_db and (
+        is_mssql(engine) or is_bigquery(engine) or is_db2(engine)
+    ):
+        # Backends without in-database regex support skip the DB rule; their
+        # explicit digit-width failure mode is covered separately below.
+        pytest.skip("In-database regex matching not supported by given dialect.")
+
+    constraint = _build_width_constraint(
+        engine,
+        varchar_width_table,
+        computation_in_db=computation_in_db,
+        aggregated=aggregated,
+        mode=DIGIT_WIDTH,
+    )
+    result = constraint.test(engine)
+    n_violations, n_total = _regex_absolute_terms(result)
+    assert result.outcome is False
+    if aggregated:
+        # The three valid 007 spellings ('007', '００７', '0０7') count as one
+        # distinct normalized code; five normalized codes remain in total.
+        assert (n_violations, n_total) == (4, 5)
+    else:
+        # Every non-null source row is counted individually.
+        assert (n_violations, n_total) == (6, 10)
+
+
+def test_varchar_regex_digit_width_rules_agree(engine, varchar_width_table):
+    if is_mssql(engine) or is_bigquery(engine) or is_db2(engine):
+        pytest.skip("In-database regex matching not supported by given dialect.")
+
+    for aggregated in (True, False):
+        db_result = _build_width_constraint(
+            engine,
+            varchar_width_table,
+            computation_in_db=True,
+            aggregated=aggregated,
+            mode=DIGIT_WIDTH,
+        ).test(engine)
+        py_result = _build_width_constraint(
+            engine,
+            varchar_width_table,
+            computation_in_db=False,
+            aggregated=aggregated,
+            mode=DIGIT_WIDTH,
+        ).test(engine)
+        assert db_result.outcome == py_result.outcome
+        assert _regex_absolute_terms(db_result) == _regex_absolute_terms(py_result)
+
+
+def test_varchar_regex_digit_width_counterexamples_keep_raw_values(
+    engine, varchar_width_table
+):
+    if is_mssql(engine) or is_bigquery(engine) or is_db2(engine):
+        pytest.skip("In-database regex matching not supported by given dialect.")
+
+    for computation_in_db in (True, False):
+        result = _build_width_constraint(
+            engine,
+            varchar_width_table,
+            computation_in_db=computation_in_db,
+            aggregated=False,
+            mode=DIGIT_WIDTH,
+        ).test(engine)
+        message = result.failure_message
+        assert message is not None
+        # Length-mismatch spellings of the same normalized code remain
+        # traceable as separate, original rows in the report.
+        for raw_value in ("0007", "０００７", "0０07", "０X7", "００Ａ"):
+            assert raw_value in message
+
+
+def test_varchar_regex_exact_mode_unchanged(engine, varchar_width_table):
+    if is_mssql(engine) or is_bigquery(engine) or is_db2(engine):
+        pytest.skip("In-database regex matching not supported by given dialect.")
+
+    for computation_in_db in (True, False):
+        result = _build_width_constraint(
+            engine,
+            varchar_width_table,
+            computation_in_db=computation_in_db,
+            aggregated=True,
+            mode=EXACT,
+        ).test(engine)
+        assert result.outcome is False
+        assert _regex_absolute_terms(result) == (8, 9)
+
+
+def test_varchar_regex_digit_width_unsupported_backend_raises(
+    engine, varchar_width_table
+):
+    if supports_digit_width_normalization(engine):
+        pytest.skip("Backend supports exact digit-width normalization.")
+    req = requirements.WithinRequirement.from_table(*varchar_width_table)
+    req.add_varchar_regex_constraint_db(
+        "col_varchar",
+        r"^[0-9]{3}$",
+        equivalence_mode=DIGIT_WIDTH,
+    )
+    with pytest.raises(NotImplementedError, match="Digit-width equivalence"):
+        req[0].test(engine)
+    # The in-memory rule remains available on every backend.
+    req = requirements.WithinRequirement.from_table(*varchar_width_table)
+    req.add_varchar_regex_constraint(
+        "col_varchar",
+        r"^[0-9]{3}$",
+        allow_none=True,
+        equivalence_mode=DIGIT_WIDTH,
+    )
+    assert req[0].test(engine).outcome is False
 
 
 def test_backend_dependent_condition(engine, mix_table1):

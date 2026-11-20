@@ -20,6 +20,12 @@ from ._engines import (
 )
 from .condition import Condition
 from .data_source import DataSource, TableDataSource
+from .equivalence import (
+    DIGIT_WIDTH,
+    EXACT,
+    normalized_digit_width_column,
+    validate_equivalence_mode,
+)
 
 
 def get_table_columns(
@@ -936,17 +942,32 @@ def get_uniques(
 
 
 def get_unique_count(
-    engine: sa.engine.Engine, ref: DataReference
+    engine: sa.engine.Engine,
+    ref: DataReference,
+    equivalence_mode: str = EXACT,
 ) -> tuple[int, list[sa.Select]]:
+    validate_equivalence_mode(equivalence_mode)
     selection = ref.get_selection(engine)
-    subquery = selection.distinct().alias()
-    selection = sa.select(sa.func.count()).select_from(subquery)
+    subquery = selection.alias()
+    if equivalence_mode == DIGIT_WIDTH:
+        if (column_names := ref.get_columns(engine)) is None:
+            raise ValueError("Need columns for digit-width unique count.")
+        normalized_columns = [
+            normalized_digit_width_column(engine, subquery.c[column_name])
+            for column_name in column_names
+        ]
+        distinct_subquery = (
+            sa.select(*normalized_columns).select_from(subquery).distinct().subquery()
+        )
+    else:
+        distinct_subquery = selection.distinct().alias()
+    count_selection = sa.select(sa.func.count()).select_from(distinct_subquery)
     with engine.connect() as connection:
-        intermediate_result = connection.execute(selection).scalar()
+        intermediate_result = connection.execute(count_selection).scalar()
     if intermediate_result is None:
         raise ValueError("Unique count could not be fetched.")
     result = int(intermediate_result)
-    return result, [selection]
+    return result, [count_selection]
 
 
 def get_unique_count_union(
@@ -1321,19 +1342,47 @@ def get_regex_violations(
     aggregated: bool,
     regex: str,
     n_counterexamples: int,
+    equivalence_mode: str = EXACT,
 ) -> tuple[tuple[int, Any], list[sa.Select]]:
-    original_selection = ref.get_selection(engine)
+    validate_equivalence_mode(equivalence_mode)
+    base_subquery = ref.get_selection(engine).subquery()
     column = ref.get_column(engine)
-    if aggregated:
-        original_selection = original_selection.distinct()
-    subquery = original_selection.subquery()
+    raw_column = base_subquery.c[column]
+    if equivalence_mode == DIGIT_WIDTH:
+        # Regex matching happens on the normalized value, but the reported
+        # counterexamples remain the untouched original values so that error
+        # records can be sent back to the source system.
+        matched_column = normalized_digit_width_column(engine, raw_column)
+    else:
+        matched_column = raw_column
 
-    violation_selection = sa.select(subquery.c[column]).where(
-        sa.not_(subquery.c[column].regexp_match(regex))
-    )
-    n_violations_selection = sa.select(sa.func.count()).select_from(
-        violation_selection.subquery()
-    )
+    mismatch_clause = sa.not_(matched_column.regexp_match(regex))
+    if aggregated:
+        # Count the distinct values (raw values in exact mode, normalized
+        # codes in digit-width mode) that violate the regex.
+        violating_values_selection = (
+            sa.select(matched_column)
+            .select_from(base_subquery)
+            .where(mismatch_clause)
+            .distinct()
+        )
+        n_violations_selection = sa.select(sa.func.count()).select_from(
+            violating_values_selection.subquery()
+        )
+        # Counterexamples always surface the original, unnormalized values.
+        violation_selection = (
+            sa.select(raw_column)
+            .select_from(base_subquery)
+            .where(mismatch_clause)
+            .distinct()
+        )
+    else:
+        violation_selection = (
+            sa.select(raw_column).select_from(base_subquery).where(mismatch_clause)
+        )
+        n_violations_selection = sa.select(sa.func.count()).select_from(
+            violation_selection.subquery()
+        )
 
     selections = [n_violations_selection]
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Add an optional `equivalence_mode="digit_width"` to
+  `WithinRequirement.add_varchar_regex_constraint` and
+  `WithinRequirement.add_varchar_regex_constraint_db`. When enabled, full-width
+  digits (`０` ... `９`) and ASCII digits (`0` ... `9`) are treated as
+  interchangeable during regex matching and distinct-code counting, while other
+  characters and the configured null policy stay unchanged. Counterexamples
+  still report the original, unnormalized values so that error records can be
+  sent back to the source. Backends that cannot perform the exact in-database
+  normalization together with regex matching raise a clear
+  `NotImplementedError` instead of relying on collation-based equality.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

@@ -31,6 +31,7 @@ from .db_access import (
     DataReference,
     _get_date_growth_rate,
 )
+from .equivalence import EXACT
 from .utils import OutputProcessor, output_processor_limit
 
 _T = TypeVar("_T")
@@ -1117,6 +1118,7 @@ class WithinRequirement(Requirement):
         relative_tolerance: float = 0.0,
         aggregated: bool = True,
         n_counterexamples: int = 5,
+        equivalence_mode: str = EXACT,
         cache_size=None,
     ):
         """Assesses whether the values in a column match a given regular expression pattern.
@@ -1132,6 +1134,14 @@ class WithinRequirement(Requirement):
         assertion text. If all counterexamples are meant to be shown, provide ``-1`` as
         an argument.
 
+        ``equivalence_mode`` controls which values are treated as the same code. With
+        the default ``"exact"`` mode, values are validated exactly as stored. With
+        ``"digit_width"``, full-width digits (``０`` ... ``９``) and ASCII digits
+        (``0`` ... ``9``) are treated as interchangeable when matching the regex and
+        counting distinct codes; every other character keeps its original form, the
+        null policy is unchanged and counterexamples still report the original,
+        unnormalized values so that they can be sent back to the source.
+
         When using this method, the regex matching will take place in memory. If instead,
         you would like the matching to take place in database which is typically faster and
         substantially more memory-saving, please consider using
@@ -1146,6 +1156,7 @@ class WithinRequirement(Requirement):
                 relative_tolerance=relative_tolerance,
                 aggregated=aggregated,
                 n_counterexamples=n_counterexamples,
+                equivalence_mode=equivalence_mode,
                 name=name,
                 cache_size=cache_size,
             )
@@ -1160,6 +1171,7 @@ class WithinRequirement(Requirement):
         relative_tolerance: float = 0.0,
         aggregated: bool = True,
         n_counterexamples: int = 5,
+        equivalence_mode: str = EXACT,
         cache_size=None,
     ):
         """Assesses whether the values in a column match a given regular expression pattern.
@@ -1171,6 +1183,16 @@ class WithinRequirement(Requirement):
         ``n_counterexamples`` defines how many counterexamples are displayed in an
         assertion text. If all counterexamples are meant to be shown, provide ``-1`` as
         an argument.
+
+        ``equivalence_mode`` controls which values are treated as the same code. With
+        the default ``"exact"`` mode, values are validated exactly as stored. With
+        ``"digit_width"``, full-width and ASCII digits are normalized inside the
+        database before matching, so the check never relies on a collation that may
+        already conflate digit widths; counterexamples still report the original
+        values. Backends that cannot perform this exact normalization together with
+        in-database regex matching raise a clear error instead of silently falling
+        back to collation-based equality. The in-memory
+        ``add_varchar_regex_constraint`` supports the option on every backend.
 
         When using this method, the regex matching will take place in database, which is
         only supported for Postgres, Sqllite and Snowflake. Note that for this
@@ -1187,6 +1209,7 @@ class WithinRequirement(Requirement):
                 relative_tolerance=relative_tolerance,
                 aggregated=aggregated,
                 n_counterexamples=n_counterexamples,
+                equivalence_mode=equivalence_mode,
                 name=name,
                 cache_size=cache_size,
             )

@@ -928,6 +928,32 @@ def varchar_table2(engine, metadata):
 
 
 @pytest.fixture(scope="module")
+def varchar_width_table(engine, metadata):
+    table_name = "varchar_width_table"
+    columns: list[sa.Column | str] = [
+        sa.Column("col_varchar", _string_column(engine)),
+    ]
+    data: list[dict[str, str | None]] = [
+        {"col_varchar": value}
+        for value in [
+            "007",
+            "007",
+            "００７",
+            "0０7",
+            "0007",
+            "０００７",
+            "0０07",
+            "00A",
+            "００Ａ",
+            "０X7",
+        ]
+    ]
+    data.append({"col_varchar": None})
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
 def varchar_table_real(engine, metadata):
     table_name = "varchar_table_real"
     columns: list[sa.Column | str] = [
