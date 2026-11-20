@@ -1,0 +1,36 @@
+stable_format: "%Y-%m-%d"
+
+sources:
+  - name: hq
+    formats:
+      - name: iso
+        pattern: "%Y-%m-%d"
+        order: iso
+  - name: store_north
+    formats:
+      - name: dmy_slash
+        pattern: "%d/%m/%Y"
+        order: day_first
+      - name: mdy_slash
+        pattern: "%m/%d/%Y"
+        order: month_first
+  - name: store_south
+    formats:
+      - name: dmy_slash
+        pattern: "%d/%m/%Y"
+        order: day_first
+      - name: mdy_slash
+        pattern: "%m/%d/%Y"
+        order: month_first
+
+files:
+  - path: hq_dates.csv
+    source_column: source
+    version_column: batch_version
+    date_column: doc_date
+    sources: [hq]
+  - path: stores_dates.csv
+    source_column: store
+    version_column: batch_version
+    date_column: doc_date
+    sources: [store_north, store_south]

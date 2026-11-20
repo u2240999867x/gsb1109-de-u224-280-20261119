@@ -1,0 +1,12 @@
+rows=10 stable_format=%Y-%m-%d
+standardized cells re-read through DateField successfully:
+  hq_dates.csv:2 raw='2024-02-15' evidence=confirmed standardized=2024-02-15
+  hq_dates.csv:3 raw='15/02/2024' evidence=unparseable standardized=None
+  stores_dates.csv:2 raw='05/03/2024' evidence=ambiguous standardized=None
+  stores_dates.csv:3 raw='09/09/2024' evidence=confirmed standardized=2024-09-09
+  stores_dates.csv:4 raw='06/04/2024' evidence=confirmed standardized=2024-06-04
+  stores_dates.csv:5 raw='13/02/2024' evidence=confirmed standardized=2024-02-13
+  stores_dates.csv:6 raw='04/13/2024' evidence=confirmed standardized=2024-04-13
+  stores_dates.csv:7 raw='07/07/2024' evidence=same_day_unknown_format standardized=2024-07-07
+  stores_dates.csv:8 raw='25/02/2024' evidence=confirmed standardized=2024-02-25
+  stores_dates.csv:9 raw='02/25/2024' evidence=confirmed standardized=2024-02-25

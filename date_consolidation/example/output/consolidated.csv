@@ -1,0 +1,11 @@
+source,version,source_file,source_line,raw_text,evidence,standardized_date
+hq,v7,hq_dates.csv,2,2024-02-15,confirmed,2024-02-15
+hq,v7,hq_dates.csv,3,15/02/2024,unparseable,
+store_north,v7,stores_dates.csv,2,05/03/2024,ambiguous,
+store_south,v7,stores_dates.csv,3,09/09/2024,confirmed,2024-09-09
+store_south,v7,stores_dates.csv,4,06/04/2024,confirmed,2024-06-04
+store_north,v7,stores_dates.csv,5,13/02/2024,confirmed,2024-02-13
+store_south,v7,stores_dates.csv,6,04/13/2024,confirmed,2024-04-13
+store_north,v7,stores_dates.csv,7,07/07/2024,same_day_unknown_format,2024-07-07
+store_north,v7,stores_dates.csv,8,25/02/2024,confirmed,2024-02-25
+store_north,v7,stores_dates.csv,9,02/25/2024,confirmed,2024-02-25

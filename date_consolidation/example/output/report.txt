@@ -1,0 +1,71 @@
+Date consolidation evidence report
+====================================
+
+Per source/version consistency
+------------------------------
+  source='hq' version='v7' self_consistent=True
+      ISO source: order evidence not applicable
+  source='store_north' version='v7' self_consistent=False
+      order(s) proven by single-format rows: day_first, month_first
+      formats observed for day_first: dmy_slash
+      formats observed for month_first: mdy_slash
+      contradiction: stores_dates.csv:9 raw='02/25/2024' is legal only as month_first but this source/version already proved day_first
+  source='store_south' version='v7' self_consistent=True
+      order(s) proven by single-format rows: month_first
+      formats observed for month_first: mdy_slash
+
+Confirmed: value and format both supported by evidence
+------------------------------------------------------
+  - hq_dates.csv:2 source='hq' version='v7' raw='2024-02-15'
+      reading: 2024-02-15 via iso (%Y-%m-%d, iso)
+      verdict: confirmed - ISO source; value and format 'iso' (%Y-%m-%d) are fixed
+      standardized: 2024-02-15
+  - stores_dates.csv:3 source='store_south' version='v7' raw='09/09/2024'
+      reading: 2024-09-09 via dmy_slash (%d/%m/%Y, day_first)
+      reading: 2024-09-09 via mdy_slash (%m/%d/%Y, month_first)
+      verdict: confirmed - order month_first proven for this source/version; legal format(s) here: mdy_slash
+      standardized: 2024-09-09
+  - stores_dates.csv:4 source='store_south' version='v7' raw='06/04/2024'
+      reading: 2024-04-06 via dmy_slash (%d/%m/%Y, day_first)
+      reading: 2024-06-04 via mdy_slash (%m/%d/%Y, month_first)
+      verdict: confirmed - order month_first proven for this source/version; legal format(s) here: mdy_slash
+      standardized: 2024-06-04
+  - stores_dates.csv:5 source='store_north' version='v7' raw='13/02/2024'
+      reading: 2024-02-13 via dmy_slash (%d/%m/%Y, day_first)
+      verdict: confirmed - only order day_first yields a legal date; format(s): dmy_slash
+      standardized: 2024-02-13
+  - stores_dates.csv:6 source='store_south' version='v7' raw='04/13/2024'
+      reading: 2024-04-13 via mdy_slash (%m/%d/%Y, month_first)
+      verdict: confirmed - only order month_first yields a legal date; format(s): mdy_slash
+      standardized: 2024-04-13
+  - stores_dates.csv:8 source='store_north' version='v7' raw='25/02/2024'
+      reading: 2024-02-25 via dmy_slash (%d/%m/%Y, day_first)
+      verdict: confirmed - only order day_first yields a legal date; format(s): dmy_slash
+      standardized: 2024-02-25
+  - stores_dates.csv:9 source='store_north' version='v7' raw='02/25/2024'
+      reading: 2024-02-25 via mdy_slash (%m/%d/%Y, month_first)
+      verdict: confirmed - only order month_first yields a legal date; format(s): mdy_slash
+      standardized: 2024-02-25
+
+Same calendar day, format/order still unknown
+---------------------------------------------
+  - stores_dates.csv:7 source='store_north' version='v7' raw='07/07/2024'
+      reading: 2024-07-07 via dmy_slash (%d/%m/%Y, day_first)
+      reading: 2024-07-07 via mdy_slash (%m/%d/%Y, month_first)
+      verdict: same_day_unknown_format - all legal orders resolve to the same day; order/format is not proven
+      standardized: 2024-07-07
+
+Genuinely two possible dates
+----------------------------
+  - stores_dates.csv:2 source='store_north' version='v7' raw='05/03/2024'
+      reading: 2024-03-05 via dmy_slash (%d/%m/%Y, day_first)
+      reading: 2024-05-03 via mdy_slash (%m/%d/%Y, month_first)
+      verdict: ambiguous - distinct calendar days are legal under different day/month orders
+      standardized: (left empty)
+
+No configured format accepts the raw value
+------------------------------------------
+  - hq_dates.csv:3 source='hq' version='v7' raw='15/02/2024'
+      reading: none
+      verdict: unparseable - no configured format accepts the raw value
+      standardized: (left empty)
