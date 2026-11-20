@@ -1,5 +1,19 @@
 # Changes
 
+## Unreleased
+
+New Features
+
+- Added `FITS.resample_tiles()` (aliases `copy_image_tiles()` and
+  `retile_image()`) to copy a tile-compressed image into a new tile layout.
+  The copy proceeds in bounded blocks and destination tiles, so image memory
+  does not grow with the number of pixels.  Integer sources are copied as
+  decoded integer codes, preserving `BSCALE`/`BZERO`/`BLANK` and the physical
+  values on read.  Floating point sources use the values read back from the
+  source as the baseline and are stored with lossless GZIP.  Only lossless
+  target combinations are accepted, and old `ZTILEn`/`ZNAXISn` layout keywords
+  are not copied.
+
 ## 1.4.3
 
 New Features

@@ -860,6 +860,46 @@ static PyObject *PyFITSObject_movabs_hdu(struct PyFITSObject *self,
     }
 }
 
+// delete the specified HDU; ffdhdu removes the current HDU and shifts
+// subsequent HDUs down.
+static PyObject *PyFITSObject_delete_hdu(struct PyFITSObject *self,
+                                         PyObject *args) {
+    ALLOW_NOGIL;
+    int hdunum = 0;
+    int hdutype = 0;
+    int status = 0;
+
+    LOCK_FITS(self);
+
+    if (self->fits == NULL) {
+        PyErr_SetString(PyExc_ValueError, "fits file is NULL");
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+
+    if (!PyArg_ParseTuple(args, (char *)"i", &hdunum)) {
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+
+    if (NOGIL(fits_movabs_hdu(self->fits, hdunum, &hdutype, &status))) {
+        goto delete_hdu_cleanup;
+    }
+    if (NOGIL(ffdhdu(self->fits, &hdutype, &status))) {
+        goto delete_hdu_cleanup;
+    }
+
+delete_hdu_cleanup:
+    if (status != 0) {
+        set_ioerr_string_from_status(status, self);
+        UNLOCK_FITS(self);
+        return NULL;
+    }
+
+    UNLOCK_FITS(self);
+    Py_RETURN_NONE;
+}
+
 // get info for the specified HDU
 static PyObject *PyFITSObject_get_hdu_info(struct PyFITSObject *self,
                                            PyObject *args) {
@@ -6566,6 +6606,8 @@ static PyMethodDef PyFITSObject_methods[] = {
 
     {"movabs_hdu", (PyCFunction)PyFITSObject_movabs_hdu, METH_VARARGS,
      "movabs_hdu\n\nMove to the specified HDU."},
+    {"delete_hdu", (PyCFunction)PyFITSObject_delete_hdu, METH_VARARGS,
+     "delete_hdu\n\nDelete the specified HDU."},
     {"is_compressed_table", (PyCFunction)PyFITSObject_is_compressed_table,
      METH_VARARGS,
      "is_compressed_table\n\nReturn True if the specified HDU is a "

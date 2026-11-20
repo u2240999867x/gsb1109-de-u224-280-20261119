@@ -22,6 +22,7 @@ See the main docs at https://github.com/esheldon/fitsio
 """
 
 from __future__ import with_statement, print_function
+import itertools
 import os
 import numpy
 
@@ -1597,6 +1598,255 @@ class FITS(object):
             ext = item
         return ext, ver, ver_sent
 
+    def resample_tiles(
+        self,
+        source,
+        dest,
+        tile_dims,
+        compress=NOT_SET,
+        clobber=False,
+        buffer_factor=1,
+    ):
+        """
+        Copy an image HDU into a new HDU using a different tile layout.
+
+        The source data are read one destination-sized block at a time and
+        written into destination tiles as they fill up.  cfitsio decodes only
+        the source tiles touched by each block, so the amount of image data
+        held in memory does not grow with the number of pixels in the image.
+        The default buffer holds at most ``buffer_factor`` destination tiles.
+
+        Only lossless target compression combinations are supported.  Integer
+        sources are written using their decoded codes (the values returned
+        with ``ignore_scaling``), never scaled physical values, and
+        ``BSCALE``/``BZERO``/``BLANK`` are copied unchanged so both raw and
+        physical reads match the source.  Floating point sources are written
+        from the values read back through the normal read path, so an already
+        quantized source keeps that baseline; they are stored with lossless
+        GZIP and the integer scaling keywords are not copied.  Source tile
+        keywords (``ZTILEn``, ``ZNAXISn``, ``ZBITPIX``, ``ZIMAGE``...) describe
+        the old layout and are not copied; cfitsio writes the new ones.
+
+        parameters
+        ----------
+        source: int or tuple
+            Source extension selector accepted by ``FITS.__getitem__``
+            (zero-offset integer or extension name).  It must be an image HDU.
+        dest: int or tuple
+            Destination extension selector.  It must be absent (a new image
+            HDU is appended) or an empty image HDU with the same shape.
+        tile_dims: tuple of ints
+            New tile dimensions in Python (C) order, matching ``tile_dims``
+            used by ``write``.
+        compress: string or int, optional
+            Compression type for the destination.  Default of ``NOT_SET``
+            reuses the source compression type.  Integer sources accept the
+            lossless RICE/GZIP combinations; floating point sources always
+            use lossless GZIP so the values read back from the source are
+            preserved without further quantization.
+        clobber: bool, optional
+            If True, replace the last (uncompressed) destination image HDU.
+            The replacement is appended after the source extension and the
+            old HDU is removed, so extension numbering stays contiguous.
+        buffer_factor: int, optional
+            Maximum number of destination tiles to buffer while copying.
+
+        returns
+        -------
+        The destination ImageHDU.
+        """
+        from .hdu.image import _image_bitpix2npy
+
+        if buffer_factor < 1:
+            raise ValueError("buffer_factor must be at least 1")
+
+        self.update_hdu_list(rebuild=True)
+        src = self[source]
+        if src._info['hdutype'] != IMAGE_HDU:
+            raise ValueError("source extension is not an image HDU")
+        if not src.has_data():
+            raise ValueError("source image has no data")
+
+        dims = tuple(int(d) for d in src.get_dims())
+        ndim = len(dims)
+        td = get_tile_dims(tile_dims, dims)
+        if td is None or numpy.any(td <= 0):
+            raise ValueError("tile_dims must contain positive sizes")
+
+        src_info = src.get_info()
+        src_dtype = numpy.dtype(_image_bitpix2npy[src_info['img_type']])
+        is_float_source = src_dtype.kind == 'f'
+
+        srchdr = src.read_header()
+        src_comptype = src_info.get('comptype')
+        if compress is NOT_SET:
+            dst_comptype = get_compress_type(src_comptype)
+        else:
+            dst_comptype = get_compress_type(compress)
+
+        if dst_comptype == NOCOMPRESS:
+            raise ValueError(
+                "a tile-compressed destination is required; "
+                "the source tile layout cannot be retained"
+            )
+
+        check_lossless_target(dst_comptype, src_dtype)
+
+        if is_float_source:
+            # Floating point values read back from a quantized source are
+            # preserved by lossless GZIP, not by re-applying integer tiling.
+            dst_comptype = GZIP_1
+
+        try:
+            dst = self[dest]
+        except (IOError, ValueError, IndexError):
+            dst = None
+
+        append_ext = None
+        replace_ext = None
+        if dst is not None:
+            if dst._info['hdutype'] != IMAGE_HDU:
+                raise ValueError("destination extension is not an image")
+            if tuple(dst.get_dims()) != dims:
+                raise ValueError(
+                    "destination dims %s do not match source dims %s"
+                    % (tuple(dst.get_dims()), dims)
+                )
+            if not clobber:
+                raise ValueError(
+                    "destination already exists; send clobber=True "
+                    "to replace it"
+                )
+            if dst.is_compressed():
+                raise ValueError(
+                    "cannot replace a tile-compressed destination in place"
+                )
+            replace_ext = int(dst._ext)
+            if replace_ext != len(self) - 1:
+                raise ValueError("clobber can only replace the last extension")
+            if replace_ext <= int(src._ext):
+                raise ValueError(
+                    "cannot replace a destination at or before the source; "
+                    "choose a new destination extension"
+                )
+        else:
+            # An explicit destination number past the end means "append".
+            ext, ver, ver_sent = self._extract_item(dest)
+            if isinstance(ext, (int, numpy.integer)):
+                if int(ext) == len(self):
+                    append_ext = int(ext)
+                elif int(ext) > len(self):
+                    raise ValueError(
+                        "destination extension %d is past the end of the file"
+                        % int(ext)
+                    )
+            elif not ver_sent:
+                raise ValueError("destination extension not found: %s" % ext)
+
+        if replace_ext is not None:
+            if not hasattr(self._FITS, 'delete_hdu'):
+                raise RuntimeError(
+                    "the loaded fitsio extension does not support replacing "
+                    "an existing destination HDU; rebuild the extension"
+                )
+            self._FITS.delete_hdu(replace_ext + 1)
+            self.update_hdu_list(rebuild=True)
+            dst_ext = replace_ext
+        else:
+            dst_ext = append_ext if append_ext is not None else len(self)
+            dst_ext = int(dst_ext)
+
+        self.create_image_hdu(
+            dims=dims,
+            dtype=src_dtype,
+            compress=dst_comptype,
+            tile_dims=td,
+            qlevel=0.0 if is_float_source else NOT_SET,
+        )
+        self.update_hdu_list(rebuild=True)
+        dst = self[-1]
+        if dst._ext != dst_ext:
+            raise RuntimeError(
+                "destination extension %d was not created at the requested "
+                "position" % dst_ext
+            )
+
+        src_hdr = _image_copy_header(srchdr, drop_scaling=is_float_source)
+        max_tiles = max(1, int(buffer_factor))
+
+        # The source HDU may have moved if the destination was deleted.
+        src = self[source]
+
+        pending = {}
+        pending_order = []
+
+        # Integer sources are copied as decoded codes.  Floating point
+        # sources are copied from the values read back through the normal
+        # (possibly quantized) path, so that baseline is preserved.
+        src.ignore_scaling = not is_float_source
+        try:
+            for start, stop in _chunk_ranges(dims, td):
+                block = src[
+                    tuple(slice(start[i], stop[i]) for i in range(ndim))
+                ]
+
+                tile_ranges = []
+                for i in range(ndim):
+                    lo = start[i] // int(td[i])
+                    hi = (stop[i] - 1) // int(td[i])
+                    tile_ranges.append(range(int(lo), int(hi) + 1))
+
+                for tidx in itertools.product(*tile_ranges):
+                    tstart = [tidx[i] * int(td[i]) for i in range(ndim)]
+                    tend = [
+                        min(tstart[i] + int(td[i]), dims[i])
+                        for i in range(ndim)
+                    ]
+                    lo = [max(start[i], tstart[i]) for i in range(ndim)]
+                    hi = [min(stop[i], tend[i]) for i in range(ndim)]
+                    if tidx not in pending:
+                        pending[tidx] = numpy.zeros(
+                            [tend[i] - tstart[i] for i in range(ndim)],
+                            dtype=src_dtype,
+                        )
+                        pending_order.append(tidx)
+
+                    buf = pending[tidx]
+                    dst_slices = tuple(
+                        slice(lo[i] - tstart[i], hi[i] - tstart[i])
+                        for i in range(ndim)
+                    )
+                    src_slices = tuple(
+                        slice(lo[i] - start[i], hi[i] - start[i])
+                        for i in range(ndim)
+                    )
+                    buf[dst_slices] = block[src_slices]
+
+                while len(pending) > max_tiles:
+                    _flush_pending(
+                        self, dst_ext, pending, pending_order.pop(0), td, dims
+                    )
+        finally:
+            src.ignore_scaling = False
+
+        while pending_order:
+            _flush_pending(
+                self, dst_ext, pending, pending_order.pop(0), td, dims
+            )
+
+        dst.write_keys(src_hdr)
+
+        self.reopen()
+        return self[dst_ext]
+
+    def copy_image_tiles(self, source, dest, tile_dims, **keys):
+        """
+        Alias for resample_tiles; copy an image to a new tile layout.
+        """
+        return self.resample_tiles(source, dest, tile_dims, **keys)
+
+    retile_image = copy_image_tiles
+
     def __getitem__(self, item):
         """
         Get an hdu by number, name, and possibly version
@@ -1696,6 +1946,140 @@ def check_extver(extver):
     if extver <= 0:
         raise ValueError("extver must be > 0")
     return extver
+
+
+_IMAGE_LAYOUT_KEY_RE = None
+
+
+def _image_layout_key_pattern():
+    import re
+
+    global _IMAGE_LAYOUT_KEY_RE
+    if _IMAGE_LAYOUT_KEY_RE is None:
+        _IMAGE_LAYOUT_KEY_RE = re.compile(
+            r'^(ZIMAGE|ZSIMPLE|ZEXTEND|ZBITPIX|ZNAXIS[0-9]*|ZTILE[0-9]*|'
+            r'ZCMPTYPE|ZQUANTIZ|ZDITHER0|ZNAME[0-9]*|ZVAL[0-9]*)$',
+            re.IGNORECASE,
+        )
+    return _IMAGE_LAYOUT_KEY_RE
+
+
+def _image_copy_header(hdr, drop_scaling=False):
+    """
+    Return the science header records that can be copied to a new layout.
+
+    Structural keywords (NAXIS, BITPIX, ...), checksums and all keywords that
+    describe the source compression layout are removed.  Scaling, units and
+    missing-value declarations are retained unless ``drop_scaling`` is set
+    (used when the new image stores already-scaled values).
+    """
+    out = FITSHDR()
+    structural = {
+        'SIMPLE',
+        'EXTEND',
+        'XTENSION',
+        'BITPIX',
+        'PCOUNT',
+        'GCOUNT',
+        'THEAP',
+        'CHECKSUM',
+        'DATASUM',
+    }
+    if drop_scaling:
+        structural |= {'BSCALE', 'BZERO', 'BLANK'}
+    layout_re = _image_layout_key_pattern()
+    for rec in hdr.records():
+        name = rec.get('name')
+        if name is None:
+            continue
+        uname = name.upper()
+        if uname in structural or layout_re.match(uname):
+            continue
+        if uname.startswith('NAXIS'):
+            continue
+        out.add_record(rec)
+    return out
+
+
+def check_lossless_target(comptype, dtype):
+    """
+    Reject target compression combinations that cannot preserve the baseline
+    values read from the source.
+
+    For integer storage the baseline is the decoded integer code.  For
+    floating point storage the baseline is the value read back from the
+    source (which may already be quantized); only GZIP without quantization
+    can preserve it exactly.
+    """
+    dtype = numpy.dtype(dtype)
+
+    if comptype == NOCOMPRESS:
+        return
+
+    if dtype.kind == 'f':
+        if comptype in (GZIP_1, GZIP_2):
+            return
+        raise ValueError(
+            "only GZIP without quantization can preserve floating point "
+            "values read from a quantized source"
+        )
+
+    if dtype.kind not in ('i', 'u'):
+        raise ValueError("unsupported source image dtype %s" % dtype)
+
+    if dtype.itemsize == 8:
+        raise ValueError(
+            "8-byte integer images are not supported for tile compression"
+        )
+
+    if comptype == PLIO_1:
+        if dtype.kind == 'u' or dtype.itemsize == 1:
+            raise ValueError(
+                "PLIO cannot preserve unsigned or 1-byte integer images"
+            )
+    elif comptype == HCOMPRESS_1:
+        if dtype.kind == 'u':
+            raise ValueError("HCOMPRESS cannot preserve unsigned images")
+    elif comptype in (RICE_1, GZIP_1, GZIP_2):
+        return
+    else:
+        raise ValueError("unsupported compression type %s" % comptype)
+
+
+def _chunk_ranges(dims, tile_dims):
+    """
+    Yield (start, stop) ranges covering the image in tile-sized chunks.
+    """
+    starts = [
+        range(0, int(dims[i]), int(tile_dims[i])) for i in range(len(dims))
+    ]
+    for idx in itertools.product(*starts):
+        start = [int(v) for v in idx]
+        stop = [
+            min(start[i] + int(tile_dims[i]), int(dims[i]))
+            for i in range(len(dims))
+        ]
+        yield start, stop
+
+
+def _flush_pending(fits, dst_ext, pending, tidx, tile_dims, dims):
+    """
+    Write one completed destination tile without applying scaling.
+    """
+    buf = pending.pop(tidx)
+    ndim = len(dims)
+    first = []
+    last = []
+    for i in range(ndim):
+        start = tidx[i] * int(tile_dims[i])
+        first.append(start + 1)
+        last.append(start + buf.shape[i])
+    fits._FITS.write_subset(
+        dst_ext + 1,
+        numpy.ascontiguousarray(buf),
+        numpy.array(first[::-1], dtype='i8'),
+        numpy.array(last[::-1], dtype='i8'),
+    )
 
 
 def extract_filename(filename):

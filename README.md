@@ -290,6 +290,14 @@ fits.write(img, compress='rice', qlevel=16, qmethod='SUBTRACTIVE_DITHER_2')
 fits.write(img, compress='gzip', qlevel=None)
 fits.write(fimg, compress='gzip', qlevel=None)
 
+# copy an existing tile-compressed image into a new tile layout.  Integer
+# sources are copied as their decoded codes (and keep BSCALE/BZERO/BLANK);
+# floating point sources are copied from the values read back from the source
+# and stored with lossless GZIP.  Use tile_dims in C order, like write().
+fits.resample_tiles(ext, -1, tile_dims=(10, 20), compress='rice')
+
+# copy_image_tiles() and retile_image() are aliases for resample_tiles()
+
 # overwrite the image
 fits[ext].write(img2)
 
