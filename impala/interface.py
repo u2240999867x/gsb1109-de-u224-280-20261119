@@ -156,6 +156,9 @@ class Cursor(object):
     def get_log(self):
         raise NotImplementedError
 
+    def read_log(self, max_rows=1024):
+        raise NotImplementedError
+
     def get_profile(self):
         raise NotImplementedError
 

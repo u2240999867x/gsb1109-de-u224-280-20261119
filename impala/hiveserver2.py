@@ -43,6 +43,7 @@ from impala.error import (NotSupportedError, OperationalError,
                           ProgrammingError, HiveServer2Error, HttpError)
 from impala.exec_summary import build_exec_summary_table
 from impala.interface import Connection, Cursor, _bind_parameters
+from impala.log_events import LogEvent, LogRead, LogRows, LogTracker
 from impala.util import get_logger_and_init_null
 
 log = get_logger_and_init_null(__name__)
@@ -183,6 +184,7 @@ class HiveServer2Cursor(Cursor):
         self.close_finished_queries = close_finished_queries
 
         self._last_operation = None
+        self._log_tracker = LogTracker()
 
         self._last_operation_string = None
         self._last_operation_active = False
@@ -343,6 +345,8 @@ class HiveServer2Cursor(Cursor):
         self._last_operation_string = None
         self._last_operation = None
         self._last_operation_log = None
+        # Log positions cannot cross queries; start tracking afresh.
+        self._log_tracker = LogTracker()
         self._rowcount = -1
 
     def _set_rowcount_from_close_result(self, close_result):
@@ -356,6 +360,9 @@ class HiveServer2Cursor(Cursor):
     def _close_finished_operation(self):
         # Save the log as it can't be accessed after closing the query.
         self._last_operation_log = self.get_log()
+        # From now on log reads are served from the saved log instead of
+        # the live server.
+        self._log_tracker.seal(self._last_operation_log)
         self._last_operation_active = False
         close_result = self._last_operation.close()
         log.debug('Query closed')
@@ -716,6 +723,51 @@ class HiveServer2Cursor(Cursor):
             # Return the log saved before closing the query.
             return self._last_operation_log
         return self._last_operation.get_log()
+
+    def read_log(self, max_rows=1024):
+        """Continuously read the log of the last operation.
+
+        Unlike `get_log()`, which returns the log as one plain string,
+        this preserves confirmable log event boundaries and their source
+        so a reader can follow the reported range of the log of this
+        query:
+
+        - When the server pages the log as rows (Hive), each row is
+          returned as one `LogEvent` with a confirmed position, even if
+          the row value itself contains newlines. Overlapping pages that
+          match already confirmed positions are not duplicated; identical
+          text at different confirmed positions is reported as separate
+          events. If a server-provided position conflicts with content
+          already seen, the evidence is not suitable for automatic
+          continuation and `continued` is False.
+        - When the server only returns the whole log as text (Impala),
+          the snapshot is kept verbatim so changes can be reviewed, but
+          no event numbers or continuation success are derived from it.
+
+        Once the query is closed, reads are served from the log saved
+        before closing (`from_closed` is True) and re-reading is not
+        reported as new server content. Positions cannot cross queries:
+        executing another query starts the tracking afresh.
+
+        Returns a `LogRead` with the newly confirmed `events`, the
+        `snapshot` text if any, whether the read `continued` the previous
+        evidence, whether it comes `from_closed`, and the next confirmed
+        `position` (None when no verifiable positions exist).
+        """
+        if self._last_operation is None:
+            raise ProgrammingError("Operation state is not available")
+        if self._last_operation_log is not None:
+            # The operation was already closed; only the log saved before
+            # closing is available.
+            self._log_tracker.seal(self._last_operation_log)
+        return self._log_tracker.read(self._last_operation,
+                                      max_rows=max_rows)
+
+    @property
+    def log_position(self):
+        """The next confirmed log event position of the last operation,
+        or None when the log source has no verifiable positions."""
+        return self._log_tracker.position
 
     def get_profile(self, profile_format=TRuntimeProfileFormat.STRING):
         if self._last_operation is None:
@@ -1452,6 +1504,36 @@ class Operation(ThriftRPC):
                 convert_types=True, convert_strings_to_unicode=True)
             log = '\n'.join(l[0] for l in log)
         return log
+
+    def fetch_log(self, max_rows=1024):
+        """Fetch the operation log for continuous reading.
+
+        Returns a `LogRows` page carrying the server-provided start
+        position when the server pages the log as rows (Hive), or the
+        whole log as one text snapshot when only GetLog is available
+        (Impala). Each log row is a single event even if its value
+        contains newlines.
+        """
+        try:
+            req = TGetLogReq(operationHandle=self.handle)
+            # GetLog rpc is idempotent and so safe to retry.
+            return self._rpc('GetLog', req, True).log
+        except TApplicationException as e: # raised if Hive is used
+            if not e.type == TApplicationException.UNKNOWN_METHOD:
+                raise
+        req = TFetchResultsReq(operationHandle=self.handle,
+                               orientation=TFetchOrientation.FETCH_NEXT,
+                               maxRows=max_rows,
+                               fetchType=1)
+        resp = self._rpc('FetchResults', req, False)
+        schema = [('Log', 'STRING', None, None, None, None, None)]
+        batch = self._wrap_results(resp.results, resp.hasMoreRows, schema,
+            convert_types=True, convert_strings_to_unicode=True)
+        texts = [row[0] for row in batch]
+        start_offset = 0
+        if resp.results is not None and resp.results.startRowOffset is not None:
+            start_offset = resp.results.startRowOffset
+        return LogRows(start_offset, texts)
 
     def cancel(self):
         req = TCancelOperationReq(operationHandle=self.handle)
