@@ -43,6 +43,7 @@ from impala.error import (NotSupportedError, OperationalError,
                           ProgrammingError, HiveServer2Error, HttpError)
 from impala.exec_summary import build_exec_summary_table
 from impala.interface import Connection, Cursor, _bind_parameters
+from impala import metadata
 from impala.util import get_logger_and_init_null
 
 log = get_logger_and_init_null(__name__)
@@ -786,6 +787,122 @@ class HiveServer2Cursor(Cursor):
                     database_name, table_name))
         return [(r[3], r[5]) for r in results]
 
+    def get_table_structures(self, targets, catalog_name=None,
+                             database_name=None, case_sensitive=False,
+                             include_table_types=None):
+        """Return an exact structure manifest for a batch of objects.
+
+        ``targets`` may be a single ``"catalog.schema.table"`` string, a
+        ``(catalog, schema, table)`` triple, a mapping, or a list of any of
+        those.  Each object is looked up with both ``GetTables`` and
+        ``GetColumns``.  The returned :class:`impala.metadata.MetadataManifest`
+        distinguishes definitions that are known from definitions that are
+        still pending, and keeps ambiguous rows separate instead of dropping
+        or guessing them.
+
+        Names are treated as literals even when they contain characters such
+        as ``%``, ``_`` or ``*`` that a server may interpret as pattern
+        metacharacters.  Returned rows are filtered against the requested
+        three-part identity, so an extra object selected by the server is
+        never included in the manifest.
+
+        This is additive; :meth:`get_table_schema` keeps its historical return
+        form.
+        """
+        normalized = metadata.normalize_targets(
+            targets, catalog_name=catalog_name,
+            database_name=database_name, case_sensitive=case_sensitive)
+
+        if isinstance(include_table_types, str):
+            include_table_types = [include_table_types]
+
+        table_rows = []
+        column_rows = []
+        seen_tables = set()
+        seen_columns = set()
+
+        for target in normalized:
+            found = self._fetch_metadata_rows(
+                target, include_table_types=include_table_types)
+            for row in found[0]:
+                signature = _metadata_row_signature(row)
+                if signature not in seen_tables:
+                    seen_tables.add(signature)
+                    table_rows.append(row)
+            for row in found[1]:
+                signature = _metadata_row_signature(row)
+                if signature not in seen_columns:
+                    seen_columns.add(signature)
+                    column_rows.append(row)
+
+        return metadata.build_manifest(
+            normalized, table_rows=table_rows, column_rows=column_rows,
+            case_sensitive=case_sensitive)
+
+    def _fetch_metadata_rows(self, target, include_table_types=None):
+        """Fetch raw GetTables/GetColumns rows for one literal target."""
+        table_pattern = metadata.literal_pattern(target.name)
+        schema_pattern = (metadata.literal_pattern(target.schema)
+                          if target.schema is not None else '.*')
+
+        def fetch(name_pattern, schema_search):
+            table_rows = self._fetch_metadata_operation(
+                'RPC_GET_TABLES',
+                lambda: self.session.get_tables(
+                    database=schema_search,
+                    table_like=name_pattern,
+                    catalog=target.catalog,
+                    table_types=include_table_types))
+            column_rows = self._fetch_metadata_operation(
+                'RPC_GET_COLUMNS',
+                lambda: self.session.get_table_schema(
+                    table=name_pattern,
+                    database=schema_search,
+                    catalog=target.catalog))
+            return table_rows, column_rows
+
+        table_rows, column_rows = fetch(table_pattern, schema_pattern)
+
+        matches = metadata.exact_target_rows(
+            target, table_rows, column_rows)
+        if any(matches):
+            return table_rows, column_rows
+
+        escaped = (table_pattern != target.name or
+                   (target.schema is not None and
+                    schema_pattern != target.schema))
+        if not escaped:
+            return table_rows, column_rows
+
+        # Some servers do not understand escaped literal patterns.  Retry with
+        # a broad search and let the manifest builder keep only exact matches.
+        broad_tables, broad_columns = fetch('.*', '.*')
+        return table_rows + broad_tables, column_rows + broad_columns
+
+    def _fetch_metadata_operation(self, label, operation_fn):
+        previous_operation = self._last_operation
+        previous_active = self._last_operation_active
+        previous_string = self._last_operation_string
+
+        def operation():
+            self._last_operation_string = label
+            self._last_operation = operation_fn()
+            self._last_operation_active = True
+
+        try:
+            self._execute_async(operation)
+            try:
+                return self.fetchall() or []
+            finally:
+                self._reset_state()
+        finally:
+            self._last_operation = previous_operation
+            self._last_operation_active = previous_active
+            self._last_operation_string = previous_string
+
+    # A concise alias for callers that describe the result as a manifest.
+    get_metadata_manifest = get_table_structures
+
     def get_functions(self, database_name=None):
         if database_name is None:
             database_name = '.*'
@@ -963,6 +1080,25 @@ def _is_columnar_protocol(hs2_protocol_version):
 
 def _is_precolumnar_protocol(hs2_protocol_version):
     return hs2_protocol_version in _pre_columnar_protocols
+
+
+def _metadata_row_signature(row):
+    """Return a hashable signature for a metadata result row."""
+    if isinstance(row, dict):
+        return tuple(sorted((str(k), _hashable(v)) for k, v in row.items()))
+    if isinstance(row, (list, tuple)):
+        return tuple(_hashable(value) for value in row)
+    return repr(row)
+
+
+def _hashable(value):
+    if isinstance(value, (list, tuple)):
+        return tuple(_hashable(item) for item in value)
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _hashable(v)) for k, v in value.items()))
+    if isinstance(value, bytearray):
+        return bytes(value)
+    return value
 
 
 class Batch(object):
@@ -1332,14 +1468,18 @@ class HS2Session(ThriftRPC):
         req = TGetSchemasReq(sessionHandle=self.handle, schemaName=schema)
         return self._operation('GetSchemas', req, True)
 
-    def get_tables(self, database='.*', table_like='.*'):
+    def get_tables(self, database='.*', table_like='.*', catalog=None,
+                   table_types=None):
         req = TGetTablesReq(sessionHandle=self.handle,
+                            catalogName=catalog,
                             schemaName=database,
-                            tableName=table_like)
+                            tableName=table_like,
+                            tableTypes=table_types)
         return self._operation('GetTables', req, True)
 
-    def get_table_schema(self, table, database='.*'):
+    def get_table_schema(self, table, database='.*', catalog=None):
         req = TGetColumnsReq(sessionHandle=self.handle,
+                             catalogName=catalog,
                              schemaName=database,
                              tableName=table, columnName='.*')
         return self._operation('GetColumns', req, True)

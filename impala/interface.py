@@ -162,6 +162,11 @@ class Cursor(object):
     def get_summary(self):
         raise NotImplementedError
 
+    def get_table_structures(self, targets, catalog_name=None,
+                             database_name=None, case_sensitive=False,
+                             include_table_types=None):
+        raise NotImplementedError
+
     def build_summary_table(self, summary, idx, is_fragment_root, indent_level,
                             output):
         raise NotImplementedError

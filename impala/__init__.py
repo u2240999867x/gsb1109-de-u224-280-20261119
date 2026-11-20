@@ -14,3 +14,7 @@
 
 # pyproject.toml takes version from this.
 __version__ = u'v0.24.0'
+
+from impala.metadata import (  # noqa: E402,F401
+    MetadataManifest, TableStructure, TableTarget, ColumnDefinition,
+    NestedField, build_manifest, normalize_targets)
