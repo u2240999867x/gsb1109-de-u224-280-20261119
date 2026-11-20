@@ -7,9 +7,10 @@ import warnings
 from collections import defaultdict
 from datetime import timedelta
 from enum import Enum
+from itertools import count
 from random import random
 from time import sleep
-from typing import Union, Any, Iterable, NamedTuple, Tuple
+from typing import Union, Any, Iterable, NamedTuple, Tuple, List, Optional
 
 import reactivex as rx
 from reactivex import operators as ops, Observable
@@ -18,9 +19,11 @@ from reactivex.subject import Subject
 
 from influxdb_client import WritePrecision
 from influxdb_client.client._base import _BaseWriteApi, _HAS_DATACLASS
+from influxdb_client.client.exceptions import InfluxDBError
 from influxdb_client.client.util.helpers import get_org_query_param
 from influxdb_client.client.write.dataframe_serializer import DataframeSerializer
 from influxdb_client.client.write.point import Point, DEFAULT_WRITE_PRECISION
+from influxdb_client.client.write.receipt import LineOrigin, WriteReceipt, build_receipt
 from influxdb_client.client.write.retry import WritesRetry
 from influxdb_client.rest import _UTF_8_encoding
 
@@ -118,6 +121,11 @@ SYNCHRONOUS = WriteOptions(write_type=WriteType.synchronous)
 ASYNCHRONOUS = WriteOptions(write_type=WriteType.asynchronous)
 
 
+def _new_occurrence_counter():
+    """Module-level factory so the per-source counters stay picklable."""
+    return count(1)
+
+
 class PointSettings(object):
     """Settings to store default tags."""
 
@@ -165,10 +173,12 @@ class _BatchItemKey(object):
 
 
 class _BatchItem(object):
-    def __init__(self, key: _BatchItemKey, data, size=1) -> None:
+    def __init__(self, key: _BatchItemKey, data, size=1, origins: List[LineOrigin] = None) -> None:
         self.key = key
         self.data = data
         self.size = size
+        # Provenance of every emitted line, aligned by position with ``data``.
+        self.origins = origins if origins is not None else []
         pass
 
     def to_key_tuple(self) -> Tuple[str, str, str]:
@@ -180,9 +190,13 @@ class _BatchItem(object):
 
 
 class _BatchResponse(object):
-    def __init__(self, data: _BatchItem, exception: Exception = None):
+    def __init__(self, data: _BatchItem, exception: Exception = None,
+                 http_status: int = None, response_body=None, receipt: WriteReceipt = None):
         self.data = data
         self.exception = exception
+        self.http_status = http_status
+        self.response_body = response_body
+        self.receipt = receipt
         pass
 
     def __str__(self) -> str:
@@ -190,8 +204,20 @@ class _BatchResponse(object):
             .format("failed" if self.exception else "success", str(self.data))
 
 
+def _split_lines(data: bytes) -> List[bytes]:
+    """Split a request body into line protocol lines without mutating the text."""
+    return [line for line in data.split(b'\n') if line]
+
+
 def _body_reduce(batch_items):
     return b'\n'.join(map(lambda batch_item: batch_item.data, batch_items))
+
+
+def _origins_reduce(batch_items) -> List[LineOrigin]:
+    origins: List[LineOrigin] = []
+    for batch_item in batch_items:
+        origins.extend(batch_item.origins)
+    return origins
 
 
 class WriteApi(_BaseWriteApi):
@@ -244,12 +270,27 @@ class WriteApi(_BaseWriteApi):
                                 - `Exception`: an retryable error
 
                              **[batching mode]**
+        :key receipt_callback: The callable ``callback`` to run after every HTTP write request,
+                               delivering a client-side per-source :class:`WriteReceipt`. Unlike the
+                               batch-level callbacks above it splits confirmed, definitely rejected
+                               and unknown lines back to their originating source. It never changes
+                               the line protocol sent over the wire.
+
+                               The callable must accept one argument:
+                                    - `WriteReceipt`: per-line evidence for the request
+
+                               **[batching mode]**
         """
         super().__init__(influxdb_client=influxdb_client, point_settings=point_settings)
         self._write_options = write_options
         self._success_callback = kwargs.get('success_callback', None)
         self._error_callback = kwargs.get('error_callback', None)
         self._retry_callback = kwargs.get('retry_callback', None)
+        self._receipt_callback = kwargs.get('receipt_callback', None)
+        # Per-source occurrence counters, so identical lines stay distinguishable.
+        self._source_counters = defaultdict(_new_occurrence_counter)
+        # Sequence number of each HTTP write request (package) issued by this writer.
+        self._request_counter = count(1)
         self._window_scheduler = None
 
         if self._write_options.write_type is WriteType.batching:
@@ -279,7 +320,8 @@ class WriteApi(_BaseWriteApi):
                     # Create batch (concatenation line protocols by \n)
                     ops.map(lambda group: group.pipe(
                         ops.to_iterable(),
-                        ops.map(lambda xs: _BatchItem(key=group.key, data=_body_reduce(xs), size=len(xs))))),
+                        ops.map(lambda xs: _BatchItem(key=group.key, data=_body_reduce(xs), size=len(xs),
+                                                      origins=_origins_reduce(xs))))),
                     ops.merge_all())),
                 # Write data into InfluxDB (possibility to retry if its fail)
                 ops.filter(lambda batch: batch.size > 0),
@@ -331,6 +373,10 @@ You can use native asynchronous version of the client:
         :key record_time_key: key of record with specified timestamp - ``dictionary``, ``NamedTuple``, ``dataclass``
         :key record_tag_keys: list of record keys to use as a tag - ``dictionary``, ``NamedTuple``, ``dataclass``
         :key record_field_keys: list of record keys to use as a field  - ``dictionary``, ``NamedTuple``, ``dataclass``
+        :key source: opaque identity of the upstream producer of the records. Used only for client-side
+                     per-source :class:`WriteReceipt` correlation; it is never added to the line protocol.
+                     Each emitted line is also numbered per source (its 1-based occurrence), so byte-identical
+                     lines from different sources - or repeated within one source - stay distinguishable.
 
         Example:
             .. code-block:: python
@@ -376,7 +422,12 @@ You can use native asynchronous version of the client:
 
         self._append_default_tags(record)
 
+        # ``source`` is client-side receipt correlation only and must never be
+        # forwarded to serialization or the line protocol.
+        source = kwargs.pop('source', None)
+
         if self._write_options.write_type is WriteType.batching:
+            kwargs['source'] = source
             return self._write_batching(bucket, org, record,
                                         write_precision, **kwargs)
 
@@ -474,23 +525,37 @@ You can use native asynchronous version of the client:
             self._disposable = None
         pass
 
+    def _next_occurrence(self, source) -> Optional[int]:
+        if source is None:
+            return None
+        return next(self._source_counters[source])
+
+    def _build_origins(self, data: bytes, source) -> List[LineOrigin]:
+        # A write without a source keeps its lines visible with unattributed provenance.
+        return [LineOrigin(source=source, occurrence=self._next_occurrence(source), line=line)
+                for line in _split_lines(data)]
+
     def _write_batching(self, bucket, org, data,
                         precision=DEFAULT_WRITE_PRECISION,
                         **kwargs):
+        source = kwargs.pop('source', None)
+
         if isinstance(data, bytes):
             _key = _BatchItemKey(bucket, org, precision)
-            self._subject.on_next(_BatchItem(key=_key, data=data))
+            self._subject.on_next(_BatchItem(key=_key, data=data,
+                                             origins=self._build_origins(data, source)))
 
         elif isinstance(data, str):
             self._write_batching(bucket, org, data.encode(_UTF_8_encoding),
-                                 precision, **kwargs)
+                                 precision, source=source, **kwargs)
 
         elif isinstance(data, Point):
-            self._write_batching(bucket, org, data.to_line_protocol(), data.write_precision, **kwargs)
+            self._write_batching(bucket, org, data.to_line_protocol(), data.write_precision,
+                                 source=source, **kwargs)
 
         elif isinstance(data, dict):
             self._write_batching(bucket, org, Point.from_dict(data, write_precision=precision, **kwargs),
-                                 precision, **kwargs)
+                                 precision, source=source, **kwargs)
 
         elif 'DataFrame' in type(data).__name__:
             serializer = DataframeSerializer(data, self._point_settings, precision, self._write_options.batch_size,
@@ -498,23 +563,29 @@ You can use native asynchronous version of the client:
             for chunk_idx in range(serializer.number_of_chunks):
                 self._write_batching(bucket, org,
                                      serializer.serialize(chunk_idx),
-                                     precision, **kwargs)
+                                     precision, source=source, **kwargs)
         elif hasattr(data, "_asdict"):
             # noinspection PyProtectedMember
-            self._write_batching(bucket, org, data._asdict(), precision, **kwargs)
+            self._write_batching(bucket, org, data._asdict(), precision, source=source, **kwargs)
 
         elif _HAS_DATACLASS and dataclasses.is_dataclass(data):
-            self._write_batching(bucket, org, dataclasses.asdict(data), precision, **kwargs)
+            self._write_batching(bucket, org, dataclasses.asdict(data), precision, source=source, **kwargs)
 
         elif isinstance(data, Iterable):
             for item in data:
-                self._write_batching(bucket, org, item, precision, **kwargs)
+                self._write_batching(bucket, org, item, precision, source=source, **kwargs)
 
         elif isinstance(data, Observable):
-            data.subscribe(lambda it: self._write_batching(bucket, org, it, precision, **kwargs))
+            data.subscribe(lambda it: self._write_batching(bucket, org, it, precision, source=source, **kwargs))
             pass
 
         return None
+
+    def _build_response(self, batch_item: _BatchItem, exception, http_status, response_body) -> _BatchResponse:
+        receipt = build_receipt(line_origins=batch_item.origins, http_status=http_status,
+                                response_body=response_body, request_index=next(self._request_counter))
+        return _BatchResponse(data=batch_item, exception=exception, http_status=http_status,
+                              response_body=response_body, receipt=receipt)
 
     def _http(self, batch_item: _BatchItem):
 
@@ -528,12 +599,22 @@ You can use native asynchronous version of the client:
 
         retry = self._write_options.to_retry_strategy(retry_callback=_retry_callback_delegate)
 
-        self._post_write(False, batch_item.key.bucket, batch_item.key.org, batch_item.data,
-                         batch_item.key.precision, urlopen_kw={'retries': retry})
+        try:
+            self._post_write(False, batch_item.key.bucket, batch_item.key.org, batch_item.data,
+                             batch_item.key.precision, urlopen_kw={'retries': retry})
+        except InfluxDBError as exception:
+            # A response was received: its status/body may carry per-line evidence.
+            http_status = getattr(exception, 'status', None)
+            response_body = getattr(exception, 'body', None)
+            logger.debug("Write request failed %s", batch_item)
+            return self._build_response(batch_item, exception, http_status, response_body)
+        except Exception as exception:
+            # No usable response (connection dropped, retries exhausted, ...): every line stays unknown.
+            logger.debug("Write request lost without a response %s", batch_item)
+            return self._build_response(batch_item, exception, None, None)
 
         logger.debug("Write request finished %s", batch_item)
-
-        return _BatchResponse(data=batch_item)
+        return self._build_response(batch_item, None, 204, None)
 
     def _post_write(self, _async_req, bucket, org, body, precision, **kwargs):
 
@@ -550,8 +631,9 @@ You can use native asynchronous version of the client:
             ops.delay(duetime=delay, scheduler=self._write_options.write_scheduler),
             # invoke http call
             ops.map(lambda x: self._http(x)),
-            # catch exception to fail batch response
-            ops.catch(handler=lambda exception, source: rx.just(_BatchResponse(exception=exception, data=data))),
+            # catch exception to fail batch response; an unexpected throw leaves every line unknown
+            ops.catch(handler=lambda exception, source: rx.just(
+                self._build_response(data, exception, None, None))),
         )
 
     def _jitter_delay(self):
@@ -581,6 +663,12 @@ You can use native asynchronous version of the client:
                 except Exception as e:
                     logger.error("The configured success callback threw an exception: %s", e)
 
+        if self._receipt_callback and response.receipt is not None:
+            try:
+                self._receipt_callback(response.receipt)
+            except Exception as e:
+                logger.error("The configured receipt callback threw an exception: %s", e)
+
     @staticmethod
     def _on_error(ex):
         logger.error("unexpected error during batching: %s", ex)
@@ -609,4 +697,5 @@ You can use native asynchronous version of the client:
                       self._point_settings,
                       success_callback=self._success_callback,
                       error_callback=self._error_callback,
-                      retry_callback=self._retry_callback)
+                      retry_callback=self._retry_callback,
+                      receipt_callback=self._receipt_callback)
