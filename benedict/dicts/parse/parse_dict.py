@@ -16,6 +16,17 @@ _V = TypeVar("_V", default=Any)
 
 ParserFunc = Callable[..., Any]
 
+_SETTLEMENT_UNSET = object()
+
+
+def __getattr__(name: str) -> Any:
+    from benedict import settlement
+
+    try:
+        return getattr(settlement, name)
+    except AttributeError as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
+
 
 class ParseDict(BaseDict[_K, _V]):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -258,7 +269,10 @@ class ParseDict(BaseDict[_K, _V]):
         return cast("int", self._get_value(key, default, choices, parse_util.parse_int))
 
     def get_int_list(
-        self, key: _K, default: list[int] | None = None, separator: str = ","
+        self,
+        key: _K,
+        default: list[int] | None = None,
+        separator: str = ",",
     ) -> list[int] | None:
         """
         Get value by key or keypath trying to return it as list of int values.
@@ -268,6 +282,122 @@ class ParseDict(BaseDict[_K, _V]):
             "list[int]",
             self._get_values_list(key, default, separator, parse_util.parse_int),
         )
+
+    def preflight_settlement(
+        self,
+        key: _K,
+        calendar: Any,
+        *,
+        record_id: Any = None,
+        detail_index: int = 0,
+    ) -> Any:
+        """
+        Preflight the settlement record at key using the given site calendar.
+        Returns a SettlementResult; the source record is never mutated.
+        """
+        from benedict.settlement import (
+            SETTLEMENT_UNSET,
+            SettlementPreflight,
+            SiteCalendar,
+        )
+
+        if not isinstance(calendar, SiteCalendar):
+            calendar = SiteCalendar.parse(calendar)
+        record = self.get_settlement_source(key)
+        return SettlementPreflight(calendar).check(
+            record,
+            record_id=SETTLEMENT_UNSET if record_id is None else record_id,
+            detail_index=detail_index,
+        )
+
+    def get_settlement_source(self, key: _K) -> dict[str, Any]:
+        """
+        Return a plain, detached copy of the source record at key.
+        Nested benedict wrappers are unwrapped so later checks see raw input.
+        """
+        from benedict.settlement import clone_mapping
+
+        value = self.get(key, None)
+        if isinstance(value, Mapping):
+            return clone_mapping(value)
+        return {}
+
+    def get_settlement_calendar(self, calendar: Any) -> Any:
+        """
+        Build or pass through a SettlementCalendar for the given site.
+        """
+        from benedict.settlement import SettlementCalendar
+
+        return SettlementCalendar.parse(calendar)
+
+    def get_settlement_preflight(
+        self,
+        key: _K,
+        calendar: Any,
+        *,
+        record_id: Any = None,
+        detail_index: int = 0,
+    ) -> Any:
+        """
+        Alias of preflight_settlement.
+        """
+        return self.preflight_settlement(
+            key,
+            calendar,
+            record_id=record_id,
+            detail_index=detail_index,
+        )
+
+    def get_settlement_record(
+        self,
+        key: _K,
+        calendar: Any,
+        *,
+        record_id: Any = None,
+        detail_index: int = 0,
+    ) -> Any:
+        """
+        Return a SettlementRecord bound to its original input and calendar.
+        The record can later be re-checked with only the corrected field.
+        """
+        from benedict.settlement import SETTLEMENT_UNSET, SettlementPreflight
+
+        record = self.get_settlement_source(key)
+        return SettlementPreflight(calendar).record(
+            record,
+            record_id=SETTLEMENT_UNSET if record_id is None else record_id,
+            detail_index=detail_index,
+        )
+
+    def settlement_date(
+        self,
+        key: _K,
+        calendar: Any,
+        *,
+        offset: Any = _SETTLEMENT_UNSET,
+    ) -> Any:
+        return self.get_settlement_date(key, calendar, offset=offset)
+
+    def get_settlement_date(
+        self,
+        key: _K,
+        calendar: Any,
+        *,
+        offset: Any = _SETTLEMENT_UNSET,
+    ) -> Any:
+        """
+        Return the settlement date for the datetime at key, using the site
+        calendar instead of the machine time zone.
+        Pass offset=None when the source explicitly says it is unknown.
+        """
+        from benedict.settlement import SETTLEMENT_UNSET, SettlementCalendar
+
+        value = self.get(key, None)
+        if value is None:
+            return None
+        site = SettlementCalendar.parse(calendar)
+        offset_arg = SETTLEMENT_UNSET if offset is _SETTLEMENT_UNSET else offset
+        return site.settlement_date(cast("Any", value), offset=offset_arg)
 
     def get_list(
         self,

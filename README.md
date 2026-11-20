@@ -1008,6 +1008,25 @@ d.get_float(key, default=0.0, choices=[])
 d.get_float_list(key, default=[], separator=",")
 ```
 
+#### Settlement preflight
+
+```python
+from benedict.dicts.parse import SettlementCalendar
+
+# Site calendar: IANA zone + boundary.
+calendar = SettlementCalendar("Europe/London", boundary="01:30")
+
+result = d.preflight_settlement("record", calendar)
+result.status           # resolved | ambiguous | unconfirmed | invalid
+result.candidates       # instants of a repeated wall-clock time
+result.settlement_date  # from the site calendar, not the machine zone
+
+record = d.get_settlement_record("record", calendar)
+record.recheck(offset=60)  # re-check only the corrected field
+```
+`details[0].offset` is in minutes; `0` is valid, explicit `null` is
+unconfirmed, and the calendar applies only when it is absent.
+
 #### `get_int`
 
 ```python
