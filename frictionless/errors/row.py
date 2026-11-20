@@ -133,6 +133,127 @@ class ForeignKeyError(RowError):
     }
 
 
+@attrs.define(kw_only=True)
+class PolymorphicForeignKeyKindError(RowError):
+    type = "polymorphic-foreign-key-kind"
+    title = "Polymorphic Foreign Key Kind Error"
+    description = "The kind label of a polymorphic foreign key is not declared in the check contract."
+    template = (
+        'Row at position "{rowNumber}" has an undeclared polymorphic foreign '
+        "key kind: {note}"
+    )
+
+    kind: str
+    """
+    Kind label found in the row that is not declared in the check contract.
+    """
+
+    @classmethod
+    def from_row(cls, row: Row, *, note: str, kind: Any):  # type: ignore
+        """Create an error from a row"""
+        to_str = lambda v: str(v) if v is not None else ""  # type: ignore
+        return cls(
+            note=note,
+            cells=list(map(to_str, row.cells)),  # type: ignore
+            row_number=row.row_number,
+            kind=to_str(kind),
+        )
+
+    # Metadata
+
+    metadata_profile_patch = {
+        "properties": {
+            "kind": {"type": "string"},
+        },
+    }
+
+
+@attrs.define(kw_only=True)
+class PolymorphicForeignKeyResourceError(RowError):
+    type = "polymorphic-foreign-key-resource"
+    title = "Polymorphic Foreign Key Resource Error"
+    description = (
+        "The target table of a polymorphic foreign key is not present in the package."
+    )
+    template = (
+        'Row at position "{rowNumber}" references a missing polymorphic '
+        "foreign key table: {note}"
+    )
+
+    kind: str
+    """
+    Kind label selecting the missing target table.
+    """
+
+    reference_name: str
+    """
+    Name of the target table declared for the kind.
+    """
+
+    @classmethod
+    def from_row(cls, row: Row, *, note: str, kind: Any, reference_name: str):  # type: ignore
+        """Create an error from a row"""
+        to_str = lambda v: str(v) if v is not None else ""  # type: ignore
+        return cls(
+            note=note,
+            cells=list(map(to_str, row.cells)),  # type: ignore
+            row_number=row.row_number,
+            kind=to_str(kind),
+            reference_name=reference_name,
+        )
+
+    # Metadata
+
+    metadata_profile_patch = {
+        "properties": {
+            "kind": {"type": "string"},
+            "referenceName": {"type": "string"},
+        },
+    }
+
+
+@attrs.define(kw_only=True)
+class PolymorphicForeignKeyLookupError(RowError):
+    type = "polymorphic-foreign-key-lookup"
+    title = "Polymorphic Foreign Key Lookup Error"
+    description = "The target table of a polymorphic foreign key could not be read."
+    template = (
+        'Row at position "{rowNumber}" references an unreadable polymorphic '
+        "foreign key table: {note}"
+    )
+
+    kind: str
+    """
+    Kind label selecting the unreadable target table.
+    """
+
+    reference_name: str
+    """
+    Name of the target table declared for the kind.
+    """
+
+    @classmethod
+    def from_row(cls, row: Row, *, note: str, kind: Any, reference_name: str):  # type: ignore
+        """Create an error from a row"""
+        to_str = lambda v: str(v) if v is not None else ""  # type: ignore
+        return cls(
+            note=note,
+            cells=list(map(to_str, row.cells)),  # type: ignore
+            row_number=row.row_number,
+            kind=to_str(kind),
+            reference_name=reference_name,
+        )
+
+    # Metadata
+
+    metadata_profile_patch = {
+        "properties": {
+            "kind": {"type": "string"},
+            "referenceName": {"type": "string"},
+        },
+    }
+
+
 class DuplicateRowError(RowError):
     type = "duplicate-row"
     title = "Duplicate Row"

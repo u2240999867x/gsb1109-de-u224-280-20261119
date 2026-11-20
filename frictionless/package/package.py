@@ -495,12 +495,20 @@ class Package(Metadata, metaclass=Factory):
         timer = helpers.Timer()
         reports: List[Report] = []
         resources = self.resources if name is None else [self.get_resource(name)]
-        with_foreign_keys = any(
-            res.schema and res.schema.foreign_keys for res in resources
-        )
 
         # Prepare checklist
         checklist = checklist or Checklist()
+
+        # Prepare execution mode
+        # Parallel execution is not possible if foreign keys are used in a
+        # resource schema or if the checklist reads other resources of the
+        # package (e.g. the polymorphic foreign key check)
+        with_foreign_keys = any(
+            res.schema and res.schema.foreign_keys for res in resources
+        )
+        with_foreign_keys = with_foreign_keys or checklist.has_check(
+            "polymorphic-foreign-key"
+        )
 
         # Validate metadata
         try:
