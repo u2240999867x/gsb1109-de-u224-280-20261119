@@ -33,6 +33,7 @@ __version__ = '0.58.2'
 __all__ = [
     # Modules:
     'attachments',
+    'batch_archive',
     'constants',
     'enums',
     'exceptions',
@@ -67,7 +68,7 @@ __all__ = [
 from . import constants, enums, exceptions
 from . import utils
 
-from . import attachments, msg_classes, null_date, properties, structures
+from . import attachments, batch_archive, msg_classes, null_date, properties, structures
 from .attachments import Attachment, AttachmentBase, SignedAttachment
 from .msg_classes import Message, MSGFile
 from .msg_path import MSGPath

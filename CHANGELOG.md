@@ -1,3 +1,6 @@
+**v0.58.3 (unreleased)**
+* Added new module `extract_msg.batch_archive` with `BatchArchiver`, a resumable batch archiver for MSG files. Each message in a batch is processed independently (one unreadable message or broken part never aborts the batch), every part (body or attachment, including attachments of embedded messages) gets its own persisted result with a concrete source location and failure stage (open, construct, read, save), resubmitting a batch only retries parts that were not yet accepted, and replacing a file at a previously seen path is treated as a new, fully independent version.
+
 **v0.58.2**
 * [[Advisory GHSA-6p33-92hw-4v86](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-6p33-92hw-4v86)] [[Advisory GHSA-cxpg-prmv-g4pp](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-cxpg-prmv-g4pp)] Fixed further attack vectors regarding the original advisory that were previously undiscovered. Most changes suggested in the new advisory were accepted as is, however a change was made to the handling of `srcset` to prevent it from being used at all if external files are not allowed.
 * Changed `setup.py` to exclude `extract_msg_tests` from installed packages.
