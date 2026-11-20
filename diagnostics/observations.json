@@ -1,0 +1,876 @@
+{
+  "ledger": [
+    {
+      "id": "R-ROUND",
+      "reading_text": "2.346",
+      "note": "same 2 dp display as 2.35; separates source pre-rounding from target-only rounding"
+    },
+    {
+      "id": "R-FLOAT-1",
+      "reading_text": "9007199254740993.01",
+      "note": "beyond float's exact integer range; differs from R-FLOAT-2 only in the last decimal place"
+    },
+    {
+      "id": "R-FLOAT-2",
+      "reading_text": "9007199254740993.02",
+      "note": "beyond float's exact integer range; differs from R-FLOAT-1 only in the last decimal place"
+    }
+  ],
+  "scenarios": {
+    "A-SRC-ROUND": {
+      "role": "required copy 1",
+      "description": "Source cursor already rounded 2.346 to 2.35.",
+      "path": "source_cursor: HALF_UP to 0.01 -> callback identity -> target column: HALF_UP to 0.01",
+      "processed": 1,
+      "failed": 0,
+      "rows": {
+        "R-ROUND": {
+          "input_text": "2.346",
+          "last_text_recoverable_boundary": "dbapi_source",
+          "first_text_lost_boundary": "source_cursor",
+          "last_exact_value_boundary": "dbapi_source",
+          "first_exact_value_lost_boundary": "source_cursor",
+          "observations": [
+            {
+              "scenario": "A-SRC-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "dbapi_source",
+              "type_name": "str",
+              "value_repr": "'2.346'",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": null,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "A-SRC-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "source_cursor",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "A-SRC-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "row_factory",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": true,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "A-SRC-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "callback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": true,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "A-SRC-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "bind",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": true,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "A-SRC-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "target_store",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "A-SRC-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "target_readback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            }
+          ]
+        }
+      },
+      "target_records": [
+        {
+          "id": "R-ROUND",
+          "reading_repr": "Decimal('2.35')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "readback_records": [
+        {
+          "id": "R-ROUND",
+          "reading_repr": "Decimal('2.35')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "first_row_log": "First row: {'id': 'R-ROUND', 'reading': Decimal('2.35')}",
+      "first_row_log_2dp_view": "First row: {'id': 'R-ROUND', 'reading': 2.35}"
+    },
+    "B-TGT-ROUND": {
+      "role": "required copy 2",
+      "description": "Source cursor and callback kept 2.346; only the target column rounded.",
+      "path": "source_cursor: exact Decimal -> callback identity -> target column: HALF_UP to 0.01",
+      "processed": 1,
+      "failed": 0,
+      "rows": {
+        "R-ROUND": {
+          "input_text": "2.346",
+          "last_text_recoverable_boundary": "bind",
+          "first_text_lost_boundary": "target_store",
+          "last_exact_value_boundary": "bind",
+          "first_exact_value_lost_boundary": "target_store",
+          "observations": [
+            {
+              "scenario": "B-TGT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "dbapi_source",
+              "type_name": "str",
+              "value_repr": "'2.346'",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": null,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "B-TGT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "source_cursor",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.346')",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "B-TGT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "row_factory",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.346')",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "B-TGT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "callback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.346')",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "B-TGT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "bind",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.346')",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "B-TGT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "target_store",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "B-TGT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "target_readback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            }
+          ]
+        }
+      },
+      "target_records": [
+        {
+          "id": "R-ROUND",
+          "reading_repr": "Decimal('2.35')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "readback_records": [
+        {
+          "id": "R-ROUND",
+          "reading_repr": "Decimal('2.35')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "first_row_log": "First row: {'id': 'R-ROUND', 'reading': Decimal('2.346')}",
+      "first_row_log_2dp_view": "First row: {'id': 'R-ROUND', 'reading': 2.35}"
+    },
+    "R-FLOAT-ROUND": {
+      "role": "ambiguity probe",
+      "description": "Same 2.346 reading through a float callback.",
+      "path": "source_cursor: exact Decimal -> callback float -> target column: HALF_UP to 0.01",
+      "processed": 1,
+      "failed": 0,
+      "rows": {
+        "R-ROUND": {
+          "input_text": "2.346",
+          "last_text_recoverable_boundary": "bind",
+          "first_text_lost_boundary": "target_store",
+          "last_exact_value_boundary": "row_factory",
+          "first_exact_value_lost_boundary": "callback",
+          "observations": [
+            {
+              "scenario": "R-FLOAT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "dbapi_source",
+              "type_name": "str",
+              "value_repr": "'2.346'",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": null,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "R-FLOAT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "source_cursor",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.346')",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "R-FLOAT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "row_factory",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.346')",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "R-FLOAT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "callback",
+              "type_name": "float",
+              "value_repr": "2.346",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "R-FLOAT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "bind",
+              "type_name": "float",
+              "value_repr": "2.346",
+              "value_text": "2.346",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "R-FLOAT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "target_store",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            },
+            {
+              "scenario": "R-FLOAT-ROUND",
+              "row_id": "R-ROUND",
+              "stage": "target_readback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('2.35')",
+              "value_text": "2.35",
+              "display_2dp": "2.35",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "2.346"
+            }
+          ]
+        }
+      },
+      "target_records": [
+        {
+          "id": "R-ROUND",
+          "reading_repr": "Decimal('2.35')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "readback_records": [
+        {
+          "id": "R-ROUND",
+          "reading_repr": "Decimal('2.35')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "first_row_log": "First row: {'id': 'R-ROUND', 'reading': 2.346}",
+      "first_row_log_2dp_view": "First row: {'id': 'R-ROUND', 'reading': 2.35}"
+    },
+    "P-DECIMAL": {
+      "role": "large pair, Decimal retained",
+      "description": "Both large readings stay Decimal end to end.",
+      "path": "source_cursor: exact Decimal -> callback identity -> target column: HALF_UP to 0.01",
+      "processed": 2,
+      "failed": 0,
+      "rows": {
+        "R-FLOAT-1": {
+          "input_text": "9007199254740993.01",
+          "last_text_recoverable_boundary": "target_readback",
+          "first_text_lost_boundary": null,
+          "last_exact_value_boundary": "target_readback",
+          "first_exact_value_lost_boundary": null,
+          "observations": [
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-1",
+              "stage": "dbapi_source",
+              "type_name": "str",
+              "value_repr": "'9007199254740993.01'",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": null,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-1",
+              "stage": "source_cursor",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.01')",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-1",
+              "stage": "row_factory",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.01')",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-1",
+              "stage": "callback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.01')",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-1",
+              "stage": "bind",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.01')",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-1",
+              "stage": "target_store",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.01')",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-1",
+              "stage": "target_readback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.01')",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.01"
+            }
+          ]
+        },
+        "R-FLOAT-2": {
+          "input_text": "9007199254740993.02",
+          "last_text_recoverable_boundary": "target_readback",
+          "first_text_lost_boundary": null,
+          "last_exact_value_boundary": "target_readback",
+          "first_exact_value_lost_boundary": null,
+          "observations": [
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-2",
+              "stage": "dbapi_source",
+              "type_name": "str",
+              "value_repr": "'9007199254740993.02'",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": null,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-2",
+              "stage": "source_cursor",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.02')",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-2",
+              "stage": "row_factory",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.02')",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-2",
+              "stage": "callback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.02')",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-2",
+              "stage": "bind",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.02')",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-2",
+              "stage": "target_store",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.02')",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-DECIMAL",
+              "row_id": "R-FLOAT-2",
+              "stage": "target_readback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.02')",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.02"
+            }
+          ]
+        }
+      },
+      "target_records": [
+        {
+          "id": "R-FLOAT-1",
+          "reading_repr": "Decimal('9007199254740993.01')",
+          "reading_type": "Decimal"
+        },
+        {
+          "id": "R-FLOAT-2",
+          "reading_repr": "Decimal('9007199254740993.02')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "readback_records": [
+        {
+          "id": "R-FLOAT-1",
+          "reading_repr": "Decimal('9007199254740993.01')",
+          "reading_type": "Decimal"
+        },
+        {
+          "id": "R-FLOAT-2",
+          "reading_repr": "Decimal('9007199254740993.02')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "first_row_log": "First row: {'id': 'R-FLOAT-1', 'reading': Decimal('9007199254740993.01')}",
+      "first_row_log_2dp_view": "First row: {'id': 'R-FLOAT-1', 'reading': 9007199254740993.01}"
+    },
+    "P-FLOAT": {
+      "role": "large pair, float callback",
+      "description": "Both large readings pass through a float callback.",
+      "path": "source_cursor: exact Decimal -> callback float -> target column: HALF_UP to 0.01",
+      "processed": 2,
+      "failed": 0,
+      "rows": {
+        "R-FLOAT-1": {
+          "input_text": "9007199254740993.01",
+          "last_text_recoverable_boundary": "row_factory",
+          "first_text_lost_boundary": "callback",
+          "last_exact_value_boundary": "row_factory",
+          "first_exact_value_lost_boundary": "callback",
+          "observations": [
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-1",
+              "stage": "dbapi_source",
+              "type_name": "str",
+              "value_repr": "'9007199254740993.01'",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": null,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-1",
+              "stage": "source_cursor",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.01')",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-1",
+              "stage": "row_factory",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.01')",
+              "value_text": "9007199254740993.01",
+              "display_2dp": "9007199254740993.01",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-1",
+              "stage": "callback",
+              "type_name": "float",
+              "value_repr": "9007199254740994.0",
+              "value_text": "9007199254740994.0",
+              "display_2dp": "9007199254740994.00",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-1",
+              "stage": "bind",
+              "type_name": "float",
+              "value_repr": "9007199254740994.0",
+              "value_text": "9007199254740994.0",
+              "display_2dp": "9007199254740994.00",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-1",
+              "stage": "target_store",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740994.00')",
+              "value_text": "9007199254740994.00",
+              "display_2dp": "9007199254740994.00",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.01"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-1",
+              "stage": "target_readback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740994.00')",
+              "value_text": "9007199254740994.00",
+              "display_2dp": "9007199254740994.00",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.01"
+            }
+          ]
+        },
+        "R-FLOAT-2": {
+          "input_text": "9007199254740993.02",
+          "last_text_recoverable_boundary": "row_factory",
+          "first_text_lost_boundary": "callback",
+          "last_exact_value_boundary": "row_factory",
+          "first_exact_value_lost_boundary": "callback",
+          "observations": [
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-2",
+              "stage": "dbapi_source",
+              "type_name": "str",
+              "value_repr": "'9007199254740993.02'",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": null,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-2",
+              "stage": "source_cursor",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.02')",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-2",
+              "stage": "row_factory",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740993.02')",
+              "value_text": "9007199254740993.02",
+              "display_2dp": "9007199254740993.02",
+              "exact_decimal_equal": true,
+              "text_recovers_input": true,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-2",
+              "stage": "callback",
+              "type_name": "float",
+              "value_repr": "9007199254740994.0",
+              "value_text": "9007199254740994.0",
+              "display_2dp": "9007199254740994.00",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-2",
+              "stage": "bind",
+              "type_name": "float",
+              "value_repr": "9007199254740994.0",
+              "value_text": "9007199254740994.0",
+              "display_2dp": "9007199254740994.00",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": true,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-2",
+              "stage": "target_store",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740994.00')",
+              "value_text": "9007199254740994.00",
+              "display_2dp": "9007199254740994.00",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.02"
+            },
+            {
+              "scenario": "P-FLOAT",
+              "row_id": "R-FLOAT-2",
+              "stage": "target_readback",
+              "type_name": "Decimal",
+              "value_repr": "Decimal('9007199254740994.00')",
+              "value_text": "9007199254740994.00",
+              "display_2dp": "9007199254740994.00",
+              "exact_decimal_equal": false,
+              "text_recovers_input": false,
+              "same_object_as_previous": false,
+              "input_text": "9007199254740993.02"
+            }
+          ]
+        }
+      },
+      "target_records": [
+        {
+          "id": "R-FLOAT-1",
+          "reading_repr": "Decimal('9007199254740994.00')",
+          "reading_type": "Decimal"
+        },
+        {
+          "id": "R-FLOAT-2",
+          "reading_repr": "Decimal('9007199254740994.00')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "readback_records": [
+        {
+          "id": "R-FLOAT-1",
+          "reading_repr": "Decimal('9007199254740994.00')",
+          "reading_type": "Decimal"
+        },
+        {
+          "id": "R-FLOAT-2",
+          "reading_repr": "Decimal('9007199254740994.00')",
+          "reading_type": "Decimal"
+        }
+      ],
+      "first_row_log": "First row: {'id': 'R-FLOAT-1', 'reading': 9007199254740994.0}",
+      "first_row_log_2dp_view": "First row: {'id': 'R-FLOAT-1', 'reading': 9007199254740994.00}"
+    }
+  },
+  "pair_separation": {
+    "P-DECIMAL": {
+      "first_collapsed_boundary": null,
+      "last_distinct_boundary": "target_readback"
+    },
+    "P-FLOAT": {
+      "first_collapsed_boundary": "callback",
+      "last_distinct_boundary": "row_factory"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+id,reading_text,note
+R-ROUND,2.346,"same 2 dp display as 2.35; separates source pre-rounding from target-only rounding"
+R-FLOAT-1,9007199254740993.01,"beyond float's exact integer range; differs from R-FLOAT-2 only in the last decimal place"
+R-FLOAT-2,9007199254740993.02,"beyond float's exact integer range; differs from R-FLOAT-1 only in the last decimal place"
