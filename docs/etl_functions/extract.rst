@@ -146,6 +146,35 @@ The ``pyodbc`` driver for MSSQL only supports positional placeholders.
 When using the ``load`` function in conjuction with ``iter_chunks`` data
 must be either named tuples or dictionaries.
 
+column metadata
+"""""""""""""""
+
+Rows produced by the ``namedtuple_row_factory`` carry a snapshot of the
+column metadata, taken from the cursor description when the row factory
+was created.  It is available as ``row._columns`` and remains valid after
+the cursor has been updated or closed.  Each column records its position
+in the original cursor description, its name as reported by the database
+server and its namedtuple field name:
+
+.. code:: python
+
+    for row in etl.iter_rows(sql, conn, row_factory=etl.row_factories.namedtuple_row_factory):
+        row._columns.names       # column names from the server
+        row._columns.fields      # namedtuple attribute names
+        row._columns.positions   # positions in the original description
+
+Columns are looked up unambiguously with ``by_position()`` or, where the
+name is unique, ``by_name()``.  A bare name that matches multiple columns
+(e.g. two columns both called ``count``) raises
+``ETLHelperAmbiguousColumnError``; use the original position or a
+confirmed alias (the renamed field) instead.  ``project()`` builds a new
+metadata view by explicit original positions, preserving each column's
+provenance when reordering or when projecting the same source column
+more than once (e.g. as both a body and a reconciliation column, with
+optional business ``roles``).  Metadata from different queries is never
+merged automatically, so same-named columns from different queries keep
+their own provenance unless an explicit role mapping is supplied.
+
 transform
 """""""""
 

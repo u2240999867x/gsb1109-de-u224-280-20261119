@@ -41,3 +41,19 @@ class ETLHelperBadIdentifierError(ETLHelperError):
     Exception raised when identifier contains invalid characters.  This may
     indicate an attempt at SQL injection.
     """
+
+
+class ETLHelperColumnError(ETLHelperError):
+    """Exception raised for problems with column metadata."""
+
+
+class ETLHelperAmbiguousColumnError(ETLHelperColumnError):
+    """
+    Exception raised when a column name matches multiple columns.  The
+    column should be identified by its original position or a confirmed
+    alias instead.
+    """
+
+
+class ETLHelperUnknownColumnError(ETLHelperColumnError):
+    """Exception raised when a column name or position is not found."""
