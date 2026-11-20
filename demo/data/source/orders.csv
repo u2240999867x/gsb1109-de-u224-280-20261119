@@ -1,0 +1,9 @@
+order_id,customer,region,amount
+1001,Alice,East,120.5
+1002,Bob,West,89.0
+1003,Carol,East,240.0
+1004,Dan,West,55.25
+1005,Eve,East,16.75
+1006,Frank,West,310.0
+1007,Grace,East,72.1
+1008,Heidi,West,12.9

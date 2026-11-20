@@ -1,0 +1,38 @@
+{
+  "name": "orders-package",
+  "title": "Original orders data package",
+  "resources": [
+    {
+      "name": "orders",
+      "path": "orders.csv",
+      "schema": {
+        "fields": [
+          {"name": "order_id", "type": "integer"},
+          {"name": "customer", "type": "string"},
+          {"name": "region", "type": "string"},
+          {"name": "amount", "type": "number"}
+        ],
+        "primaryKey": ["order_id"]
+      }
+    },
+    {
+      "name": "items",
+      "path": "items.csv",
+      "schema": {
+        "fields": [
+          {"name": "item_id", "type": "integer"},
+          {"name": "order_id", "type": "integer"},
+          {"name": "sku", "type": "string"},
+          {"name": "qty", "type": "integer"}
+        ],
+        "primaryKey": ["item_id"],
+        "foreignKeys": [
+          {
+            "fields": ["order_id"],
+            "reference": {"resource": "orders", "fields": ["order_id"]}
+          }
+        ]
+      }
+    }
+  ]
+}
