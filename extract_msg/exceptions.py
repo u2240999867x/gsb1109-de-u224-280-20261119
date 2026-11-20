@@ -9,6 +9,7 @@ This module contains the set of extract_msg exceptions.
 __all__ = [
     'ExMsgBaseException',
 
+    'AmbiguousNamedPropertyError',
     'ConversionError',
     'DataNotFoundError',
     'DeencapMalformedData',
@@ -44,6 +45,36 @@ class FeatureNotImplemented(ExMsgBaseException):
 
 
 # More specific exceptions.
+
+
+class AmbiguousNamedPropertyError(ExMsgBaseException):
+    """
+    A named property lookup only provided a textual name that resolves to more
+    than one named property definition.
+
+    This happens when the same textual name is used by both a numerical named
+    property (whose numerical ID happens to render to the same hexadecimal
+    string) and a string named property, or by several string named properties
+    in different property sets. The ambiguity cannot be resolved without more
+    information, such as the property set GUID or the named property type.
+
+    The :attr:`candidates` attribute contains every
+    :class:`~extract_msg.properties.named.NamedPropertyBase` definition that
+    matched, allowing the caller to present them as choices.
+    """
+
+    def __init__(self, name: str, candidates: list):
+        self.name = name
+        self.candidates = list(candidates)
+        names = ', '.join(
+            f'{type(item).__name__} {item.identifier[0]!r} in {item.guid}'
+            for item in self.candidates
+        )
+        super().__init__(
+            f'The textual name {name!r} is ambiguous; it matches the '
+            f'following named property definitions: {names}. Provide the '
+            'property set GUID or the named property type to disambiguate.'
+        )
 
 
 class ConversionError(ExMsgBaseException):

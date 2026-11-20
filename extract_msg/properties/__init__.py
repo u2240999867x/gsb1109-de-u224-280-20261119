@@ -7,6 +7,8 @@ __all__ = [
     'Named',
     'NamedProperties',
     'NamedPropertyBase',
+    'NamedPropertyCatalog',
+    'NamedPropertyEntry',
     'NumericalNamedProperty',
     'PropBase',
     'PropertiesStore',
@@ -16,8 +18,8 @@ __all__ = [
 
 
 from .named import (
-        Named, NamedProperties, NamedPropertyBase, NumericalNamedProperty,
-        StringNamedProperty
+        Named, NamedProperties, NamedPropertyBase, NamedPropertyCatalog,
+        NamedPropertyEntry, NumericalNamedProperty, StringNamedProperty
     )
 from .prop import FixedLengthProp, PropBase, VariableLengthProp
 from .properties_store import PropertiesStore

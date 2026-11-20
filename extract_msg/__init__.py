@@ -52,6 +52,8 @@ __all__ = [
     'MSGPath',
     'Named',
     'NamedProperties',
+    'NamedPropertyCatalog',
+    'NamedPropertyEntry',
     'OleWriter',
     'PropertiesStore',
     'Recipient',
@@ -73,5 +75,5 @@ from .msg_classes import Message, MSGFile
 from .msg_path import MSGPath
 from .ole_writer import OleWriter
 from .open_msg import openMsg, openMsgBulk
-from .properties import Named, NamedProperties, PropertiesStore
+from .properties import Named, NamedProperties, NamedPropertyCatalog, NamedPropertyEntry, PropertiesStore
 from .recipient import Recipient

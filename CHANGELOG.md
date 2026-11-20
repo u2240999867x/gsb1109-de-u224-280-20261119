@@ -1,3 +1,9 @@
+**Unreleased**
+* Reworked named property definitions to be identified by their textual identifier, property set GUID, and named property type together. A numerical named property whose ID renders as a hexadecimal string (such as `000A`) no longer overwrites, or gets overwritten by, a string named property using the same text in the same property set.
+* Added `Named.findDefinitions()` and `Named.getDefinition()` for unambiguous and candidate-based lookups. Looking up an ambiguous textual name directly now raises the new `AmbiguousNamedPropertyError`, whose `candidates` attribute lists every matching definition; the original unambiguous lookups keep working.
+* Added `NamedPropertyCatalog` and `NamedPropertyEntry` (available as `MSGFile.namedCatalog`). The catalog reviews every named property definition while reporting the actual value type, whether the specific message instance carries its own value, and the source of the definitions, without filling in values from parent or forwarded messages.
+* Fixed embedded MSG files exporting empty `__nameid_version1.0` streams, which caused a reopened standalone message to lose all named property definitions. Nested messages can now read the shared named property storage at the OLE root.
+
 **v0.58.2**
 * [[Advisory GHSA-6p33-92hw-4v86](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-6p33-92hw-4v86)] [[Advisory GHSA-cxpg-prmv-g4pp](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-cxpg-prmv-g4pp)] Fixed further attack vectors regarding the original advisory that were previously undiscovered. Most changes suggested in the new advisory were accepted as is, however a change was made to the handling of `srcset` to prevent it from being used at all if external files are not allowed.
 * Changed `setup.py` to exclude `extract_msg_tests` from installed packages.

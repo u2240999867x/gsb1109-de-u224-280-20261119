@@ -41,7 +41,7 @@ from ..exceptions import (
         StandardViolationError
     )
 from ..msg_path import MSGPath
-from ..properties.named import Named, NamedProperties
+from ..properties.named import Named, NamedProperties, NamedPropertyCatalog
 from ..properties.properties_store import PropertiesStore
 from ..structures.contact_link_entry import ContactLinkEntry
 from ..utils import (
@@ -447,7 +447,23 @@ class MSGFile:
             # Get the cache and ensure all names are lowercase.
             self.__existsCache = self.listDir(True, True, True)
 
-        return self.fixPath(filename, prefix) in self.__existsCache
+        path = self.fixPath(filename, prefix)
+        if path in self.__existsCache:
+            return True
+
+        # The cache only covers this message's own prefix subtree. An embedded
+        # message may need to read streams outside that subtree, such as the
+        # shared "__nameid_version1.0" storage that lives at the OLE root. For
+        # those paths, fall back to querying the OLE file directly instead of
+        # incorrectly reporting the stream as missing.
+        if self.__prefix and not path.is_relative_to(self.__prefix):
+            try:
+                self.__ole._find(str(path))
+            except OSError:
+                return False
+            return True
+
+        return False
 
     def sExists(self, filename: MSG_PATH, prefix: bool = True) -> bool:
         """
@@ -1112,6 +1128,20 @@ class MSGFile:
         properties.
         """
         return NamedProperties(self.named, self)
+
+    @functools.cached_property
+    def namedCatalog(self) -> NamedPropertyCatalog:
+        """
+        A reviewable catalog of the named property definitions as they apply to
+        this specific message instance.
+
+        Each entry reports the real type of the value this message carries and
+        whether the message has its own value, without borrowing values from
+        parent or forwarded messages. Shared definitions are still listed, but a
+        property the message does not itself carry is reported as having no
+        value.
+        """
+        return NamedPropertyCatalog(self)
 
     @property
     def overrideEncoding(self) -> Optional[str]:
