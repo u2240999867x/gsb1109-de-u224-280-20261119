@@ -7,6 +7,7 @@ import codecs
 import csv
 from http.client import HTTPResponse
 from json import JSONEncoder
+from types import GeneratorType
 from typing import List, Iterator
 from influxdb_client.rest import _UTF_8_encoding
 
@@ -288,3 +289,74 @@ class CSVIterator(Iterator[List[str]]):
             ]
         """
         return list(self.__iter__())
+
+
+class FluxRecordStream(Iterator['FluxRecord']):
+    """
+    Stream of :class:`~influxdb_client.client.flux_table.FluxRecord` with an explicit way to end its response.
+
+    The stream is returned by :func:`~influxdb_client.client.query_api.QueryApi.query_stream`. It is a regular
+    iterator and can be used in a ``for`` loop. The stream should be closed by :meth:`close` or by the ``with``
+    statement when the consumer does not read it to the end:
+
+    .. code-block:: python
+
+        with client.query_api().query_stream('from(bucket:"my-bucket") |> range(start: -10m)') as records:
+            for record in records:
+                if record["_value"] > 10:
+                    break
+
+    Closing the stream releases only the HTTP response of that single query. When the response was read to the end,
+    its connection is returned to the pool. When the stream is interrupted, the connection is closed because its
+    unread data cannot be used by a subsequent request. In both cases the shared client stays usable.
+    """
+
+    def __init__(self, parser) -> None:
+        """Initialize the stream over the response parser."""
+        def on_close():
+            parser.close()
+
+        self._delegate = parser.generator()
+        self._iterator = iter(self._delegate)
+        self._on_close = on_close
+        self._closed = False
+
+    @property
+    def __class__(self):
+        """Keep the backward compatible ``isinstance(stream, types.GeneratorType)`` check."""
+        return GeneratorType
+
+    def __iter__(self):
+        """Return an iterator object."""
+        return self
+
+    def __next__(self):
+        """Retrieve the next record from the stream."""
+        return next(self._iterator)
+
+    def close(self):
+        """End the response and release its resources. It is safe to call it more than once."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            close = getattr(self._delegate, 'close', None)
+            if close is not None:
+                close()
+        finally:
+            self._on_close()
+
+    def __enter__(self):
+        """Return the stream."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """End the response."""
+        self.close()
+
+    def __del__(self):
+        """Close the stream on garbage collection to not leak a response."""
+        try:
+            self.close()
+        except Exception:
+            pass

@@ -636,6 +636,14 @@ for record in large_stream:
 
 large_stream.close()
 
+"""
+The stream can also be used as a context manager which ends its response when the block exits
+"""
+with query_api.query_stream('from(bucket:"my-bucket") |> range(start: -10m)') as records:
+    for record in records:
+        print(f'Temperature in {record["location"]} is {record["_value"]}')
+        break
+
 print()
 print()
 

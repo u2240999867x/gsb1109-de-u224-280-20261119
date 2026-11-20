@@ -82,9 +82,31 @@ class FluxCsvParser(object):
         self._profilers = query_options.profilers if query_options is not None else None
         self._profiler_callback = query_options.profiler_callback if query_options is not None else None
         self._async_mode = True if 'ClientResponse' in type(response).__name__ else False
+        self._response_closed = False
+        self._response_exhausted = False
+
+    def close(self):
+        """
+        Release the HTTP response.
+
+        A fully consumed response can safely return its connection back to the pool. An interrupted response has to
+        close the connection, because unread (possibly compressed or CSV) bytes cannot be used by a subsequent request.
+        The method is idempotent and never tries to drain the remaining content.
+        """
+        if self._response_closed:
+            return
+        self._response_closed = True
+
+        if self._response_exhausted:
+            release_conn = getattr(self._response, 'release_conn', None)
+            if release_conn is not None:
+                release_conn()
+                return
+        # An interrupted response, or a transport without connection pooling, has to close its connection.
+        self._response.close()
 
     def _close(self):
-        self._response.close()
+        self.close()
 
     def __enter__(self):
         """Initialize CSV reader."""
@@ -128,6 +150,8 @@ class FluxCsvParser(object):
             for val in self._parse_flux_response_row(metadata, csv):
                 yield val
 
+        self._response_exhausted = True
+
         # Return latest DataFrame
         if (self._serialization_mode is FluxSerializationMode.dataFrame) & hasattr(self, '_data_frame'):
             df = self._prepare_data_frame()
@@ -141,6 +165,8 @@ class FluxCsvParser(object):
             async for csv in self._reader:
                 for val in self._parse_flux_response_row(metadata, csv):
                     yield val
+
+            self._response_exhausted = True
 
             # Return latest DataFrame
             if (self._serialization_mode is FluxSerializationMode.dataFrame) & hasattr(self, '_data_frame'):

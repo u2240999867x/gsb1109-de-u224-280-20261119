@@ -15,7 +15,7 @@ from influxdb_client import Configuration, Dialect, Query, OptionStatement, Vari
     Duration, StringLiteral, ArrayExpression, ImportDeclaration, MemberExpression, MemberAssignment, File, \
     WriteService, QueryService, DeleteService, DeletePredicateRequest
 from influxdb_client.client.flux_csv_parser import FluxResponseMetadataMode, FluxCsvParser, FluxSerializationMode
-from influxdb_client.client.flux_table import FluxRecord, TableList, CSVIterator
+from influxdb_client.client.flux_table import FluxRecord, FluxRecordStream, TableList, CSVIterator
 from influxdb_client.client.util.date_utils import get_date_helper
 from influxdb_client.client.util.helpers import get_org_query_param
 from influxdb_client.client.warnings import MissingPivotFunction
@@ -265,7 +265,7 @@ class _BaseQueryApi(object):
         :param response: HTTP response from an HTTP client. Expected type: `urllib3.response.HTTPResponse`.
         """
         _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode)
-        return _parser.generator()
+        return FluxRecordStream(_parser)
 
     async def _to_flux_record_stream_async(self, response, query_options=None, response_metadata_mode:
                                            FluxResponseMetadataMode = FluxResponseMetadataMode.full) -> \

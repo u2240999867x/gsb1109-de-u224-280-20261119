@@ -146,6 +146,9 @@ class InvokableScriptsApi(_BaseQueryApi):
 
         The bind parameters referenced in the script are substitutes with `params` key-values sent in the request body.
 
+        The returned stream can be explicitly ended by :meth:`close` or by the ``with`` statement;
+        see :func:`~influxdb_client.client.query_api.QueryApi.query_stream`.
+
         :param str script_id: The ID of the script to invoke. (required)
         :param params: bind parameters
         :return: Stream of FluxRecord.

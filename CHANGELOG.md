@@ -15,6 +15,7 @@
 1. [#723](https://github.com/influxdata/influxdb-client-python/pull/723): Export public names using generated `__all__` array in `__init__.py` as per reference documentation.
 1. [#725](https://github.com/influxdata/influxdb-client-python/pull/725): Start the `WritesRetry` `max_retry_time` at a request's first failure, so a strategy passed as `retries` to `InfluxDBClient` keeps retrying after `max_retry_time` has passed since it was created.
 1. [#732](https://github.com/influxdata/influxdb-client-python/pull/732): Apply the `#default` annotation in `FluxCsvParser` when it comes before `#datatype`.
+1. [#733](https://github.com/influxdata/influxdb-client-python/pull/733): Make `QueryApi.query_stream` return a stream with an explicit `close()` (and `with` support). It releases only its own response: a fully read response returns its connection to the pool, an interrupted one closes the connection, and the shared client stays usable. Parser failures still propagate to the caller and release the response.
 
 ## 1.50.0 [2026-01-23]
 

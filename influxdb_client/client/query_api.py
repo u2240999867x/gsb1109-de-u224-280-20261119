@@ -209,6 +209,20 @@ class QueryApi(_BaseQueryApi):
         """
         Execute synchronous Flux query and return stream of FluxRecord as a Generator['FluxRecord'].
 
+        The returned stream is an iterator with an explicit :meth:`close` method (and a ``with`` statement support)
+        that ends only its own HTTP response:
+
+        .. code-block:: python
+
+            with client.query_api().query_stream('from(bucket:"my-bucket") |> range(start: -10m)') as records:
+                for record in records:
+                    if record["_value"] > 10:
+                        break
+
+        When the response is read to the end, its connection is returned to the pool. When the iteration is
+        interrupted (``break``, an exception in the consumer or ``close()`` before the end), the connection is closed,
+        because the unread data cannot be used by the next request. The shared client stays usable in both cases.
+
         :param query: the Flux query
         :param str, Organization org: specifies the organization for executing the query;
                                       Take the ``ID``, ``Name`` or ``Organization``.
