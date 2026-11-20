@@ -1,3 +1,8 @@
+**Unreleased**
+* Changed `MessageBase.asEmailMessage()` so embedded MSG attachments are wrapped in a self-contained `message/rfc822` part with an `.eml` filename instead of being merged into the outer MIME tree. A forwarded message can now be opened as a standalone email, and its bodies, recipients, inline images and regular attachments stay within their own MIME boundary.
+* Fixed `MessageBase.asEmailMessage()` emitting `Content-ID` headers without the RFC 2392 angle brackets, which prevented `cid:` references from resolving in standard MIME readers.
+* Hardened attachment filename handling in `MessageBase.asEmailMessage()` so NUL and other control characters from MSG streams cannot corrupt MIME headers.
+
 **v0.58.2**
 * [[Advisory GHSA-6p33-92hw-4v86](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-6p33-92hw-4v86)] [[Advisory GHSA-cxpg-prmv-g4pp](https://github.com/TeamMsgExtractor/msg-extractor/security/advisories/GHSA-cxpg-prmv-g4pp)] Fixed further attack vectors regarding the original advisory that were previously undiscovered. Most changes suggested in the new advisory were accepted as is, however a change was made to the handling of `srcset` to prevent it from being used at all if external files are not allowed.
 * Changed `setup.py` to exclude `extract_msg_tests` from installed packages.

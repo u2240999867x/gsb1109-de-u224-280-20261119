@@ -129,6 +129,20 @@ def _sanitize_header(value: str) -> str:
     return value
 
 
+def _sanitizeAttachmentFilename(filename: Optional[str]) -> str:
+    """
+    Cleans an attachment filename for use in a MIME ``filename`` parameter.
+
+    MSG string streams are NUL-terminated and occasionally carry other control
+    characters; embedding them raw would corrupt the header or produce a name
+    readers cannot open. NULs and ASCII control characters are stripped and the
+    surrounding whitespace is removed.
+    """
+    if not filename:
+        return ''
+    return re.sub(r'[\x00-\x1f\x7f]', '', filename).strip()
+
+
 class MessageBase(MSGFile):
     """
     Base class for Message-like MSG files.
@@ -300,11 +314,22 @@ class MessageBase(MSGFile):
         for att in self.attachments:
             if att.dataType:
                 if hasattr(att.dataType, 'asEmailMessage'):
-                    # Replace the extension with '.eml'.
+                    # Wrap the embedded MSG (converted to its own EML) in a
+                    # message/rfc822 part. Keeping it as a self-contained
+                    # attachment means the forwarded message can be opened
+                    # independently by any standard MIME reader instead of
+                    # leaking its parts into the outer message's structure.
+                    embeddedEmail = att.data.asEmailMessage()
                     filename = att.name or ''
                     if filename.lower().endswith('.msg'):
                         filename = filename[:-4] + '.eml'
-                    msgMain.attach(att.data.asEmailMessage())
+                    filename = _sanitizeAttachmentFilename(filename) or 'forwarded.eml'
+
+                    forwarded = EmailMessage()
+                    forwarded.set_content(embeddedEmail,
+                                          disposition = 'attachment',
+                                          filename = filename)
+                    ret.attach(forwarded)
                 else:
                     if issubclass(att.dataType, bytes):
                         data = att.data
@@ -317,14 +342,21 @@ class MessageBase(MSGFile):
                         raise ConversionError(f'Could not find a suitable method to attach attachment data type "{att.dataType}".')
                     mime = att.mimetype or 'application/octet-stream'
                     mainType, subType = mime.split('/')[0], mime.split('/')[-1]
+                    # Content-ID values are stored without the RFC 2392 angle
+                    # brackets in MSG files, but the MIME header requires them
+                    # for a cid: reference to resolve.
+                    cid = att.contentId
+                    if cid and not (cid.startswith('<') and cid.endswith('>')):
+                        cid = f'<{cid}>'
                     # Need to do this manually instead of using add_attachment.
                     attachment = EmailMessage()
                     attachment.set_content(data,
                                            maintype = mainType,
                                            subtype = subType,
-                                           cid = att.contentId)
+                                           cid = cid)
                     # This is just a very basic check.
-                    attachment['Content-Disposition'] = f'{"inline" if att.hidden else "attachment"}; filename="{att.getFilename()}"'
+                    filename = _sanitizeAttachmentFilename(att.getFilename())
+                    attachment['Content-Disposition'] = f'{"inline" if att.hidden else "attachment"}; filename="{filename}"'
 
                     # Add the attachment.
                     msgMain.attach(attachment)
