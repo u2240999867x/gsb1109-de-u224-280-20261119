@@ -110,8 +110,14 @@ class WriteApiAsync(_BaseWriteApi):
                 # Transform index to PeriodIndex
                 data_frame.index = pd.to_datetime(data_frame.index, unit='s')
 
+            When ``data_frame_timestamp_column`` is specified, rows whose timestamp is missing
+            or is a naive local time that cannot be unambiguously resolved in
+            ``data_frame_timestamp_timezone`` are not written; they are reported in
+            :attr:`~influxdb_client.client.write_api_async.WriteApiAsync.dataframe_rejections`.
+
         """  # noqa: E501
         org = get_org_query_param(org=org, client=self._influxdb_client)
+        self._dataframe_rejections = []
         self._append_default_tags(record)
 
         payloads = defaultdict(list)

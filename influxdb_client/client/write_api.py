@@ -371,9 +371,15 @@ You can use native asynchronous version of the client:
                 # Transform index to PeriodIndex
                 data_frame.index = pd.to_datetime(data_frame.index, unit='s')
 
+            When ``data_frame_timestamp_column`` is specified, rows whose timestamp is missing
+            or is a naive local time that cannot be unambiguously resolved in
+            ``data_frame_timestamp_timezone`` are not written; they are reported in
+            :attr:`~influxdb_client.client.write_api.WriteApi.dataframe_rejections`.
+
         """  # noqa: E501
         org = get_org_query_param(org=org, client=self._influxdb_client)
 
+        self._dataframe_rejections = []
         self._append_default_tags(record)
 
         if self._write_options.write_type is WriteType.batching:
@@ -495,6 +501,7 @@ You can use native asynchronous version of the client:
         elif 'DataFrame' in type(data).__name__:
             serializer = DataframeSerializer(data, self._point_settings, precision, self._write_options.batch_size,
                                              **kwargs)
+            self._dataframe_rejections.extend(serializer.rejected)
             for chunk_idx in range(serializer.number_of_chunks):
                 self._write_batching(bucket, org,
                                      serializer.serialize(chunk_idx),

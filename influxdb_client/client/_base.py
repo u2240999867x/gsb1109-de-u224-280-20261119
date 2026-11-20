@@ -445,9 +445,22 @@ class _BaseWriteApi(object):
         self._influxdb_client = influxdb_client
         self._point_settings = point_settings if point_settings is not None else PointSettings()
         self._write_service = WriteService(influxdb_client.api_client)
+        self._dataframe_rejections = []
         if influxdb_client.default_tags:
             for key, value in influxdb_client.default_tags.items():
                 self._point_settings.add_default_tag(key, value)
+
+    @property
+    def dataframe_rejections(self):
+        """
+        Rows rejected during the most recent DataFrame ``write``.
+
+        Each entry is a :class:`~influxdb_client.client.write.dataframe_serializer.DataframeRejection`
+        with the zero-based ``position`` of the row within the written DataFrame and a human-readable
+        ``reason``. The list is reset at the beginning of every ``write`` call; it is empty when
+        nothing was rejected or no DataFrame was written.
+        """  # noqa: E501
+        return self._dataframe_rejections
 
     def _append_default_tag(self, key, val, record):
         from influxdb_client import Point
@@ -485,6 +498,7 @@ class _BaseWriteApi(object):
                             write_precision, payload, **kwargs)
         elif 'DataFrame' in type(record).__name__:
             serializer = DataframeSerializer(record, self._point_settings, write_precision, **kwargs)
+            self._dataframe_rejections.extend(serializer.rejected)
             self._serialize(serializer.serialize(), write_precision, payload, **kwargs)
         elif hasattr(record, "_asdict"):
             # noinspection PyProtectedMember

@@ -7,6 +7,7 @@ Much of the code here is inspired by that in the aioinflux packet found here: ht
 import logging
 import math
 import re
+from typing import NamedTuple
 
 from influxdb_client import WritePrecision
 from influxdb_client.client.write.point import _ESCAPE_KEY, _ESCAPE_STRING, _ESCAPE_MEASUREMENT, DEFAULT_WRITE_PRECISION
@@ -14,13 +15,59 @@ from influxdb_client.client.write.point import _ESCAPE_KEY, _ESCAPE_STRING, _ESC
 logger = logging.getLogger('influxdb_client.client.write.dataframe_serializer')
 
 
+class DataframeRejection(NamedTuple):
+    """A DataFrame row rejected during serialization into Line Protocol."""
+
+    #: zero-based positional index of the rejected row within the original DataFrame
+    position: int
+    #: human-readable reason why the row was rejected
+    reason: str
+
+
 def _itertuples(data_frame):
     cols = [data_frame.iloc[:, k] for k in range(len(data_frame.columns))]
     return zip(data_frame.index, *cols)
 
 
+def _resolve_timestamp_value(value, precision, timestamp_timezone):
+    """
+    Parse a single timestamp-column value into a timezone-aware ``Timestamp``.
+
+    A caller-specified ``timestamp_timezone`` is used to interpret naive values only;
+    values that already carry an offset keep their own offset.
+
+    :return: a ``(timestamp, rejection_reason)`` tuple; exactly one element is ``None``
+    """
+    from ...extras import pd
+    if pd.isna(value):
+        return None, 'missing timestamp'
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        timestamp = pd.to_datetime(value, unit=precision)
+    else:
+        timestamp = pd.to_datetime(value)
+    if timestamp.tzinfo is None:
+        if timestamp_timezone is not None:
+            try:
+                timestamp = timestamp.tz_localize(timestamp_timezone, ambiguous='raise', nonexistent='raise')
+            except Exception as error:
+                return None, (f"cannot resolve local time {value!r} "
+                              f"in timezone {timestamp_timezone!r}: {error}")
+        else:
+            timestamp = timestamp.tz_localize('UTC')
+    return timestamp, None
+
+
 class DataframeSerializer:
-    """Serialize DataFrame into LineProtocols."""
+    """
+    Serialize DataFrame into LineProtocols.
+
+    :ivar rejected: list of :class:`~DataframeRejection` holding the rows that were
+                    rejected during initialization (e.g. missing or unresolvable
+                    timestamps). The ``position`` of each rejection is the zero-based
+                    positional index of the row within the original DataFrame, so it
+                    identifies the row unambiguously even when the DataFrame index
+                    contains duplicate labels.
+    """
 
     def __init__(self, data_frame, point_settings, precision=DEFAULT_WRITE_PRECISION, chunk_size: int = None,
                  **kwargs) -> None:
@@ -37,6 +84,12 @@ class DataframeSerializer:
                                           formatted as `2018-10-26`, `2018-10-26 12:00`, `2018-10-26 12:00:00-05:00`
                                           or other formats and types supported by `pandas.to_datetime <https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.to_datetime.html#pandas.to_datetime>`_ - ``DataFrame``
         :key data_frame_timestamp_timezone: name of the timezone which is used for timestamp column - ``DataFrame``
+
+        When ``data_frame_timestamp_column`` is specified, each value of the column is parsed
+        independently. Rows whose timestamp is missing or is a naive local time that cannot be
+        unambiguously resolved in ``data_frame_timestamp_timezone`` are rejected: they are not
+        serialized into Line Protocol and they are not backfilled from the DataFrame index.
+        Rejected rows are reported in :attr:`~DataframeSerializer.rejected`.
         """  # noqa: E501
         # This function is hard to understand but for good reason:
         # the approach used here is considerably more efficient
@@ -91,29 +144,47 @@ class DataframeSerializer:
         timestamp_column = kwargs.get('data_frame_timestamp_column', None)
         timestamp_timezone = kwargs.get('data_frame_timestamp_timezone', None)
         data_frame = data_frame.copy(deep=False)
-        data_frame_timestamp = data_frame.index if timestamp_column is None else data_frame[timestamp_column]
-        if isinstance(data_frame_timestamp, pd.PeriodIndex):
-            data_frame_timestamp = data_frame_timestamp.to_timestamp()
-        else:
-            # TODO: this is almost certainly not what you want
-            # when the index is the default RangeIndex.
-            # Instead, it would probably be better to leave
-            # out the timestamp unless a time column is explicitly
-            # enabled.
-            data_frame_timestamp = pd.to_datetime(data_frame_timestamp, unit=precision)
 
-        if timestamp_timezone:
-            if isinstance(data_frame_timestamp, pd.DatetimeIndex):
-                data_frame_timestamp = data_frame_timestamp.tz_localize(timestamp_timezone)
-            else:
-                data_frame_timestamp = data_frame_timestamp.dt.tz_localize(timestamp_timezone)
+        # Rows rejected because their timestamp is missing or cannot be resolved.
+        # Positions are zero-based iloc positions within the original DataFrame,
+        # so they stay stable no matter how the DataFrame is chunked.
+        self._rejected_positions = set()
+        self.rejected = []
 
-        if hasattr(data_frame_timestamp, 'tzinfo') and data_frame_timestamp.tzinfo is None:
-            data_frame_timestamp = data_frame_timestamp.tz_localize('UTC')
         if timestamp_column is None:
+            data_frame_timestamp = data_frame.index
+            if isinstance(data_frame_timestamp, pd.PeriodIndex):
+                data_frame_timestamp = data_frame_timestamp.to_timestamp()
+            else:
+                # TODO: this is almost certainly not what you want
+                # when the index is the default RangeIndex.
+                # Instead, it would probably be better to leave
+                # out the timestamp unless a time column is explicitly
+                # enabled.
+                data_frame_timestamp = pd.to_datetime(data_frame_timestamp, unit=precision)
+
+            if timestamp_timezone:
+                if isinstance(data_frame_timestamp, pd.DatetimeIndex):
+                    data_frame_timestamp = data_frame_timestamp.tz_localize(timestamp_timezone)
+                else:
+                    data_frame_timestamp = data_frame_timestamp.dt.tz_localize(timestamp_timezone)
+
+            if hasattr(data_frame_timestamp, 'tzinfo') and data_frame_timestamp.tzinfo is None:
+                data_frame_timestamp = data_frame_timestamp.tz_localize('UTC')
             data_frame.index = data_frame_timestamp
         else:
-            data_frame[timestamp_column] = data_frame_timestamp
+            # Parse every timestamp value independently so that a single batch
+            # can mix offsets and so that unwritable rows can be rejected
+            # individually instead of failing the whole batch.
+            timestamps = []
+            for position, value in enumerate(data_frame[timestamp_column]):
+                timestamp, rejection = _resolve_timestamp_value(value, precision, timestamp_timezone)
+                if rejection is not None:
+                    self._rejected_positions.add(position)
+                    self.rejected.append(DataframeRejection(position=position, reason=rejection))
+                    logger.debug("Reject DataFrame row %s: %s", position, rejection)
+                timestamps.append(timestamp)
+            data_frame[timestamp_column] = timestamps
 
         data_frame_tag_columns = kwargs.get('data_frame_tag_columns')
         data_frame_tag_columns = set(data_frame_tag_columns or [])
@@ -174,7 +245,7 @@ class DataframeSerializer:
                     key_value = f',{key_format}={{str({val_format}).translate(_ESCAPE_KEY)}}'
                 tags.append(key_value)
                 continue
-            elif timestamp_column is not None and key in timestamp_column:
+            elif timestamp_column is not None and key == timestamp_column:
                 timestamp_index = field_index
                 continue
 
@@ -205,13 +276,15 @@ class DataframeSerializer:
 
         tags = ''.join(tags)
         fields = ''.join(fields)
+        # Truncate with integer division so that timestamps close to a precision-unit
+        # boundary are rounded consistently (float division can round up across the boundary).
         timestamp = '{p[%s].value}' % timestamp_index
         if precision == WritePrecision.US:
-            timestamp = '{int(p[%s].value / 1e3)}' % timestamp_index
+            timestamp = '{p[%s].value // 1000}' % timestamp_index
         elif precision == WritePrecision.MS:
-            timestamp = '{int(p[%s].value / 1e6)}' % timestamp_index
+            timestamp = '{p[%s].value // 1000000}' % timestamp_index
         elif precision == WritePrecision.S:
-            timestamp = '{int(p[%s].value / 1e9)}' % timestamp_index
+            timestamp = '{p[%s].value // 1000000000}' % timestamp_index
 
         f = eval(f'lambda p: f"""{{measurement_name}}{tags} {fields} {timestamp}"""', {
             'measurement_name': measurement_name,
@@ -247,22 +320,33 @@ class DataframeSerializer:
         """
         Serialize chunk into LineProtocols.
 
+        Rows reported in :attr:`~DataframeSerializer.rejected` are skipped;
+        no line-protocol entry without a timestamp is ever emitted.
+
         :param chunk_idx: The index of chunk to serialize. If `None` then serialize whole dataframe.
         """
         if chunk_idx is None:
             chunk = self.data_frame
+            offset = 0
         else:
             logger.debug("Serialize chunk %s/%s ...", chunk_idx + 1, self.number_of_chunks)
             chunk = self.data_frame[chunk_idx * self.chunk_size:(chunk_idx + 1) * self.chunk_size]
+            offset = chunk_idx * self.chunk_size
+
+        rows = _itertuples(chunk)
+        if self._rejected_positions:
+            rejected_positions = self._rejected_positions
+            rows = (row for position, row in enumerate(rows, start=offset)
+                    if position not in rejected_positions)
 
         if self.first_field_maybe_null:
             # When the first field is null (None/NaN), we'll have
             # a spurious leading comma which needs to be removed.
             lp = (re.sub('^(( |[^ ])* ),([a-zA-Z0-9])(.*)', '\\1\\3\\4', self.f(p))
-                  for p in filter(lambda x: self._any_not_nan(x, self.field_indexes), _itertuples(chunk)))
+                  for p in filter(lambda x: self._any_not_nan(x, self.field_indexes), rows))
             return list(lp)
         else:
-            return list(map(self.f, _itertuples(chunk)))
+            return list(map(self.f, rows))
 
     def number_of_chunks(self):
         """

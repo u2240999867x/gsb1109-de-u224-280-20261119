@@ -1,5 +1,14 @@
 ## 1.51.0 [unreleased]
 
+### Features
+
+1. DataFrame writes with `data_frame_timestamp_column` now parse every timestamp value independently and report rejected rows: a missing timestamp or a naive local time that cannot be unambiguously resolved in `data_frame_timestamp_timezone` is not written (and is not backfilled from the index), but is returned as a `DataframeRejection(position, reason)` via `DataframeSerializer.rejected` and `WriteApi.dataframe_rejections`. The caller-specified timezone interprets naive values only; values that already carry an offset keep it.
+
+### Bug Fixes
+
+1. A field whose name is a substring of `data_frame_timestamp_column` (e.g. a `clock` field next to an `event_clock` timestamp column) is no longer swallowed as the timestamp column.
+1. Truncate DataFrame timestamps to the write precision with integer division, so instants close to a precision-unit boundary are not rounded up across the boundary.
+
 ### Documentation
 
 1. [#721](https://github.com/influxdata/influxdb-client-python/pull/721): Add examples for configure TLS/mTLS for the Influxdb client.

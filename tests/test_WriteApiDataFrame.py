@@ -10,6 +10,251 @@ from influxdb_client.client.write_api import SYNCHRONOUS, PointSettings
 from tests.base_test import BaseTest
 
 
+def _sampling_data_frame():
+    """
+    Build a sampling DataFrame with an explicit time-source column.
+
+    The index holds the collection time (with duplicate labels), ``event_clock``
+    holds a supplementary recorded time and ``clock`` is a legitimate business
+    field whose name is a suffix of the timestamp column name. Every row carries
+    a stable ``marker``.
+    """
+    from influxdb_client.extras import pd
+
+    return pd.DataFrame(data={
+        'event_clock': [
+            '2021-03-14 06:30:00+00:00',        # rec-utc: UTC
+            '2021-03-14 08:30:00+02:00',        # rec-offset: same absolute instant, non-zero offset
+            None,                               # rec-missing: missing time
+            '2021-11-07 01:30:00',              # rec-ambiguous: naive, ambiguous in US/Eastern fall-back
+            '2021-03-14 06:30:00.999999999+00:00',  # rec-boundary: close to a precision-unit boundary
+            '2021-03-14 06:30:00',              # rec-local: naive, determinable in US/Eastern
+        ],
+        'clock': ['shift-a', 'shift-b', 'shift-c', 'shift-d', 'shift-e', 'shift-f'],
+        'marker': ['rec-utc', 'rec-offset', 'rec-missing', 'rec-ambiguous', 'rec-boundary', 'rec-local'],
+        'value': [1, 2, 3, 4, 5, 6],
+    }, index=pd.to_datetime([
+        '2021-03-14 05:00:00+00:00',
+        '2021-03-14 05:00:00+00:00',
+        '2021-03-14 05:00:01+00:00',
+        '2021-03-14 05:00:02+00:00',
+        '2021-03-14 05:00:02+00:00',
+        '2021-03-14 05:00:03+00:00',
+    ]))
+
+
+def _expected_column_timestamps():
+    from influxdb_client.extras import pd
+
+    return {
+        'rec-utc': pd.Timestamp('2021-03-14 06:30:00+00:00').value,
+        'rec-offset': pd.Timestamp('2021-03-14 06:30:00+00:00').value,
+        'rec-boundary': pd.Timestamp('2021-03-14 06:30:00.999999999+00:00').value,
+        'rec-local': pd.Timestamp('2021-03-14 06:30:00', tz='US/Eastern').value,
+    }
+
+
+def _marker_of(line):
+    return line.split('marker=', 1)[1].split(' ', 1)[0].split(',')[0]
+
+
+def _timestamp_of(line):
+    return int(line.rsplit(' ', 1)[1])
+
+
+class DataFrameTimeSourceTest(unittest.TestCase):
+
+    def _serializer(self, data_frame, precision=DEFAULT_WRITE_PRECISION, chunk_size=None):
+        return DataframeSerializer(data_frame, PointSettings(), precision, chunk_size,
+                                   data_frame_measurement_name='sampling',
+                                   data_frame_tag_columns=['marker'],
+                                   data_frame_timestamp_column='event_clock',
+                                   data_frame_timestamp_timezone='US/Eastern')
+
+    def _serialize_all(self, serializer):
+        if serializer.number_of_chunks is None:
+            return serializer.serialize()
+        points = []
+        for chunk_idx in range(serializer.number_of_chunks):
+            points.extend(serializer.serialize(chunk_idx))
+        return points
+
+    def test_same_absolute_instant_same_integer(self):
+        points = self._serialize_all(self._serializer(_sampling_data_frame()))
+        by_marker = {_marker_of(point): point for point in points}
+
+        self.assertEqual(_timestamp_of(by_marker['rec-utc']), _timestamp_of(by_marker['rec-offset']))
+        self.assertEqual(_expected_column_timestamps()['rec-utc'], _timestamp_of(by_marker['rec-utc']))
+
+    def test_precision_boundary_truncated_consistently(self):
+        scales = [
+            (WritePrecision.NS, 1),
+            (WritePrecision.US, 1_000),
+            (WritePrecision.MS, 1_000_000),
+            (WritePrecision.S, 1_000_000_000),
+        ]
+        for precision, scale in scales:
+            points = self._serialize_all(self._serializer(_sampling_data_frame(), precision=precision))
+            by_marker = {_marker_of(point): point for point in points}
+            for marker, expected_ns in _expected_column_timestamps().items():
+                self.assertEqual(expected_ns // scale, _timestamp_of(by_marker[marker]),
+                                 msg=f'{marker} at precision {precision}')
+
+    def test_missing_and_ambiguous_timestamps_rejected(self):
+        data_frame = _sampling_data_frame()
+        serializer = self._serializer(data_frame)
+        points = self._serialize_all(serializer)
+
+        # rejected rows are queryable by their original record marker
+        rejections = {data_frame['marker'].iloc[rejection.position]: rejection.reason
+                      for rejection in serializer.rejected}
+        self.assertEqual({'rec-missing', 'rec-ambiguous'}, set(rejections))
+        self.assertIn('missing', rejections['rec-missing'])
+        self.assertIn('cannot resolve', rejections['rec-ambiguous'])
+
+        # no record without a timestamp is emitted and the index is not used as a fallback
+        self.assertEqual(4, len(points))
+        body = '\n'.join(points)
+        self.assertNotIn('rec-missing', body)
+        self.assertNotIn('rec-ambiguous', body)
+
+    def test_naive_value_interpreted_in_specified_timezone(self):
+        from influxdb_client.extras import pd
+
+        points = self._serialize_all(self._serializer(_sampling_data_frame()))
+        by_marker = {_marker_of(point): point for point in points}
+
+        # a naive but determinable local time is interpreted in the caller-specified timezone ...
+        self.assertEqual(pd.Timestamp('2021-03-14 06:30:00', tz='US/Eastern').value,
+                         _timestamp_of(by_marker['rec-local']))
+        # ... while values that already carry an offset keep their own offset
+        self.assertEqual(pd.Timestamp('2021-03-14 06:30:00+00:00').value,
+                         _timestamp_of(by_marker['rec-offset']))
+
+    def test_chunking_does_not_change_results_or_rejections(self):
+        whole = self._serialize_all(self._serializer(_sampling_data_frame()))
+        whole_rejections = self._serializer(_sampling_data_frame()).rejected
+
+        for chunk_size in (1, 2, 3, 4, 6, 100):
+            serializer = self._serializer(_sampling_data_frame(), chunk_size=chunk_size)
+            chunked = self._serialize_all(serializer)
+            self.assertEqual(whole, chunked, msg=f'chunk_size={chunk_size}')
+            self.assertEqual(whole_rejections, serializer.rejected, msg=f'chunk_size={chunk_size}')
+
+    def test_small_chunks_keep_rejection_on_the_right_row(self):
+        data_frame = _sampling_data_frame()
+        # rec-ambiguous (position 3) shares its index label with rec-boundary (position 4)
+        self.assertEqual(data_frame.index[3], data_frame.index[4])
+
+        serializer = self._serializer(data_frame, chunk_size=1)
+        self.assertEqual(6, serializer.number_of_chunks)
+        self.assertEqual([], serializer.serialize(chunk_idx=3))
+        boundary_points = serializer.serialize(chunk_idx=4)
+        self.assertEqual(1, len(boundary_points))
+        self.assertEqual('rec-boundary', _marker_of(boundary_points[0]))
+        self.assertEqual([3], [rejection.position for rejection in serializer.rejected
+                               if 'cannot resolve' in rejection.reason])
+
+    def test_clock_field_not_treated_as_timestamp_column(self):
+        points = self._serialize_all(self._serializer(_sampling_data_frame()))
+        by_marker = {_marker_of(point): point for point in points}
+
+        self.assertIn('clock="shift-a"', by_marker['rec-utc'])
+        self.assertIn('clock="shift-e"', by_marker['rec-boundary'])
+
+    def test_index_source_still_supported(self):
+        data_frame = _sampling_data_frame()
+        serializer = DataframeSerializer(data_frame, PointSettings(), DEFAULT_WRITE_PRECISION,
+                                         data_frame_measurement_name='sampling',
+                                         data_frame_tag_columns=['marker'])
+        points = serializer.serialize()
+
+        self.assertEqual([], serializer.rejected)
+        self.assertEqual(6, len(points))
+        for position, point in enumerate(points):
+            self.assertEqual(data_frame.index[position].value, _timestamp_of(point))
+
+
+class DataFrameWriteTimeSourceMockTest(unittest.TestCase):
+
+    def setUp(self) -> None:
+        self.influxdb_client = InfluxDBClient(url="http://localhost", token="my-token", debug=False)
+        self.write_api = self.influxdb_client.write_api(write_options=SYNCHRONOUS)
+        self.requests = []
+
+        def _capture(_async_req, bucket, org, body, precision, **kwargs):
+            self.requests.append({'bucket': bucket, 'org': org, 'body': body, 'precision': precision})
+
+        self.write_api._post_write = _capture
+
+    def tearDown(self) -> None:
+        self.write_api.close()
+        self.influxdb_client.close()
+
+    def test_write_with_timestamp_column_source(self):
+        data_frame = _sampling_data_frame()
+
+        self.write_api.write("my-bucket", "my-org", record=data_frame,
+                             write_precision=WritePrecision.MS,
+                             data_frame_measurement_name='sampling',
+                             data_frame_tag_columns=['marker'],
+                             data_frame_timestamp_column='event_clock',
+                             data_frame_timestamp_timezone='US/Eastern')
+
+        # the HTTP request carries the requested precision ...
+        self.assertEqual(1, len(self.requests))
+        request = self.requests[0]
+        self.assertEqual(WritePrecision.MS, request['precision'])
+
+        # ... and the wire body holds the actual integer timestamps at that precision
+        lines = request['body'].decode('utf-8').split('\n')
+        self.assertEqual(4, len(lines))
+        by_marker = {_marker_of(line): line for line in lines}
+        for marker, expected_ns in _expected_column_timestamps().items():
+            self.assertEqual(expected_ns // 1_000_000, _timestamp_of(by_marker[marker]),
+                             msg=f'{marker} on the wire')
+        self.assertIn('clock="shift-a"', by_marker['rec-utc'])
+
+        # rejected rows are not on the wire and are queryable by their original record marker
+        self.assertNotIn('rec-missing', by_marker)
+        self.assertNotIn('rec-ambiguous', by_marker)
+        rejections = {data_frame['marker'].iloc[rejection.position]: rejection.reason
+                      for rejection in self.write_api.dataframe_rejections}
+        self.assertEqual({'rec-missing', 'rec-ambiguous'}, set(rejections))
+        self.assertIn('missing', rejections['rec-missing'])
+        self.assertIn('cannot resolve', rejections['rec-ambiguous'])
+
+    def test_write_with_index_source(self):
+        data_frame = _sampling_data_frame()
+
+        self.write_api.write("my-bucket", "my-org", record=data_frame,
+                             data_frame_measurement_name='sampling',
+                             data_frame_tag_columns=['marker'])
+
+        self.assertEqual(1, len(self.requests))
+        request = self.requests[0]
+        self.assertEqual(WritePrecision.NS, request['precision'])
+
+        lines = request['body'].decode('utf-8').split('\n')
+        self.assertEqual(6, len(lines))
+        for position, line in enumerate(lines):
+            self.assertEqual(data_frame.index[position].value, _timestamp_of(line))
+        self.assertEqual([], self.write_api.dataframe_rejections)
+
+    def test_rejections_reset_between_writes(self):
+        self.write_api.write("my-bucket", "my-org", record=_sampling_data_frame(),
+                             data_frame_measurement_name='sampling',
+                             data_frame_tag_columns=['marker'],
+                             data_frame_timestamp_column='event_clock',
+                             data_frame_timestamp_timezone='US/Eastern')
+        self.assertEqual(2, len(self.write_api.dataframe_rejections))
+
+        self.write_api.write("my-bucket", "my-org", record=_sampling_data_frame(),
+                             data_frame_measurement_name='sampling',
+                             data_frame_tag_columns=['marker'])
+        self.assertEqual([], self.write_api.dataframe_rejections)
+
+
 class DataFrameWriteTest(BaseTest):
 
     def setUp(self) -> None:
