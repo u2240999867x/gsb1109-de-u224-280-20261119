@@ -57,6 +57,14 @@ extract\_msg.recipient module
    :undoc-members:
    :show-inheritance:
 
+extract\_msg.recipient\_index module
+------------------------------------
+
+.. automodule:: extract_msg.recipient_index
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 extract\_msg.utils module
 -------------------------
 

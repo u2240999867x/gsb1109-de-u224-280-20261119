@@ -41,6 +41,7 @@ __all__ = [
     'open_msg',
     'null_date',
     'properties',
+    'recipient_index',
     'structures',
     'utils',
 
@@ -55,9 +56,16 @@ __all__ = [
     'OleWriter',
     'PropertiesStore',
     'Recipient',
+    'RecipientConflict',
+    'RecipientEvidence',
+    'RecipientIndex',
+    'RecipientIndexEntry',
+    'RecipientSource',
     'SignedAttachment',
 
     # Functions:
+    'buildRecipientIndex',
+    'normalizeAddress',
     'openMsg',
     'openMsgBulk',
 ]
@@ -75,3 +83,8 @@ from .ole_writer import OleWriter
 from .open_msg import openMsg, openMsgBulk
 from .properties import Named, NamedProperties, PropertiesStore
 from .recipient import Recipient
+from .recipient_index import (
+        RecipientConflict, RecipientEvidence, RecipientIndex,
+        RecipientIndexEntry, RecipientSource, buildRecipientIndex,
+        normalizeAddress
+    )

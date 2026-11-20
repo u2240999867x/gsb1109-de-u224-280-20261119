@@ -6,6 +6,7 @@ __all__ = [
     'OleWriterEditingTests',
     'OleWriterExportTests',
     'PropTests',
+    'RecipientIndexTests',
     'SignedTests',
     'UtilTests',
     'ValidationTests',
@@ -18,6 +19,7 @@ from .message_tests import MessageTests
 from .msg_base_tests import MSGBaseTests
 from .ole_writer_tests import OleWriterEditingTests, OleWriterExportTests
 from .prop_tests import PropTests
+from .recipient_index_tests import RecipientIndexTests
 from .signed_tests import SignedTests
 from .util_tests import UtilTests
 from .validation_tests import ValidationTests
