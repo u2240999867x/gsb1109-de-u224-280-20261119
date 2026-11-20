@@ -109,7 +109,7 @@ e.g. :func:`load() <etlhelper.load>`, :func:`copy_rows() <etlhelper.copy_rows>`
 
 -  If :func:`commit_chunks() <etlhelper.commit_chunks>` is ``True`` (default), all chunks up to the one
    where the error occured are committed.
--  If :func:`commit_chunks() <etlhelper.commit_chunks>` is ``False``, everything is rolled back and the
-   database is unchanged.
+-  If :func:`commit_chunks() <etlhelper.commit_chunks>` is ``False``, the transaction is left open for
+   the caller to commit or roll back.
 -  If an :func:`on_error() <etlhelper.on_error>` function is defined, all rows without errors are
-   committed.
+   added to the transaction; they are committed according to ``commit_chunks``.

@@ -78,6 +78,20 @@ The IDs of failed rows can be written to a file.
 take an ``on_error`` parameter. They each return a tuple containing the
 number of rows processed and the number of rows that failed.
 
+A savepoint is created before each batch write. If the batch fails, the
+transaction is rolled back to that savepoint and the whole chunk is retried
+row-by-row. This ensures that any rows already applied by the failed batch
+(including by a driver's fast batch implementation) are not applied twice,
+and any other changes already in the connection's transaction are preserved.
+Successful rows are left in the transaction; whether they are committed is
+controlled by ``commit_chunks`` (see :doc:`load`).
+
+If the driver or server cannot restore the savepoint (for example because it
+has marked the whole transaction as failed), no row-by-row retry is attempted.
+ETL Helper raises ``ETLHelperInsertError``, keeps the original database error
+as its cause and tells the caller that the transaction must be rolled back.
+No successful rows are reported in that case.
+
 
 Error handling via SQL
 ----------------------

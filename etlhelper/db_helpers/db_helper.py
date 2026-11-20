@@ -110,6 +110,78 @@ class DbHelper(metaclass=ABCMeta):
         """
         cursor.executemany(query, chunk)
 
+    def executemany_batch(self, cursor: Cursor, query: str, chunk: Chunk):
+        """
+        Run a batch write.
+
+        This is separated from :meth:`executemany` so that databases with a
+        fast batch implementation can let ``MemoryError`` propagate.  The
+        caller can then restore its savepoint before calling
+        :meth:`executemany_slow`, rather than retrying a partially applied
+        fast batch.
+
+        :param cursor: Open database cursor.
+        :param query: str, SQL query
+        :param chunk: list, Rows of parameters.
+        """
+        self.executemany(cursor, query, chunk)
+
+    def executemany_slow(self, cursor: Cursor, query: str, chunk: Chunk):
+        """
+        Run a batch write without any driver-specific fast path.
+
+        This is used after a ``MemoryError`` from :meth:`executemany_batch`.
+        It calls the cursor's plain DB-API ``executemany`` so that the failed
+        fast batch implementation is not invoked again.
+
+        :param cursor: Open database cursor.
+        :param query: str, SQL query
+        :param chunk: list, Rows of parameters.
+        """
+        # Some drivers expose this as a writable cursor attribute.
+        if hasattr(cursor, "fast_executemany"):
+            cursor.fast_executemany = False
+        cursor.executemany(query, chunk)
+
+    @staticmethod
+    def create_savepoint(cursor: Cursor, name: str) -> None:
+        """
+        Create a savepoint within the current transaction.
+
+        The default SQL syntax is used by PostgreSQL and SQLite.  Databases
+        with different syntax override this method.
+
+        :param cursor: Open database cursor.
+        :param name: savepoint name
+        """
+        cursor.execute(f"SAVEPOINT {name}")
+
+    @staticmethod
+    def rollback_to_savepoint(cursor: Cursor, name: str) -> None:
+        """
+        Roll back the transaction to a savepoint.
+
+        This is used to restore the state before a batch write so that its
+        rows can be retried without applying any of them twice.
+
+        :param cursor: Open database cursor.
+        :param name: savepoint name
+        """
+        cursor.execute(f"ROLLBACK TO SAVEPOINT {name}")
+
+    @staticmethod
+    def release_savepoint(cursor: Cursor, name: str) -> None:
+        """
+        Release a savepoint.
+
+        Databases that don't support releasing a savepoint override this
+        method with a no-op.
+
+        :param cursor: Open database cursor.
+        :param name: savepoint name
+        """
+        cursor.execute(f"RELEASE SAVEPOINT {name}")
+
     @staticmethod
     def cursor(conn: Connection) -> Cursor:
         """

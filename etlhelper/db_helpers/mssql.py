@@ -80,6 +80,30 @@ class MSSQLDbHelper(DbHelper):
         """
         Try to use fast_executemany for SQL Server if flag in DbParams is set.
 
+        Kept for callers that use this method directly.  ``etlhelper`` uses
+        :meth:`executemany_batch` and :meth:`executemany_slow` so that it can
+        restore a savepoint between the fast and slow attempts.
+
+        :param cursor: Open database cursor.
+        :param query: str, SQL query
+        :param chunk: list, Rows of parameters.
+        """
+        try:
+            self.executemany_batch(cursor, query, chunk)
+        except MemoryError:
+            warnings.warn(
+                "fast_executemany execution failed.  Retrying with default executemany.  "
+                "See https://github.com/BritishGeologicalSurvey/etlhelper/issues/86 for more information"
+            )
+            self.executemany_slow(cursor, query, chunk)
+
+    def executemany_batch(self, cursor, query, chunk):
+        """
+        Run the fast batch path, letting ``MemoryError`` propagate.
+
+        If the fast batch has applied some rows before raising, the caller
+        must restore its savepoint before using :meth:`executemany_slow`.
+
         :param cursor: Open database cursor.
         :param query: str, SQL query
         :param chunk: list, Rows of parameters.
@@ -87,14 +111,43 @@ class MSSQLDbHelper(DbHelper):
         try:
             cursor.fast_executemany = self.use_fast_executemany
             cursor.executemany(query, chunk)
-        except MemoryError:
-            warnings.warn(
-                "fast_executemany execution failed.  Retrying with default executemany.  "
-                "See https://github.com/BritishGeologicalSurvey/etlhelper/issues/86 for more information"
-            )
+        except TypeError:
+            msg = ("pyodbc driver for MS SQL only supports positional placeholders.  "
+                   "Use namedtuple, tuple or list (via row_factory setting for copy_rows).")
+            raise ETLHelperInsertError(msg)
+
+    def executemany_slow(self, cursor, query, chunk):
+        """
+        Run a standard (non-fast) batch write.
+
+        :param cursor: Open database cursor.
+        :param query: str, SQL query
+        :param chunk: list, Rows of parameters.
+        """
+        try:
             cursor.fast_executemany = False
             cursor.executemany(query, chunk)
         except TypeError:
             msg = ("pyodbc driver for MS SQL only supports positional placeholders.  "
                    "Use namedtuple, tuple or list (via row_factory setting for copy_rows).")
             raise ETLHelperInsertError(msg)
+
+    @staticmethod
+    def create_savepoint(cursor, name):
+        """
+        Create a savepoint using SQL Server syntax.
+        """
+        cursor.execute(f"SAVE TRANSACTION {name}")
+
+    @staticmethod
+    def rollback_to_savepoint(cursor, name):
+        """
+        Roll back to a savepoint using SQL Server syntax.
+        """
+        cursor.execute(f"ROLLBACK TRANSACTION {name}")
+
+    @staticmethod
+    def release_savepoint(cursor, name):
+        """
+        SQL Server has no RELEASE SAVEPOINT statement, so this is a no-op.
+        """

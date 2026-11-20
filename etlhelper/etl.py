@@ -3,8 +3,10 @@ Functions for transferring data in and out of databases.
 """
 import logging
 import re
+import warnings
 from copy import deepcopy
 from itertools import (
+    count,
     zip_longest,
     chain,
 )
@@ -25,6 +27,7 @@ from etlhelper.abort import (
     clear_abort_event,
 )
 from etlhelper.db_helper_factory import DB_HELPER_FACTORY
+from etlhelper.db_helpers import DbHelper
 from etlhelper.exceptions import (
     ETLHelperBadIdentifierError,
     ETLHelperExtractError,
@@ -34,6 +37,7 @@ from etlhelper.exceptions import (
 from etlhelper.row_factories import dict_row_factory
 from etlhelper.types import (
     Connection,
+    Cursor,
     InputRow,
     Row,
     Chunk,
@@ -43,6 +47,8 @@ from etlhelper.types import (
 
 logger = logging.getLogger('etlhelper')
 CHUNKSIZE = 5000
+# Source of unique savepoint identifiers for nested/threaded executemany calls.
+_SAVEPOINT_IDS = count(1)
 
 
 class FailedRow(NamedTuple):
@@ -252,11 +258,22 @@ def executemany(
     tuples.  on_error is a function that is called at the end of each chunk,
     with the list as the only argument.
 
+    The chunk retry is protected by a savepoint created immediately before
+    the batch write when ``on_error`` is provided.  If the batch write fails,
+    the savepoint is rolled back first, so that any rows already applied by the
+    batch (including by a driver's fast batch implementation) are removed
+    before the chunk is retried row-by-row.  This means successful rows are
+    applied exactly once and any work the caller had already done in the
+    transaction is preserved.  If the driver cannot restore the savepoint, the
+    transaction is unusable: no row-by-row retries are attempted and
+    ETLHelperInsertError is raised, with the original driver error as its
+    cause, instructing the caller to roll back.
+
     commit_chunks controls if chunks the transaction should be committed after
-    each chunk has been inserted.  Committing chunks means that errors during
-    a long-running insert do not require all data to be loaded again.  The
-    disadvantage is that investigation may be required to determine exactly
-    which records have been successfully transferred.
+    each chunk has been inserted.  When ``commit_chunks`` is False, ETL Helper
+    never commits: the caller is responsible for committing or rolling back
+    the transaction.  This allows ETL Helper to be used within a larger
+    transaction that the caller controls.
 
     :param query: SQL insert command with placeholders for data
     :param conn: dbapi connection
@@ -267,7 +284,8 @@ def executemany(
     :param commit_chunks: commit after each chunk has been inserted/updated
     :param chunk_size: size of chunks to group data by
     :return: the number of rows processed and the number of rows failed
-    :raises ETLHelperInsertError: if SQL raises an error
+    :raises ETLHelperInsertError: if SQL raises an error and it cannot be
+                                  recovered, or if on_error isn't provided
     """
     logger.info("Executing many (chunk_size=%s)", chunk_size)
     logger.debug("Executing:\n\n%s\n\nagainst:\n\n%s", query, conn)
@@ -293,35 +311,94 @@ def executemany(
             if processed == 0:
                 logger.debug(f"First row: {chunk[0]}")
 
+            # Put a savepoint in place before the batch write so that a failed
+            # batch (or a fast batch that runs out of memory part way through)
+            # can be restored to exactly the state before this chunk.  This is
+            # only needed when failed rows will be retried; without on_error
+            # the existing rollback-and-raise behaviour is kept.
+            can_restore = False
+            savepoint = None
+            if on_error:
+                savepoint_id = next(_SAVEPOINT_IDS)
+                savepoint = f"etlh_sp_{savepoint_id}"
+                can_restore = _create_savepoint(cursor, helper, savepoint)
+
             # Run query
             try:
-                helper.executemany(cursor, query, chunk)
+                try:
+                    _executemany_batch(helper, cursor, query, chunk)
+                except MemoryError as exc:
+                    # A fast batch may have applied some rows before failing.
+                    # With on_error set, restore the pre-batch state before the
+                    # slow retry so that those rows are not applied twice.  A
+                    # fresh savepoint is created because not every driver keeps
+                    # the old one.
+                    warnings.warn(
+                        "fast_executemany execution failed.  Retrying with "
+                        "default executemany.  See "
+                        "https://github.com/BritishGeologicalSurvey/etlhelper/"
+                        "issues/86 for more information"
+                    )
+
+                    if on_error:
+                        if not can_restore or not _rollback_to_savepoint(
+                                cursor, helper, savepoint):
+                            raise _unrecoverable_transaction_error(
+                                query, helper, exc)
+
+                        _release_savepoint(cursor, helper, savepoint)
+                        savepoint = f"etlh_sp_{savepoint_id}_slow"
+                        can_restore = _create_savepoint(
+                            cursor, helper, savepoint)
+                        if not can_restore:
+                            raise _unrecoverable_transaction_error(
+                                query, helper, exc)
+
+                    _executemany_slow(helper, cursor, query, chunk)
 
             except helper.sql_exceptions as exc:
-                # Rollback to clear the failed transaction before any others can
-                # be started.
-                conn.rollback()
-
-                # Collect and process failed rows if on_error function provided
-                if on_error:
-                    # Temporarily disable logging
-                    old_level = logger.level
-                    logger.setLevel(logging.ERROR)
-
-                    try:
-                        failed_rows = _execute_by_row(query, conn, chunk)
-                    finally:
-                        # Restore logging
-                        logger.setLevel(old_level)
-
-                    failed += len(failed_rows)
-                    logger.debug("Calling on_error function on %s failed rows",
-                                 failed)
-                    on_error(failed_rows)
-                else:
+                if not on_error:
+                    # Preserve the existing default behaviour: roll back the
+                    # transaction to clear the failed state, then raise.
+                    conn.rollback()
                     msg = (f"SQL query raised an error.\n\n{query}\n\n"
                            f"Required paramstyle: {helper.paramstyle}\n\n{exc}\n")
-                    raise ETLHelperInsertError(msg)
+                    raise ETLHelperInsertError(msg) from exc
+
+                # We cannot retry from the same pre-batch state unless the
+                # savepoint can be restored.  Do not fall back to row-by-row
+                # execution in that case: the caller must roll back.
+                if not can_restore:
+                    raise _unrecoverable_transaction_error(query, helper, exc)
+
+                if not _rollback_to_savepoint(cursor, helper, savepoint):
+                    raise _unrecoverable_transaction_error(query, helper, exc)
+
+                # Restore complete; the savepoint is no longer needed.
+                _release_savepoint(cursor, helper, savepoint)
+
+                # The transaction is back at its pre-chunk state, so all rows
+                # in the chunk (including any partially applied by the failed
+                # batch) are retried from scratch.  Successful rows remain in
+                # the caller's transaction.
+                old_level = logger.level
+                logger.setLevel(logging.ERROR)
+
+                try:
+                    failed_rows = _execute_by_row(
+                        query, cursor, helper, chunk, savepoint)
+                finally:
+                    logger.setLevel(old_level)
+
+                failed += len(failed_rows)
+                logger.debug("Calling on_error function on %s failed rows",
+                             failed)
+                on_error(failed_rows)
+
+            else:
+                if can_restore:
+                    # Batch succeeded; release the savepoint used for recovery.
+                    _release_savepoint(cursor, helper, savepoint)
 
             processed += len(chunk)
             logger.info(
@@ -331,36 +408,202 @@ def executemany(
             if commit_chunks:
                 conn.commit()
 
-    # Commit changes where not already committed
-    if not commit_chunks:
-        conn.commit()
-
     logger.info(f'{processed} rows processed in total')
     return processed, failed
 
 
+def _get_hook(helper: DbHelper, name: str) -> Optional[Callable]:
+    """Return an optional, callable helper hook."""
+    hook = getattr(helper, name, None)
+    return hook if callable(hook) else None
+
+
+def _create_savepoint(
+        cursor: Cursor,
+        helper: DbHelper,
+        name: str,
+        ) -> bool:
+    """
+    Create a savepoint, returning False if the driver doesn't support it.
+
+    :param cursor: open database cursor
+    :param helper: database helper for the connection
+    :param name: savepoint name
+    :return: True if the savepoint was created
+    """
+    create = _get_hook(helper, "create_savepoint")
+    try:
+        if create is None:
+            cursor.execute(f"SAVEPOINT {name}")
+        else:
+            create(cursor, name)
+        return True
+    except Exception as exc:  # noqa: BLE001 - driver support varies
+        logger.debug("Could not create savepoint %s: %s", name, exc)
+        return False
+
+
+def _rollback_to_savepoint(
+        cursor: Cursor,
+        helper: DbHelper,
+        name: str,
+        ) -> bool:
+    """
+    Roll back to a savepoint, returning False if the transaction cannot be
+    restored (e.g. the driver/server has marked the whole transaction failed).
+
+    :param cursor: open database cursor
+    :param helper: database helper for the connection
+    :param name: savepoint name
+    :return: True if the transaction was restored
+    """
+    rollback = _get_hook(helper, "rollback_to_savepoint")
+    try:
+        if rollback is None:
+            cursor.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        else:
+            rollback(cursor, name)
+        return True
+    except Exception as exc:  # noqa: BLE001 - driver support varies
+        logger.debug("Could not roll back to savepoint %s: %s", name, exc)
+        return False
+
+
+def _release_savepoint(
+        cursor: Cursor,
+        helper: DbHelper,
+        name: str,
+        ) -> None:
+    """
+    Release a savepoint, ignoring drivers that don't support release.
+
+    :param cursor: open database cursor
+    :param helper: database helper for the connection
+    :param name: savepoint name
+    """
+    release = _get_hook(helper, "release_savepoint")
+    try:
+        if release is None:
+            cursor.execute(f"RELEASE SAVEPOINT {name}")
+        else:
+            release(cursor, name)
+    except Exception as exc:  # noqa: BLE001 - driver support varies
+        logger.debug("Could not release savepoint %s: %s", name, exc)
+
+
+def _executemany_batch(
+        helper: DbHelper,
+        cursor: Cursor,
+        query: str,
+        chunk: Chunk,
+        ) -> None:
+    """
+    Run a batch write, using the helper's fast path if it provides one.
+
+    :param helper: database helper for the connection
+    :param cursor: open database cursor
+    :param query: SQL query
+    :param chunk: list of rows
+    """
+    batch = _get_hook(helper, "executemany_batch")
+    if batch is None:
+        helper.executemany(cursor, query, chunk)
+    else:
+        batch(cursor, query, chunk)
+
+
+def _executemany_slow(
+        helper: DbHelper,
+        cursor: Cursor,
+        query: str,
+        chunk: Chunk,
+        ) -> None:
+    """
+    Run a batch write without a driver's fast path.
+
+    :param helper: database helper for the connection
+    :param cursor: open database cursor
+    :param query: SQL query
+    :param chunk: list of rows
+    """
+    slow = _get_hook(helper, "executemany_slow")
+    if slow is None:
+        helper.executemany(cursor, query, chunk)
+    else:
+        slow(cursor, query, chunk)
+
+
+def _unrecoverable_transaction_error(
+        query: str,
+        helper: DbHelper,
+        exc: Exception,
+        ) -> ETLHelperInsertError:
+    """
+    Return an error explaining that the transaction must be rolled back.
+
+    The original driver exception is attached as the cause.
+
+    :param query: SQL query that failed
+    :param helper: database helper for the connection
+    :param exc: original database exception
+    :return: ETLHelperInsertError
+    """
+    msg = (f"SQL query raised an error and the transaction could not be "
+           f"restored to its state before the current chunk.\n\n{query}\n\n"
+           f"Required paramstyle: {helper.paramstyle}\n\n{exc}\n\n"
+           f"The transaction must be rolled back before it can be used again. "
+           f"The chunk was not retried row-by-row.")
+    error = ETLHelperInsertError(msg)
+    error.__cause__ = exc
+    return error
+
+
 def _execute_by_row(
         query: str,
-        conn: Connection,
-        chunk: Chunk
+        cursor: Cursor,
+        helper: DbHelper,
+        chunk: Chunk,
+        savepoint_prefix: str,
         ) -> list[FailedRow]:
     """
     Retry execution of rows individually and return failed rows along with
-    their errors. Successful inserts are committed.
+    their errors. Successful inserts are left in the current transaction and
+    are not committed.
+
+    Each row is executed within its own savepoint.  If a row fails, the
+    savepoint is rolled back so that the transaction remains usable and any
+    partial changes made by that row (e.g. audit records) are removed.
 
     :param query: SQL query with placeholders for data
-    :param conn: dbapi connection
+    :param cursor: open database cursor
+    :param helper: database helper for the connection
     :param chunk: list of rows
+    :param savepoint_prefix: prefix used to name per-row savepoints
     :return: a list failed rows
+    :raises ETLHelperInsertError: if the transaction cannot be restored
     """
     failed_rows: list[FailedRow] = []
 
-    for row in chunk:
+    for i, row in enumerate(chunk):
+        savepoint = f"{savepoint_prefix}_row_{i}"
+        can_restore = _create_savepoint(cursor, helper, savepoint)
+
         try:
-            # Use etlhelper execute to isolate transactions
-            execute(query, conn, parameters=row)
-        except ETLHelperQueryError as exc:
-            failed_rows.append(FailedRow(row, exc))
+            cursor.execute(query, row)
+        except helper.sql_exceptions as exc:
+            if not can_restore or not _rollback_to_savepoint(
+                    cursor, helper, savepoint):
+                raise _unrecoverable_transaction_error(query, helper, exc)
+
+            _release_savepoint(cursor, helper, savepoint)
+            msg = (f"SQL query raised an error.\n\n{query}\n\n"
+                   f"Required paramstyle: {helper.paramstyle}\n\n{exc}\n")
+            row_error = ETLHelperQueryError(msg)
+            row_error.__cause__ = exc
+            failed_rows.append(FailedRow(row, row_error))
+        else:
+            if can_restore:
+                _release_savepoint(cursor, helper, savepoint)
 
     return failed_rows
 

@@ -68,3 +68,9 @@ class OracleDbHelper(DbHelper):
         password = self.get_password(password_variable)
         return (f'oracle+oracledb://{db_params.user}:{password}@'
                 f'{db_params.host}:{db_params.port}/{db_params.dbname}')
+
+    @staticmethod
+    def release_savepoint(cursor, name):
+        """
+        Oracle has no RELEASE SAVEPOINT statement, so this is a no-op.
+        """

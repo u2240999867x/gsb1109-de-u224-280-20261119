@@ -1,7 +1,6 @@
 
 Load
 ^^^^
-
 Functions
 ---------
 
@@ -56,7 +55,13 @@ The ``commit_chunks`` flag defaults to ``True``. This ensures
 that an error during a large data transfer doesn’t require all the
 records to be sent again. Some work may be required to determine which
 records remain to be sent. Setting ``commit_chunks`` to ``False`` will
-roll back the entire transfer in case of an error.
+leave the transaction open so that the caller can commit or roll back.
+
+When ``commit_chunks`` is ``False``, ETL Helper never commits. This allows
+``executemany``, ``load``, ``copy_rows`` and ``copy_table_rows`` to be used
+within a larger transaction that the caller controls, e.g. one that already
+contains other pending changes. The caller decides whether all of the work is
+committed together or rolled back.
 
 transform
 """""""""
