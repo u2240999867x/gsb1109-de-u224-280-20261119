@@ -1,5 +1,9 @@
 ## 1.51.0 [unreleased]
 
+### Features
+
+1. Add opt-in order-preserving batching via `WriteOptions(ordered=True)`. Batches are serialized per `(bucket, organization, precision)` so a correction queued after an old reading is sent only after the previous batch is acknowledged. Ambiguous outcomes block the target with `unconfirmed`/`unsent` batches that must be resolved explicitly through `continue_ordered_target`/`abandon_ordered_target`; the default batching path is unchanged.
+
 ### Documentation
 
 1. [#721](https://github.com/influxdata/influxdb-client-python/pull/721): Add examples for configure TLS/mTLS for the Influxdb client.

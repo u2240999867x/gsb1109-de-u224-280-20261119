@@ -465,6 +465,48 @@ with InfluxDBClient(url="http://localhost:8086", token="my-token", org="my-org")
                             data_frame_tag_columns=['location'])
 ```
 
+#### Ordered batching
+
+By default batches are written independently. If a later batch corrects a value that an earlier
+batch wrote to the same timestamp, the requests must reach InfluxDB in enqueue order. Enable
+`WriteOptions(ordered=True)` to serialize batches per `(bucket, organization, precision)` target:
+
+``` python
+from influxdb_client import InfluxDBClient, WriteOptions
+
+with InfluxDBClient(url="http://localhost:8086", token="my-token", org="my-org") as client:
+    write_options = WriteOptions(batch_size=500, flush_interval=1_000, ordered=True)
+    with client.write_api(write_options=write_options) as write_api:
+        write_api.write("my-bucket", "my-org", "h2o,location=coyote_creek level=1.0 100")
+        write_api.flush()  # window with old readings -> request A
+        write_api.write("my-bucket", "my-org", "h2o,location=coyote_creek level=1.4 100")
+        write_api.flush()  # window with the correction -> request B, queued after A
+```
+
+Guarantees:
+
+- A target sends one batch at a time and releases the next batch only after the previous one
+  receives a definitive success or failure. Different targets still work in parallel.
+- If an attempt has no definitive answer (for example a connection is reset after the request was
+  sent), the target is **blocked**: the attempted batch is `unconfirmed` and every following batch
+  stays `unsent`. The writer never re-orders or silently re-sends queued batches.
+- Use `write_api.ordered_batches()` to inspect the current state and
+  `write_api.blocked_ordered_targets()` to see which targets need a decision. Batch states are
+  `pending`, `in_flight`, `unsent`, `unconfirmed`, `sent`, `failed` and `abandoned`.
+- Resolve a blocked target explicitly with
+  `write_api.continue_ordered_target(bucket, org, precision)` (the unconfirmed batch is not re-sent,
+  the queued batches are sent in order) or
+  `write_api.abandon_ordered_target(bucket, org, precision)` (queued batches are reported as
+  `BatchNotSentError` and never sent).
+- `close()` stops the writer. Batches that were in flight are reported as `unconfirmed` and batches
+  that never left the queue as `unsent` through the `error_callback`; a stopped batch is never
+  reported as successfully written. The state remains inspectable via `ordered_batches()`.
+
+Ordered mode supports `success_callback`, `error_callback` and `retry_callback` with the same
+signatures as regular batching. `error_callback` receives `WriteResultUnknownError` for
+`unconfirmed` batches and `BatchNotSentError` for `unsent`/`abandoned` batches. When
+`ordered=False` (the default), the existing batching pipeline is used unchanged.
+
 #### Default Tags
 
 Sometimes is useful to store same information in every measurement e.g. `hostname`, `location`, `customer`. The client is able to use static value or env property as a tag value.

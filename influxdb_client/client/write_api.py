@@ -20,6 +20,7 @@ from influxdb_client import WritePrecision
 from influxdb_client.client._base import _BaseWriteApi, _HAS_DATACLASS
 from influxdb_client.client.util.helpers import get_org_query_param
 from influxdb_client.client.write.dataframe_serializer import DataframeSerializer
+from influxdb_client.client.write.ordered import OrderedBatchWriter
 from influxdb_client.client.write.point import Point, DEFAULT_WRITE_PRECISION
 from influxdb_client.client.write.retry import WritesRetry
 from influxdb_client.rest import _UTF_8_encoding
@@ -52,6 +53,7 @@ class WriteOptions(object):
                  max_retry_time=180_000,
                  exponential_base=2,
                  max_close_wait=300_000,
+                 ordered=False,
                  write_scheduler=ThreadPoolScheduler(max_workers=1)) -> None:
         """
         Create write api configuration.
@@ -68,6 +70,9 @@ class WriteOptions(object):
         :param max_retry_time: total timeout for all retry attempts in milliseconds, if 0 retry is disabled
         :param exponential_base: base for the exponential retry delay
         :parama max_close_wait: the maximum time to wait for writes to be flushed if close() is called
+        :param ordered: preserve enqueue order per ``(bucket, organization, precision)`` target;
+                        see :meth:`WriteApi.continue_ordered_target` and
+                        :meth:`WriteApi.ordered_batches`
         :param write_scheduler:
         """
         self.write_type = write_type
@@ -81,6 +86,7 @@ class WriteOptions(object):
         self.exponential_base = exponential_base
         self.write_scheduler = write_scheduler
         self.max_close_wait = max_close_wait
+        self.ordered = ordered
 
     def to_retry_strategy(self, **kwargs):
         """
@@ -251,41 +257,49 @@ class WriteApi(_BaseWriteApi):
         self._error_callback = kwargs.get('error_callback', None)
         self._retry_callback = kwargs.get('retry_callback', None)
         self._window_scheduler = None
+        self._ordered_writer = None
 
         if self._write_options.write_type is WriteType.batching:
-            # Define Subject that listen incoming data and produces writes into InfluxDB
-            self._subject = Subject()
-            # Flush subject forces the current batch window to close (mirrors Java/C# clients)
-            self._flush_subject = Subject()
+            if getattr(self._write_options, 'ordered', False):
+                # Opt-in ordered batches: one FIFO worker per target.
+                self._subject = None
+                self._flush_subject = None
+                self._disposable = None
+                self._ordered_writer = OrderedBatchWriter(self, self._write_options)
+            else:
+                # Define Subject that listen incoming data and produces writes into InfluxDB
+                self._subject = Subject()
+                # Flush subject forces the current batch window to close (mirrors Java/C# clients)
+                self._flush_subject = Subject()
 
-            self._window_scheduler = ThreadPoolScheduler(1)
-            self._disposable = self._subject.pipe(
-                # Split incoming data to windows by batch_size, flush_interval, or explicit flush().
-                # Window boundaries are the merge of time/count windows and the flush subject —
-                # same approach as the C# WriteApi batch writer.
-                ops.publish(lambda connected: connected.pipe(
-                    ops.window(
-                        rx.merge(
-                            connected.pipe(
-                                ops.window_with_time_or_count(
-                                    count=write_options.batch_size,
-                                    timespan=timedelta(milliseconds=write_options.flush_interval),
-                                    scheduler=self._window_scheduler)),
-                            self._flush_subject)))),
-                # Map  window into groups defined by 'organization', 'bucket' and 'precision'
-                ops.flat_map(lambda window: window.pipe(
-                    # Group window by 'organization', 'bucket' and 'precision'
-                    ops.group_by(lambda batch_item: batch_item.key),
-                    # Create batch (concatenation line protocols by \n)
-                    ops.map(lambda group: group.pipe(
-                        ops.to_iterable(),
-                        ops.map(lambda xs: _BatchItem(key=group.key, data=_body_reduce(xs), size=len(xs))))),
-                    ops.merge_all())),
-                # Write data into InfluxDB (possibility to retry if its fail)
-                ops.filter(lambda batch: batch.size > 0),
-                ops.map(mapper=lambda batch: self._to_response(data=batch, delay=self._jitter_delay())),
-                ops.merge_all()) \
-                .subscribe(self._on_next, self._on_error, self._on_complete)
+                self._window_scheduler = ThreadPoolScheduler(1)
+                self._disposable = self._subject.pipe(
+                    # Split incoming data to windows by batch_size, flush_interval, or explicit flush().
+                    # Window boundaries are the merge of time/count windows and the flush subject —
+                    # same approach as the C# WriteApi batch writer.
+                    ops.publish(lambda connected: connected.pipe(
+                        ops.window(
+                            rx.merge(
+                                connected.pipe(
+                                    ops.window_with_time_or_count(
+                                        count=write_options.batch_size,
+                                        timespan=timedelta(milliseconds=write_options.flush_interval),
+                                        scheduler=self._window_scheduler)),
+                                self._flush_subject)))),
+                    # Map  window into groups defined by 'organization', 'bucket' and 'precision'
+                    ops.flat_map(lambda window: window.pipe(
+                        # Group window by 'organization', 'bucket' and 'precision'
+                        ops.group_by(lambda batch_item: batch_item.key),
+                        # Create batch (concatenation line protocols by \n)
+                        ops.map(lambda group: group.pipe(
+                            ops.to_iterable(),
+                            ops.map(lambda xs: _BatchItem(key=group.key, data=_body_reduce(xs), size=len(xs))))),
+                        ops.merge_all())),
+                    # Write data into InfluxDB (possibility to retry if its fail)
+                    ops.filter(lambda batch: batch.size > 0),
+                    ops.map(mapper=lambda batch: self._to_response(data=batch, delay=self._jitter_delay())),
+                    ops.merge_all()) \
+                    .subscribe(self._on_next, self._on_error, self._on_complete)
 
         else:
             self._subject = None
@@ -406,8 +420,62 @@ You can use native asynchronous version of the client:
 
         Has no effect when batching is not enabled (synchronous / asynchronous write type).
         """
-        if self._flush_subject is not None and not self._flush_subject.is_disposed:
+        if self._ordered_writer is not None:
+            self._ordered_writer.flush()
+        elif self._flush_subject is not None and not self._flush_subject.is_disposed:
             self._flush_subject.on_next(None)
+
+    def _ordered_key(self, bucket, org, precision):
+        org = get_org_query_param(org=org, client=self._influxdb_client)
+        return _BatchItemKey(bucket, org, precision)
+
+    def continue_ordered_target(self, bucket: str, org: str = None,
+                                precision: WritePrecision = DEFAULT_WRITE_PRECISION) -> bool:
+        """
+        Explicitly allow a blocked ordered target to send its queued batches.
+
+        The batch whose outcome was unknown remains ``unconfirmed`` and is not
+        re-sent. Only batches that were never attempted become eligible again.
+
+        :return: ``True`` if the target was blocked and has been released.
+        """
+        writer = self._require_ordered_writer()
+        return writer.continue_target(self._ordered_key(bucket, org, precision))
+
+    def abandon_ordered_target(self, bucket: str, org: str = None,
+                               precision: WritePrecision = DEFAULT_WRITE_PRECISION) -> bool:
+        """
+        Drop queued batches of a blocked ordered target without sending them.
+
+        The queued batches are reported to ``error_callback`` with a
+        :class:`BatchNotSentError`. The unconfirmed batch is left untouched.
+
+        :return: ``True`` if the target was blocked.
+        """
+        writer = self._require_ordered_writer()
+        return writer.abandon_target(self._ordered_key(bucket, org, precision))
+
+    def ordered_batches(self, include_completed: bool = False):
+        """
+        Return a snapshot of ordered batches in enqueue order.
+
+        Blocked targets expose their last attempted batch as ``unconfirmed``
+        and all following batches as ``unsent``. With ``include_completed`` the
+        snapshot also contains finished batches.
+        """
+        writer = self._require_ordered_writer()
+        return writer.snapshot(include_completed=include_completed)
+
+    def blocked_ordered_targets(self):
+        """Return ``(bucket, org, precision)`` keys waiting for a caller decision."""
+        writer = self._require_ordered_writer()
+        return [key for key in writer.blocked_targets()]
+
+    def _require_ordered_writer(self):
+        if self._ordered_writer is None:
+            raise ValueError("Ordered batching is not enabled. "
+                             "Set WriteOptions(ordered=True) to enable it.")
+        return self._ordered_writer
 
     def close(self):
         """Flush data and dispose a batching buffer."""
@@ -430,6 +498,11 @@ You can use native asynchronous version of the client:
 
     def __del__(self):
         """Close WriteApi."""
+        if self._ordered_writer is not None:
+            # Keep the writer for post-close inspection (ordered_batches());
+            # close() is idempotent and only publishes state once.
+            self._ordered_writer.close(self._write_options.max_close_wait)
+
         if self._subject:
             self._subject.on_completed()
             self._subject.dispose()
@@ -477,6 +550,10 @@ You can use native asynchronous version of the client:
     def _write_batching(self, bucket, org, data,
                         precision=DEFAULT_WRITE_PRECISION,
                         **kwargs):
+        if self._ordered_writer is not None:
+            self._write_batching_ordered(bucket, org, data, precision, **kwargs)
+            return None
+
         if isinstance(data, bytes):
             _key = _BatchItemKey(bucket, org, precision)
             self._subject.on_next(_BatchItem(key=_key, data=data))
@@ -515,6 +592,77 @@ You can use native asynchronous version of the client:
             pass
 
         return None
+
+    def _write_batching_ordered(self, bucket, org, data,
+                                precision=DEFAULT_WRITE_PRECISION,
+                                **kwargs):
+        if isinstance(data, bytes):
+            _key = _BatchItemKey(bucket, org, precision)
+            self._ordered_writer.add(_BatchItem(key=_key, data=data))
+
+        elif isinstance(data, str):
+            self._write_batching_ordered(bucket, org, data.encode(_UTF_8_encoding),
+                                         precision, **kwargs)
+
+        elif isinstance(data, Point):
+            self._write_batching_ordered(bucket, org, data.to_line_protocol(), data.write_precision, **kwargs)
+
+        elif isinstance(data, dict):
+            self._write_batching_ordered(bucket, org, Point.from_dict(data, write_precision=precision, **kwargs),
+                                         precision, **kwargs)
+
+        elif 'DataFrame' in type(data).__name__:
+            serializer = DataframeSerializer(data, self._point_settings, precision, self._write_options.batch_size,
+                                             **kwargs)
+            for chunk_idx in range(serializer.number_of_chunks):
+                self._write_batching_ordered(bucket, org,
+                                             serializer.serialize(chunk_idx),
+                                             precision, **kwargs)
+        elif hasattr(data, "_asdict"):
+            # noinspection PyProtectedMember
+            self._write_batching_ordered(bucket, org, data._asdict(), precision, **kwargs)
+
+        elif _HAS_DATACLASS and dataclasses.is_dataclass(data):
+            self._write_batching_ordered(bucket, org, dataclasses.asdict(data), precision, **kwargs)
+
+        elif isinstance(data, Iterable):
+            for item in data:
+                self._write_batching_ordered(bucket, org, item, precision, **kwargs)
+
+        elif isinstance(data, Observable):
+            data.subscribe(lambda it: self._write_batching_ordered(bucket, org, it, precision, **kwargs))
+            pass
+
+        return None
+
+    def _ordered_attempt(self, record):
+        """Perform one HTTP attempt for the ordered writer."""
+        logger.debug("Write time series data into InfluxDB (ordered): %s", record)
+        self._post_write(False, record.key.bucket, record.key.org, record.data, record.key.precision,
+                         urlopen_kw={'retries': False})
+        logger.debug("Write request finished (ordered) %s", record)
+
+    def _fire_success(self, key, data):
+        if self._success_callback:
+            try:
+                self._success_callback((key.bucket, key.org, key.precision), data)
+            except Exception as e:
+                logger.error("The configured success callback threw an exception: %s", e)
+
+    def _fire_error(self, key, data, exception):
+        logger.error("The batch item wasn't processed successfully because: %s", exception)
+        if self._error_callback:
+            try:
+                self._error_callback((key.bucket, key.org, key.precision), data, exception)
+            except Exception as e:
+                logger.error("The configured error callback threw an exception: %s", e)
+
+    def _fire_retry(self, key, data, exception):
+        if self._retry_callback:
+            try:
+                self._retry_callback((key.bucket, key.org, key.precision), data, exception)
+            except Exception as e:
+                logger.error("The configured retry callback threw an exception: %s", e)
 
     def _http(self, batch_item: _BatchItem):
 
@@ -597,6 +745,7 @@ You can use native asynchronous version of the client:
         del state['_flush_subject']
         del state['_disposable']
         del state['_window_scheduler']
+        del state['_ordered_writer']
         del state['_write_service']
         return state
 

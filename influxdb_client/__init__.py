@@ -387,6 +387,8 @@ from influxdb_client.client.query_api import QueryApi
 from influxdb_client.client.tasks_api import TasksApi
 from influxdb_client.client.users_api import UsersApi
 from influxdb_client.client.write_api import WriteApi, WriteOptions
+from influxdb_client.client.write.ordered import OrderedBatch, OrderedBatchStatus, OrderedWriteError, \
+    WriteResultUnknownError, BatchNotSentError
 from influxdb_client.client.influxdb_client import InfluxDBClient
 from influxdb_client.client.logging_handler import InfluxLoggingHandler
 from influxdb_client.client.write.point import Point
@@ -478,4 +480,6 @@ __all__ = ['AuthorizationsService', 'BackupService', 'BucketSchemasService', 'Bu
            'VariableProperties', 'Variables', 'View', 'ViewLinks', 'ViewProperties', 'Views', 'WritePrecision',
            'XYGeom', 'XYViewProperties', 'AuthorizationsApi', 'BucketsApi', 'DeleteApi', 'InvokableScriptsApi',
            'LabelsApi', 'OrganizationsApi', 'QueryApi', 'TasksApi', 'UsersApi', 'WriteApi', 'WriteOptions',
-           'InfluxDBClient', 'InfluxLoggingHandler', 'Point', 'VERSION']
+           'InfluxDBClient', 'InfluxLoggingHandler', 'Point', 'VERSION',
+           'OrderedBatch', 'OrderedBatchStatus', 'OrderedWriteError', 'WriteResultUnknownError',
+           'BatchNotSentError']
