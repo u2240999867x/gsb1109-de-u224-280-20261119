@@ -45,6 +45,8 @@ DLT_NAME_PREFIX = "_dlt"
 # default dlt columns
 C_DLT_ID = "_dlt_id"
 """unique id of current row"""
+C_DLT_LIST_PRESENCE_PREFIX = "_dlt_present_"
+"""prefix of a parent column that tells whether a nested list was submitted in the load"""
 C_DLT_LOAD_ID = "_dlt_load_id"
 """load id to identify records loaded in a single load package"""
 # NOTE C_DLT_LOAD_ID != C_DLT_LOADS_TABLE_LOAD_ID but they refer to the exact same entity / value.

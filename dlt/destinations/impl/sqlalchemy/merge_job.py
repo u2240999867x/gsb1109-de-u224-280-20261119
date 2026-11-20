@@ -99,11 +99,14 @@ class SqlalchemyMergeFollowupJob(SqlMergeFollowupJob):
             row_key_col = root_table_obj.c[
                 cls._row_key_col_name(table_chain, root_table, sql_client)
             ]
-            statements.append(
-                table_obj.delete().where(
-                    root_key_col.in_(sa.select(row_key_col).where(sa.text(destination_scope)))
-                )
+            delete_statement = table_obj.delete().where(
+                root_key_col.in_(sa.select(row_key_col).where(sa.text(destination_scope)))
             )
+            # a parent that did not submit the list keeps its nested rows
+            kept_cond = cls.gen_kept_nested_rows_cond(table_chain, table, sql_client)
+            if kept_cond is not None:
+                delete_statement = delete_statement.where(sa.not_(sa.text(kept_cond)))
+            statements.append(delete_statement)
         statements.append(root_table_obj.delete().where(sa.text(destination_scope)))
         return statements
 
@@ -154,7 +157,12 @@ class SqlalchemyMergeFollowupJob(SqlMergeFollowupJob):
         for table in table_chain[1:]:
             table_obj = sql_client.get_existing_table(table["name"])
             root_key_col = table_obj.c[cls._root_key_col_name(table_chain, table, sql_client)]
-            statements.append(table_obj.delete().where(root_key_col.in_(deleted_row_keys)))
+            delete_statement = table_obj.delete().where(root_key_col.in_(deleted_row_keys))
+            # a parent that did not submit the list keeps its nested rows
+            kept_cond = cls.gen_kept_nested_rows_cond(table_chain, table, sql_client)
+            if kept_cond is not None:
+                delete_statement = delete_statement.where(sa.not_(sa.text(kept_cond)))
+            statements.append(delete_statement)
         statements.append(root_table_obj.delete().where(row_key_col.in_(deleted_row_keys)))
         return statements
 

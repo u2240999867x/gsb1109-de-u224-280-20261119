@@ -28,6 +28,26 @@ The default `delete-insert` strategy is used in two scenarios:
 
 The `delete-insert` strategy loads data to a `staging` dataset, deduplicates the staging data if a `primary_key` is provided, deletes the data from the destination using `merge_key` and `primary_key`, and then inserts the new records. All of this occurs within a single atomic transaction for the root and all nested tables.
 
+### Nested lists: submitted, empty, and missing
+
+A loaded record replaces the nested rows of every list it **submits**. A list is submitted when the source record contains it, and an **empty list** submits it too: the destination rows of that list are deleted. When the source record does **not contain** the list at all, it is treated as unchanged and the destination rows of that list are kept. This lets a partial update touch only some of the nested tables of a record:
+
+```py
+# the first load creates two `items`
+pipeline.run(orders([{"id": 1, "v": "a", "items": [{"sku": "x"}, {"sku": "y"}]}]))
+
+# `items: []` submits the list, so both `items` are deleted
+pipeline.run(orders([{"id": 1, "v": "b", "items": []}]))
+
+# no `items` key submits nothing, so the (now empty) `items` of `id = 1` stay empty
+# and the rows of `id = 2` that were not loaded stay untouched
+pipeline.run(orders([{"id": 1, "v": "c"}]))
+```
+
+A missing list and an empty list both load no nested rows. dlt records the difference in a `_dlt_present_<hash>` column on the parent row and uses it during the merge. The column is added only to tables using the `delete-insert`, `upsert`, or `cdc` strategy.
+
+For a `delete-insert` table with nested tables and a `primary_key`, dlt derives the root `_dlt_id` from the key, so a reloaded record keeps its id and the nested rows of a list it did not submit still point to it. Tables loaded before this behavior existed keep their previous handling: a missing list still deletes the nested rows.
+
 The example below loads all the GitHub events and updates them in the destination using "id" as the primary key, making sure that only a single copy of the event is present in the `github_repo_events` table:
 
 ```py
@@ -991,7 +1011,7 @@ To limit the deletes with a SQL condition instead, set `destination_scope`. Read
 
 ### Nested tables with `cdc`
 
-Nested rows follow their parent row. dlt deletes the nested rows of a deleted parent and the list elements that the load no longer has. dlt inserts new list elements. With `skip_unchanged_rows`, dlt does not update an unchanged element.
+Nested rows follow their parent row. dlt deletes the nested rows of a deleted parent and the list elements that the load no longer has. dlt inserts new list elements. As with [`delete-insert`](#nested-lists-submitted-empty-and-missing), a record that does not contain a list keeps the destination rows of that list, while an empty list deletes them. With `skip_unchanged_rows`, dlt does not update an unchanged element.
 
 ### Limitations of `cdc`
 

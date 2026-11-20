@@ -17,7 +17,9 @@ from dlt.common.schema.utils import (
     get_columns_names_with_prop,
     get_first_column_name_with_prop,
     get_dedup_sort_tuple,
+    get_list_presence_column_name,
     get_validity_column_names,
+    has_list_presence_column,
     is_nested_table,
 )
 from dlt.common.storages.load_storage import ParsedLoadJobFileName
@@ -415,6 +417,215 @@ class SqlMergeFollowupJob(SqlFollowupJob):
         if source_filter:
             select_sql += f" WHERE {source_filter}"
         return select_sql
+
+    @classmethod
+    def gen_list_presence_marker(
+        cls,
+        parent_table: PreparedTableSchema,
+        child_table: PreparedTableSchema,
+        sql_client: SqlClientBase[Any],
+    ) -> Optional[str]:
+        """Returns the escaped marker column that `parent_table` carries for `child_table`'s list.
+
+        Returns `None` when the parent carries no marker, for example a data set loaded before
+        the marker existed.
+        """
+        if not has_list_presence_column(parent_table, child_table):
+            return None
+        return sql_client.escape_column_name(
+            get_list_presence_column_name(child_table["name"])
+        )
+
+    @classmethod
+    def _gen_not_deleted_cond(
+        cls,
+        table: PreparedTableSchema,
+        sql_client: SqlClientBase[Any],
+    ) -> Optional[str]:
+        escape_column_id = sql_client.escape_column_name
+        escape_lit = sql_client.capabilities.escape_literal or escape_ansi_literal
+        _, not_deleted_cond = cls._get_hard_delete_col_and_cond(
+            table, escape_column_id, escape_lit, invert=True
+        )
+        return not_deleted_cond
+
+    @classmethod
+    def _gen_deleted_cond(
+        cls,
+        table: PreparedTableSchema,
+        sql_client: SqlClientBase[Any],
+    ) -> Optional[str]:
+        escape_column_id = sql_client.escape_column_name
+        escape_lit = sql_client.capabilities.escape_literal or escape_ansi_literal
+        _, deleted_cond = cls._get_hard_delete_col_and_cond(
+            table, escape_column_id, escape_lit
+        )
+        return deleted_cond
+
+    @classmethod
+    def gen_surviving_rows_sql(
+        cls,
+        table_chain: Sequence[PreparedTableSchema],
+        table: PreparedTableSchema,
+        sql_client: SqlClientBase[Any],
+        deleted_roots_sql: Optional[str] = None,
+    ) -> Optional[str]:
+        """Selects the row keys of `table` that exist after the merge.
+
+        A nested row survives when this load inserts it, or when its parent row survives and did
+        not submit the list that owns the nested row. Returns `None` when a parent carries no
+        list marker (a data set loaded before the marker existed): the caller then treats every
+        parent as replaced.
+        """
+        root_table = table_chain[0]
+        merge_strategy = cls._resolve_merge_strategy(root_table, sql_client)
+        escape_column_id = sql_client.escape_column_name
+        row_key_col = escape_column_id(
+            cls.get_row_key_col(
+                table_chain,
+                table,
+                sql_client.fully_qualified_dataset_name(),
+                sql_client.fully_qualified_dataset_name(staging=True),
+            )
+        )
+        _, staging_table_name = sql_client.get_qualified_table_names(table["name"])
+        if table["name"] == root_table["name"]:
+            staged_roots = f"SELECT {row_key_col} FROM {staging_table_name}"
+            if not_deleted_cond := cls._gen_not_deleted_cond(root_table, sql_client):
+                staged_roots += f" WHERE {not_deleted_cond}"
+            if merge_strategy == "cdc" or (
+                merge_strategy == "delete-insert" and deleted_roots_sql is None
+            ):
+                # every root of the merge source is deleted and inserted back with the same id,
+                # `cdc` deletes every other destination root
+                return staged_roots
+            if merge_strategy == "delete-insert":
+                # a destination scope deletes roots that the load does not carry
+                destination_table_name = sql_client.make_qualified_table_name(root_table["name"])
+                kept_roots = (
+                    f"SELECT {row_key_col} FROM {destination_table_name}"
+                    f" WHERE {row_key_col} NOT IN ({deleted_roots_sql})"
+                )
+                return f"{staged_roots} UNION {kept_roots}"
+            # `upsert` keeps the destination roots that the load does not carry, except the ones
+            # it hard deletes
+            destination_table_name = sql_client.make_qualified_table_name(root_table["name"])
+            kept_roots = f"SELECT {row_key_col} FROM {destination_table_name}"
+            if deleted_cond := cls._gen_deleted_cond(root_table, sql_client):
+                hard_deleted_roots = (
+                    f"SELECT {row_key_col} FROM {staging_table_name} WHERE {deleted_cond}"
+                )
+                kept_roots += f" WHERE {row_key_col} NOT IN ({hard_deleted_roots})"
+            return f"{staged_roots} UNION {kept_roots}"
+        parent_table = next(t for t in table_chain if t["name"] == table["parent"])
+        marker_col = cls.gen_list_presence_marker(parent_table, table, sql_client)
+        surviving_parents = cls.gen_surviving_rows_sql(
+            table_chain, parent_table, sql_client, deleted_roots_sql
+        )
+        if marker_col is None or surviving_parents is None:
+            return None
+        parent_key_col = escape_column_id(get_first_column_name_with_prop(table, "parent_key"))
+        submitted_parents = cls.gen_submitted_parents_sql(
+            table_chain, parent_table, marker_col, sql_client
+        )
+        destination_table_name = sql_client.make_qualified_table_name(table["name"])
+        staged_rows = (
+            f"SELECT {row_key_col} FROM {staging_table_name}"
+            f" WHERE {parent_key_col} IN ({surviving_parents})"
+        )
+        # a parent that did not submit the list keeps the destination rows of that list
+        kept_rows = (
+            f"SELECT {row_key_col} FROM {destination_table_name}"
+            f" WHERE {parent_key_col} IN ({surviving_parents})"
+            f" AND {parent_key_col} NOT IN ({submitted_parents})"
+        )
+        return f"{staged_rows} UNION {kept_rows}"
+
+    @classmethod
+    def gen_submitted_parents_sql(
+        cls,
+        table_chain: Sequence[PreparedTableSchema],
+        parent_table: PreparedTableSchema,
+        marker_col: str,
+        sql_client: SqlClientBase[Any],
+    ) -> str:
+        """Selects the parent rows of this load that submitted the list owning the child rows."""
+        escape_column_id = sql_client.escape_column_name
+        parent_row_key = escape_column_id(
+            cls.get_row_key_col(
+                table_chain,
+                parent_table,
+                sql_client.fully_qualified_dataset_name(),
+                sql_client.fully_qualified_dataset_name(staging=True),
+            )
+        )
+        _, staging_parent_table_name = sql_client.get_qualified_table_names(parent_table["name"])
+        return (
+            f"SELECT {parent_row_key} FROM {staging_parent_table_name}"
+            f" WHERE {marker_col} IS NOT NULL"
+        )
+
+    @classmethod
+    def _resolve_merge_strategy(
+        cls, root_table: PreparedTableSchema, sql_client: SqlClientBase[Any]
+    ) -> Optional[str]:
+        """Returns the merge strategy of a prepared root table."""
+        merge_strategy = root_table.get("x-merge-strategy")
+        if merge_strategy is not None:
+            return merge_strategy  # type: ignore[return-value]
+        return resolve_merge_strategy(
+            {root_table["name"]: root_table},
+            root_table,
+            sql_client.capabilities,
+            is_prepared=True,
+        )
+
+    @classmethod
+    def gen_kept_nested_rows_cond(
+        cls,
+        table_chain: Sequence[PreparedTableSchema],
+        child_table: PreparedTableSchema,
+        sql_client: SqlClientBase[Any],
+        deleted_roots_sql: Optional[str] = None,
+    ) -> Optional[str]:
+        """Returns a condition that is true for the `child_table` destination rows to keep.
+
+        A parent that did not submit the list keeps its nested rows. Such a parent survives the
+        merge and is not a submitted parent of this load. Only the strategies that replace
+        nested rows need that condition.
+
+        Returns `None` when the parent carries no marker or when the root id changes on every
+        load: the merge then replaces the nested rows of every matched parent as before.
+        """
+        root_table = table_chain[0]
+        merge_strategy = cls._resolve_merge_strategy(root_table, sql_client)
+        if merge_strategy not in ("delete-insert",) + UPSERT_MERGE_STRATEGIES:
+            # other strategies do not delete nested rows
+            return None
+        if merge_strategy != "cdc" and not get_columns_names_with_prop(
+            root_table, "primary_key"
+        ):
+            # without a primary key the root id changes on every load, kept rows would orphan
+            return None
+        parent_table = next(t for t in table_chain if t["name"] == child_table["parent"])
+        marker_col = cls.gen_list_presence_marker(parent_table, child_table, sql_client)
+        if marker_col is None:
+            return None
+        surviving_parents = cls.gen_surviving_rows_sql(
+            table_chain, parent_table, sql_client, deleted_roots_sql
+        )
+        if surviving_parents is None:
+            return None
+        submitted_parents = cls.gen_submitted_parents_sql(
+            table_chain, parent_table, marker_col, sql_client
+        )
+        parent_key_col = sql_client.escape_column_name(
+            get_first_column_name_with_prop(child_table, "parent_key")
+        )
+        return (
+            f"{parent_key_col} IN ({surviving_parents})"
+            f" AND {parent_key_col} NOT IN ({submitted_parents})"
+        )
 
     @classmethod
     def gen_delete_where_sql(
@@ -872,11 +1083,19 @@ class SqlMergeFollowupJob(SqlFollowupJob):
                     )
                 )
                 # the merge selects nested rows by their root rows, so it deletes them first
+                nested_cond = (
+                    f"{root_key_column} IN (SELECT {row_key_column} FROM {root_table_name}"
+                    f" WHERE {destination_scope})"
+                )
+                # a parent that did not submit the list keeps its nested rows. the scope deletes
+                # only the root rows it selects, they survive through the merge source
+                kept_cond = cls.gen_kept_nested_rows_cond(table_chain, table, sql_client)
+                if kept_cond is not None:
+                    nested_cond += f" AND NOT ({kept_cond})"
                 sql.extend(
                     cls.gen_delete_where_sql(
                         nested_table_name,
-                        f"{root_key_column} IN (SELECT {row_key_column} FROM {root_table_name}"
-                        f" WHERE {destination_scope})",
+                        nested_cond,
                         [root_key_column],
                         sql_client,
                         # user sql can contain subqueries
@@ -936,9 +1155,22 @@ class SqlMergeFollowupJob(SqlFollowupJob):
                             sql_client.fully_qualified_dataset_name(staging=True),
                         )
                     )
-                    sql.append(
-                        cls.gen_delete_from_sql(
-                            table_name, root_key_column, delete_temp_table_name, row_key_column
+                    nested_delete_cond = (
+                        f"{root_key_column} IN (SELECT * FROM {delete_temp_table_name})"
+                    )
+                    # a parent that did not submit the list keeps its nested rows
+                    kept_cond = cls.gen_kept_nested_rows_cond(
+                        table_chain, table, sql_client, delete_temp_table_name
+                    )
+                    if kept_cond is not None:
+                        nested_delete_cond += f" AND NOT ({kept_cond})"
+                    sql.extend(
+                        cls.gen_delete_where_sql(
+                            table_name,
+                            nested_delete_cond,
+                            [root_key_column],
+                            sql_client,
+                            has_nested_subquery=True,
                         )
                     )
 
@@ -1369,6 +1601,10 @@ class SqlMergeFollowupJob(SqlFollowupJob):
                         f" AND {nested_row_key_column} NOT IN"
                         f" (SELECT {nested_row_key_column} FROM {staging_table_name})"
                     )
+                    # a parent that did not submit the list keeps its nested rows
+                    kept_cond = cls.gen_kept_nested_rows_cond(table_chain, table, sql_client)
+                    if kept_cond is not None:
+                        removed_cond += f" AND NOT ({kept_cond})"
                     sql.extend(
                         cls.gen_delete_where_sql(
                             table_name,

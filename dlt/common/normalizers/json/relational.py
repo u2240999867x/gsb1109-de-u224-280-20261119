@@ -35,6 +35,7 @@ from dlt.common.schema.utils import (
     column_name_validator,
     get_root_table,
     get_first_column_name_with_prop,
+    get_list_presence_column_name,
 )
 from dlt.common.utils import update_dict_nested
 from dlt.common.normalizers.json import (
@@ -110,6 +111,12 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         # create cached versions of helper functions
         self._get_root_row_id_type = lru_cache(maxsize=None)(
             partial(normalize_helpers.get_root_row_id_type, self.schema)
+        )
+        self._get_stable_row_id_type = lru_cache(maxsize=None)(
+            partial(normalize_helpers.get_stable_delete_insert_row_id_type, self.schema)
+        )
+        self._requires_list_markers = lru_cache(maxsize=None)(
+            partial(normalize_helpers.requires_list_markers, self.schema)
         )
         self._shorten_fragments = lru_cache(maxsize=None)(
             partial(normalize_helpers.shorten_fragments, self.naming)
@@ -193,6 +200,7 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         parent_row_id: str,
         pos: int,
         is_root: bool,
+        has_submitted_lists: bool = False,
     ) -> str:
         if not is_root:
             row_id = get_nested_row_hash(parent_row_id, table, pos)
@@ -200,6 +208,10 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
             flattened_row[self.c_dlt_list_idx] = pos
         else:  # root table
             row_id_type = self._get_root_row_id_type(table)
+            if row_id_type == "random":
+                # a delete-insert parent may keep the nested rows of a previous load, so its id
+                # must not change when its own columns change
+                row_id_type = self._get_stable_row_id_type(table, has_submitted_lists)
             if row_id_type in ("key_hash", "row_hash"):
                 subset = None
                 if row_id_type == "key_hash":
@@ -229,6 +241,28 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                 extend[prop_as] = row[prop_from]
 
         return extend if extend else None
+
+    def _marks_submitted_lists(self, table: str, has_submitted_lists: bool) -> bool:
+        """Tells whether `table` needs the markers of the lists its rows submit."""
+        if table not in self.schema.tables:
+            # the nested table is created in this load, the root decides
+            table = self.naming.break_path(table)[0]
+        return self._requires_list_markers(table, has_submitted_lists)
+
+    def _add_list_presence_markers(
+        self,
+        table: str,
+        flattened_row: DictStrAny,
+        lists: Dict[Tuple[str, ...], Sequence[Any]],
+    ) -> None:
+        """Marks a list that the source row submitted, even an empty one.
+
+        The marker lets merge tell a submitted empty list, which replaces the nested rows of the
+        parent, from a list that the source did not submit, which keeps them.
+        """
+        for list_path in lists:
+            child_table = self._shorten_fragments(table, *list_path)
+            flattened_row[get_list_presence_column_name(child_table)] = True
 
     # generate nested tables only for lists
     def _normalize_list(
@@ -287,6 +321,9 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         table = self._shorten_fragments(*parent_path, *ident_path)
         # flatten current row and extract all lists to recur into
         flattened_row, lists = self._flatten(table, dict_row, _r_lvl)
+        # a merge tells a list that was not submitted from an empty one by these markers
+        if lists and self._marks_submitted_lists(table, True):
+            self._add_list_presence_markers(table, flattened_row, lists)
         # only extend row if there's something to extend
         if extend:
             flattened_row.update(extend)
@@ -298,7 +335,9 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         # infer record hash or leave existing primary key if present
         row_id = flattened_row.get(self.c_dlt_id)
         if not row_id:
-            row_id = self._add_row_id(table, dict_row, flattened_row, parent_row_id, pos, is_root)
+            row_id = self._add_row_id(
+                table, dict_row, flattened_row, parent_row_id, pos, is_root, bool(lists)
+            )
 
         # find fields to propagate to nested tables in config
         if self.propagation_config:
@@ -407,6 +446,8 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         self._is_nested_type.cache_clear()
         self._should_be_nested.cache_clear()
         self._get_root_row_id_type.cache_clear()
+        self._get_stable_row_id_type.cache_clear()
+        self._requires_list_markers.cache_clear()
         if self._get_propagation_mapping:
             self._get_propagation_mapping.cache_clear()
 

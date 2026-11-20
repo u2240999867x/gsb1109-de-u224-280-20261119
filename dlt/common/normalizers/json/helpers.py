@@ -23,6 +23,7 @@ from dlt.common.schema.utils import (
     get_first_column_name_with_prop,
     get_nested_tables,
     has_column_with_prop,
+    has_list_presence_column,
     is_nested_table,
 )
 from dlt.common.utils import digest128, digest128b
@@ -117,6 +118,48 @@ def get_root_row_id_type(schema: Schema, table_name: str) -> TRowIdType:
             )
             if x_row_version_col == schema.naming.normalize_identifier(C_DLT_ID):
                 return "row_hash"
+    return "random"
+
+
+def requires_list_markers(
+    schema: Schema, table_name: str, has_submitted_lists: bool = False
+) -> bool:
+    """Tells whether rows of `table_name` store the markers of the lists they submit.
+
+    Only a `delete-insert` table may keep the nested rows of a parent that did not submit a
+    list, so it needs the markers. The markers and the stable root ids they rely on start
+    together on the first load, or as soon as a table gains nested tables that already carry
+    markers. A table that stores nested rows without the markers keeps its previous behavior:
+    adding markers now would change its root ids and orphan the nested rows it keeps.
+    """
+    table = schema.tables.get(table_name)
+    if table is None:
+        return False
+    merge_strategy = resolve_merge_strategy(schema.tables, table, is_prepared=False)
+    if merge_strategy != "delete-insert":
+        return False
+    if not get_columns_names_with_prop(table, "primary_key", include_incomplete=True):
+        return False
+    nested_tables = get_nested_tables(schema.tables, table_name, include_self=False)
+    if not nested_tables:
+        return has_submitted_lists
+    for nested in nested_tables:
+        parent = schema.tables[nested["parent"]]
+        if not has_list_presence_column(parent, nested):
+            return False
+    return True
+
+
+def get_stable_delete_insert_row_id_type(
+    schema: Schema, table_name: str, has_submitted_lists: bool = False
+) -> TRowIdType:
+    """Tells whether a `delete-insert` table keeps its root ids stable across loads.
+
+    Kept nested rows link to the root id of a parent that did not submit a list, so the id must
+    survive the reload. A table with a primary key derives the id from the key.
+    """
+    if requires_list_markers(schema, table_name, has_submitted_lists):
+        return "key_hash"
     return "random"
 
 

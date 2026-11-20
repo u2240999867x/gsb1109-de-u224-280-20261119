@@ -8,7 +8,7 @@ from dlt.common.normalizers.naming import NamingConvention
 from dlt.common.schema.typing import TColumnName, TLoaderMergeStrategy, TSimpleRegex
 from dlt.common.utils import digest128, uniq_id
 from dlt.common.schema import Schema
-from dlt.common.schema.utils import new_table
+from dlt.common.schema.utils import get_list_presence_column_name, new_table
 from dlt.common.normalizers.utils import DLT_ID_LENGTH_BYTES
 from dlt.common.normalizers.json.relational import (
     RelationalNormalizerConfigPropagation,
@@ -1137,6 +1137,117 @@ def test_get_root_row_id_type(
     ):
         result = normalize_helpers.get_root_row_id_type(norm.schema, "table_1")
         assert result == expected_row_id_type
+
+
+def test_submitted_list_marker_and_stable_row_id() -> None:
+    """A merge marks the lists a row submits, empty or not, and derives a root id from its
+    primary key so the nested rows of a list that was not submitted keep their parent."""
+    caps = DestinationCapabilitiesContext.generic_capabilities(
+        supported_merge_strategies=["delete-insert"]
+    )
+    caps.max_identifier_length = 127
+    caps.max_column_identifier_length = 127
+    with Container().injectable_context(caps):
+        schema = create_schema_with_name("submitted_lists")
+        schema.update_table(
+            new_table(
+                "orders",
+                write_disposition="merge",
+                columns=[{"name": "id", "data_type": "bigint", "primary_key": True}],
+            )
+        )
+        schema.tables["orders"]["x-merge-strategy"] = "delete-insert"
+        schema.data_item_normalizer.extend_schema()
+
+        def root_row(row: DictStrAny) -> DictStrAny:
+            return next(
+                r[1] for r in schema.normalize_data_item(row, "load_id", "orders") if r[0][0] == "orders"
+            )
+
+        marker = get_list_presence_column_name("orders__items")
+        empty = root_row({"id": 1, "items": []})
+        # an empty list is submitted, so it is marked and its parent gets a stable id
+        assert empty[marker] is True
+        assert empty["_dlt_id"] == root_row({"id": 1, "v": "changed", "items": []})["_dlt_id"]
+
+        # a missing list leaves no marker
+        missing = root_row({"id": 2})
+        assert marker not in missing
+
+        # a non-empty list is marked too, on each nested row that owns a list
+        rows = list(
+            schema.normalize_data_item(
+                {"id": 3, "items": [{"sku": "a", "sub": []}]}, "load_id", "orders"
+            )
+        )
+        markers = {
+            table: {k: v for k, v in row.items() if k.startswith("_dlt_present_")}
+            for (table, _, _), row in rows
+        }
+        assert markers["orders"] == {marker: True}
+        assert markers["orders__items"] == {
+            get_list_presence_column_name("orders__items__sub"): True
+        }
+
+
+def test_submitted_list_marker_only_for_merge() -> None:
+    """An append table stores no list markers, so its schema does not change."""
+    caps = DestinationCapabilitiesContext.generic_capabilities(
+        supported_merge_strategies=["delete-insert"]
+    )
+    caps.max_identifier_length = 127
+    caps.max_column_identifier_length = 127
+    with Container().injectable_context(caps):
+        schema = create_schema_with_name("append_lists")
+        schema.update_table(
+            new_table("orders", columns=[{"name": "id", "data_type": "bigint"}])
+        )
+        root = next(
+            r[1]
+            for r in schema.normalize_data_item({"id": 1, "items": []}, "load_id", "orders")
+            if r[0][0] == "orders"
+        )
+        assert not any(k.startswith("_dlt_present_") for k in root)
+
+
+def test_stable_row_id_not_enabled_for_existing_nested_tables() -> None:
+    """A table that already stores nested rows without the markers keeps its previous ids.
+
+    Switching to stable ids now would orphan the nested rows it keeps, so the first load of an
+    existing table behaves as before.
+    """
+    caps = DestinationCapabilitiesContext.generic_capabilities(
+        supported_merge_strategies=["delete-insert"]
+    )
+    caps.max_identifier_length = 127
+    caps.max_column_identifier_length = 127
+    with Container().injectable_context(caps):
+        schema = create_schema_with_name("existing_lists")
+        schema.update_table(
+            new_table(
+                "orders",
+                write_disposition="merge",
+                columns=[{"name": "id", "data_type": "bigint", "primary_key": True}],
+            )
+        )
+        schema.tables["orders"]["x-merge-strategy"] = "delete-insert"
+        # a nested table without a parent marker, as created before the markers existed
+        schema.update_table(
+            new_table(
+                "orders__items",
+                parent_table_name="orders",
+                columns=[{"name": "sku", "data_type": "text"}],
+            )
+        )
+        schema.data_item_normalizer.extend_schema()
+
+        rows = list(
+            schema.normalize_data_item({"id": 1, "items": [{"sku": "a"}]}, "load_id", "orders")
+        )
+        root = next(row for (table, _, _), row in rows if table == "orders")
+        assert "_dlt_present_" not in "".join(root.keys())
+        # the root id is not derived from the primary key
+        assert normalize_helpers.get_stable_delete_insert_row_id_type(schema, "orders") == "random"
 
 
 @pytest.mark.parametrize(

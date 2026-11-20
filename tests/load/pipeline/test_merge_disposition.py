@@ -1308,9 +1308,24 @@ def test_nested_column_missing(
     assert load_table_counts(p, table_name)[table_name] == 2
     assert load_table_counts(p, table_name + "__nested")[table_name + "__nested"] == 5
 
-    # nested column is missing, previously inserted records should be deleted from child table
+    # a missing nested column keeps the previously inserted rows: the source did not submit the
+    # list, which is different from submitting an empty one
     data = [
         {"id": 1, "simple": "bar"},
+    ]
+    info = p.run(r(data), **destination_config.run_kwargs)
+    assert_load_info(info)
+    assert load_table_counts(p, table_name)[table_name] == 2
+    assert load_table_counts(p, table_name + "__nested")[table_name + "__nested"] == 5
+
+    # the same load replayed must not delete them either
+    info = p.run(r(data), **destination_config.run_kwargs)
+    assert_load_info(info)
+    assert load_table_counts(p, table_name + "__nested")[table_name + "__nested"] == 5
+
+    # an explicit empty list deletes the nested rows of its parent
+    data = [
+        {"id": 1, "simple": "bar", "nested": []},
     ]
     info = p.run(r(data), **destination_config.run_kwargs)
     assert_load_info(info)

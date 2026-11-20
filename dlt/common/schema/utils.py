@@ -32,6 +32,7 @@ from dlt.common.schema import detections
 from dlt.common.schema.typing import (
     C_DLT_ID,
     C_DLT_LOAD_ID,
+    C_DLT_LIST_PRESENCE_PREFIX,
     DLT_NAME_PREFIX,
     C_DLT_LOADS_TABLE_LOAD_ID,
     C_CHILD_PARENT_REF_LABEL,
@@ -98,6 +99,25 @@ def is_nested_table(table: TTableSchema) -> bool:
     """Checks if table is a dlt nested table: connected to parent table via row_key - parent_key reference"""
     # "parent" table hint indicates NESTED table.
     return bool(table.get("parent"))
+
+
+def get_list_presence_column_name(child_table_name: str) -> str:
+    """Returns the name of the parent column that marks the list stored in `child_table_name`.
+
+    The normalizer sets the column to `True` when the source row contains the list, including an
+    empty one. A missing column value means that the list was not submitted. The name is derived
+    from the normalized child table name, so it stays short and does not depend on the naming
+    convention or on the shortening of the table name.
+    """
+    digest = hashlib.sha256(child_table_name.encode("utf-8")).hexdigest()
+    return C_DLT_LIST_PRESENCE_PREFIX + digest[:12]
+
+
+def has_list_presence_column(parent_table: TTableSchema, child_table: TTableSchema) -> bool:
+    """Tells whether `parent_table` has a presence marker for the list owned by `child_table`."""
+    if not is_nested_table(child_table):
+        return False
+    return get_list_presence_column_name(child_table["name"]) in parent_table["columns"]
 
 
 def may_be_nested(table: TTableSchema) -> bool:
