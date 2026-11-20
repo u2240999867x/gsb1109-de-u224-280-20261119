@@ -429,6 +429,13 @@ f = d.filter(predicate)
 
 # Use deep=True to apply the predicate recursively to all nested dicts.
 f = d.filter(predicate, deep=True)
+
+# Use keypath=True to apply the predicate to the full keypath of each item,
+# including list indexes. The result is a flat dict keyed by the original
+# keypath, so selected items keep their device/probe/reading position and
+# can be merged or unflattened back into the original structure.
+f = d.filter(lambda keypath, value: keypath.endswith(".measurement"), keypath=True)
+# -> { "devices[0].probes[0].readings[2].measurement": 2.0, ... }
 ```
 
 #### `find`

@@ -481,6 +481,43 @@ class benedict_test_case(unittest.TestCase):
         self.assertTrue(isinstance(f, benedict))
         self.assertEqual(f, r)
 
+    def test_filter_with_keypath(self) -> None:
+        d = {
+            "devices": [
+                {
+                    "readings": [
+                        {"measurement": 1.0},
+                        {"measurement": None},
+                        {"measurement": 2.0, "calibration": {"gain": 2}},
+                    ]
+                }
+            ]
+        }
+        b = benedict(d)
+        f = b.filter(
+            lambda keypath, val: keypath.endswith(".measurement") and val is not None,
+            keypath=True,
+        )
+        r = {
+            "devices[0].readings[0].measurement": 1.0,
+            "devices[0].readings[2].measurement": 2.0,
+        }
+        self.assertTrue(isinstance(f, benedict))
+        self.assertTrue(f is not b)
+        self.assertEqual(f, r)
+        self.assertEqual(f.keypath_separator, None)
+        self.assertEqual(b, d)
+
+    def test_filter_with_keypath_and_custom_separator(self) -> None:
+        b = benedict(
+            {"devices": [{"readings": [{"measurement": 1.0}]}]},
+            keypath_separator="/",
+        )
+        f = b.filter(
+            lambda keypath, val: keypath.endswith("/measurement"), keypath=True
+        )
+        self.assertEqual(f, {"devices[0]/readings[0]/measurement": 1.0})
+
     def test_find(self) -> None:
         d = {
             "a": 1,
