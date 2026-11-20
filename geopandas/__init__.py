@@ -18,6 +18,7 @@ from geopandas.tools import (
     geocode,
     make_grid,
     reverse_geocode,
+    geodesic_to_crs,
 )
 from geopandas.tools._show_versions import show_versions
 

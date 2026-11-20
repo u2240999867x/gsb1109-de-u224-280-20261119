@@ -2,6 +2,17 @@
 
 ## Development version
 
+New features and improvements:
+
+- Added :func:`geopandas.geodesic_to_crs`, an opt-in reprojection convention for
+  survey track lines whose segments are interpreted as shortest (geodesic) paths
+  on the ellipsoid. It densifies each source segment along the geodesic so the
+  projected polyline stays within a caller supplied map tolerance, keeps the
+  original survey stations and segment order traceable (new densification points
+  are flagged separately), and reports source intervals that cannot be proven to
+  stay inside the target projection's area of use instead of bridging them with a
+  straight map line. The vertex-only ``GeoSeries.to_crs`` behavior is unchanged.
+
 Bug fixes:
 
 - Fix the colorbar being shrunk when plotting with a ``"compressed"`` matplotlib

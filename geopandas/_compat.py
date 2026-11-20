@@ -1,3 +1,4 @@
+import functools
 import importlib
 from packaging.version import Version
 
@@ -74,6 +75,7 @@ except ImportError as err:
 
 
 def requires_pyproj(func):
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         if not HAS_PYPROJ:
             raise ImportError(
