@@ -175,6 +175,41 @@ conn = connect(host='my.host.com', use_ssl=True, verify_cert=True)
 conn = connect(host='my.host.com', use_ssl=True, ca_cart="/tmp/my_cert.pem")
 ```
 
+### Configuration provenance
+
+After `execute()` succeeds, the cursor keeps an immutable record of the
+configuration visible to the client for that operation:
+
+```python
+cur.execute('SELECT 1', configuration={'mt_dop': '2'})
+record = cur.last_configuration_record
+
+record.requested_session_configuration  # sent in OpenSession
+record.server_session_configuration     # returned in OpenSession response
+record.statement_configuration          # sent as ExecuteStatement confOverlay
+record.client_configuration             # client-only, e.g. paramstyle
+record.changed_session_configuration    # server value differs from request
+record.unconfirmed_session_configuration  # requested but not returned
+record.omitted_session_configuration    # response map omitted the key
+record.unreported_session_configuration # response had no session map
+record.effective_configuration          # UNKNOWN: not observed via these RPCs
+```
+
+`record['key']` returns a per-key `ConfigurationEntry` with `.requested_session`,
+`.server_session`, `.statement_overlay`, `.unconfirmed_values`, and `.status`.
+`cursor.configuration_records` lists successful submits in order. A failed
+submit is never appended there; it is available as `cursor.last_failed_configuration`
+until the next successful submit, and `cursor.last_configuration_record` keeps
+pointing at the previous successful operation.
+
+`paramstyle` is a client binding option. It is honored from either `cursor()`
+or `execute()` but is removed from both `OpenSession` and `ExecuteStatement`
+requests, so it is reported only under `client_configuration`.
+
+The record can only attest to values the client saw in `OpenSession` or sent in
+`ExecuteStatement`. The value used by the server's execution plan is not
+returned by these RPCs and is therefore reported as unknown.
+
 [pep249]: http://legacy.python.org/dev/peps/pep-0249/
 [pandas]: http://pandas.pydata.org/
 [sklearn]: http://scikit-learn.org/

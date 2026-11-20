@@ -41,6 +41,8 @@ from impala._thrift_api import (
 from impala._thrift_gen.RuntimeProfile.ttypes import TRuntimeProfileFormat
 from impala.error import (NotSupportedError, OperationalError,
                           ProgrammingError, HiveServer2Error, HttpError)
+from impala.configuration import (ConfigurationRecord, merge_client_options,
+                                  split_configuration)
 from impala.exec_summary import build_exec_summary_table
 from impala.interface import Connection, Cursor, _bind_parameters
 from impala.util import get_logger_and_init_null
@@ -61,6 +63,28 @@ class HiveServer2Connection(Connection):
                   default_db)
         self.service = service
         self.default_db = default_db
+        self._cursors = []
+
+    @property
+    def configuration_records(self):
+        """Successful operation records, grouped by their cursors."""
+        records = []
+        for cursor in self._cursors:
+            records.extend(cursor.configuration_records)
+        return tuple(records)
+
+    @property
+    def operation_configuration_records(self):
+        return self.configuration_records
+
+    @property
+    def session_configuration_records(self):
+        records = []
+        for cursor in self._cursors:
+            record = cursor.session.configuration_record
+            if record not in records:
+                records.append(record)
+        return tuple(records)
 
     def close(self):
         """Close the session and the Thrift transport."""
@@ -145,7 +169,12 @@ class HiveServer2Connection(Connection):
 
         log.debug('.cursor(): getting new session_handle')
 
-        session = self.service.open_session(user, configuration)
+        server_configuration, client_configuration = \
+            split_configuration(configuration)
+        session = self.service.open_session(
+            user, configuration,
+            client_configuration=client_configuration)
+        client_configuration = getattr(session, 'client_configuration', {})
 
         log.debug('HiveServer2Cursor(service=%s, session_handle=%s, '
                   'default_config=%s, hs2_protocol_version=%s)',
@@ -154,10 +183,13 @@ class HiveServer2Connection(Connection):
 
         cursor_class = HiveServer2DictCursor if dictify else HiveServer2Cursor
 
-        cursor = cursor_class(session, convert_types=convert_types,
-                              fetch_error=fetch_error,
-                              close_finished_queries=close_finished_queries,
-                              convert_strings_to_unicode=convert_strings_to_unicode)
+        cursor = cursor_class(
+            session, convert_types=convert_types,
+            fetch_error=fetch_error,
+            close_finished_queries=close_finished_queries,
+            convert_strings_to_unicode=convert_strings_to_unicode,
+            client_options=client_configuration)
+        self._cursors.append(cursor)
 
         if self.default_db is not None:
             log.info('Using database %s as default', self.default_db)
@@ -175,14 +207,18 @@ class HiveServer2Cursor(Cursor):
     # they are instantiated with alive session_handles
 
     def __init__(self, session, convert_types=True, fetch_error=True, close_finished_queries=True,
-                 convert_strings_to_unicode=True):
+                 convert_strings_to_unicode=True, client_options=None):
         self.session = session
         self.convert_types = convert_types
         self.convert_strings_to_unicode = convert_strings_to_unicode
         self.fetch_error = fetch_error
         self.close_finished_queries = close_finished_queries
+        self.client_options = dict(client_options or {})
 
         self._last_operation = None
+        self._last_operation_configuration = None
+        self._operation_configuration_records = []
+        self._last_configuration_attempt = None
 
         self._last_operation_string = None
         self._last_operation_active = False
@@ -196,6 +232,47 @@ class HiveServer2Cursor(Cursor):
         self._rowcount = -1
 
         self._closed = False
+
+    @property
+    def last_configuration_record(self):
+        # A failed submit must not erase the last successfully submitted
+        # operation's record, so this is only replaced on success.
+        return self._last_operation_configuration
+
+    @property
+    def last_failed_configuration(self):
+        """Describe the most recent attempted submit, if it did not succeed.
+
+        Purely a diagnostic: it is never appended to the successful
+        operation records and is cleared by the next successful submit.
+        """
+        return self._last_configuration_attempt
+
+    @property
+    def configuration_record(self):
+        return self._last_operation_configuration
+
+    @property
+    def query_configuration_record(self):
+        return self._last_operation_configuration
+
+    @property
+    def operation_configuration(self):
+        return self._last_operation_configuration
+
+    @property
+    def configuration_records(self):
+        return tuple(self._operation_configuration_records)
+
+    @property
+    def operation_configuration_records(self):
+        return self.configuration_records
+
+    def get_configuration_record(self, index=-1):
+        return self._operation_configuration_records[index]
+
+    def get_configuration_records(self):
+        return self.configuration_records
 
     def __del__(self):
         if self._closed:
@@ -420,23 +497,57 @@ class HiveServer2Cursor(Cursor):
         """
         log.debug('Executing query %s', operation)
 
-        paramstyle = None
-        if configuration and 'paramstyle' in configuration:
-            configuration = configuration.copy()
-            paramstyle = configuration.pop('paramstyle', None)
+        server_configuration, statement_client_options = \
+            split_configuration(configuration)
+        paramstyle = statement_client_options.get(
+            'paramstyle', self.client_options.get('paramstyle'))
+        effective_client_options, client_option_sources = \
+            merge_client_options(
+                self.client_options, statement_client_options,
+                base_source='cursor_configuration',
+                overlay_source='statement_configuration')
 
         def op():
-            if parameters:
-                self._last_operation_string = _bind_parameters(operation,
-                                                               parameters,
-                                                               paramstyle)
-            else:
-                self._last_operation_string = operation
+            try:
+                if parameters:
+                    self._last_operation_string = _bind_parameters(
+                        operation, parameters, paramstyle)
+                else:
+                    self._last_operation_string = operation
 
-            op = self.session.execute(self._last_operation_string,
-                                      configuration,
-                                      run_async=True)
+                if effective_client_options:
+                    op = self.session.execute(
+                        self._last_operation_string,
+                        server_configuration if server_configuration else None,
+                        run_async=True,
+                        client_options=effective_client_options,
+                        client_option_sources=client_option_sources)
+                else:
+                    op = self.session.execute(
+                        self._last_operation_string,
+                        server_configuration if server_configuration else None,
+                        run_async=True)
+            except Exception:
+                self._last_configuration_attempt = ConfigurationRecord(
+                    session=self.session,
+                    operation=None,
+                    requested_session=getattr(
+                        self.session, 'requested_configuration', {}),
+                    server_session=getattr(
+                        self.session, 'server_configuration', {}),
+                    statement_configuration=server_configuration,
+                    client_options=effective_client_options,
+                    client_option_sources=client_option_sources,
+                    statement=self._last_operation_string,
+                    submitted=False,
+                    server_session_reported=getattr(
+                        self.session, 'server_configuration_reported', True))
+                raise
             self._last_operation = op
+            self._last_operation_configuration = op.configuration_record
+            self._last_configuration_attempt = None
+            self._operation_configuration_records.append(
+                op.configuration_record)
 
         self._execute_async(op)
 
@@ -1280,11 +1391,17 @@ class HS2Service(ThriftRPC):
         self.client._iprot.trans.close()
         self.client._iprot.trans.open()
 
-    def open_session(self, user, configuration=None):
+    def open_session(self, user, configuration=None, client_configuration=None):
         protocol = TProtocolVersion.HIVE_CLI_SERVICE_PROTOCOL_V6
+        server_configuration, embedded_client_configuration = \
+            split_configuration(configuration)
+        session_client_configuration = dict(embedded_client_configuration)
+        session_client_configuration.update(client_configuration or {})
         req = TOpenSessionReq(client_protocol=protocol,
                               username=user,
-                              configuration=configuration)
+                              configuration=(dict(server_configuration)
+                                             if server_configuration
+                                             else None))
         # OpenSession rpcs are idempotent and so ok to retry. If the client gets
         # disconnected and the server successfully opened a session, the client
         # will retry and rely on server to clean up the session.
@@ -1292,18 +1409,32 @@ class HS2Service(ThriftRPC):
         return HS2Session(self, resp.sessionHandle,
                           resp.configuration,
                           resp.serverProtocolVersion,
-                          retries=self.retries)
+                          retries=self.retries,
+                          requested_configuration=server_configuration,
+                          client_configuration=session_client_configuration,
+                          server_configuration_reported=(
+                              resp.configuration is not None))
 
 
 class HS2Session(ThriftRPC):
 
     def __init__(self, service, handle, config, hs2_protocol_version,
-                 retries=3):
+                 retries=3, requested_configuration=None,
+                 client_configuration=None,
+                 server_configuration_reported=None):
         # pylint: disable=protected-access
         self.service = service
         self.handle = handle
         self.config = config
         self.hs2_protocol_version = hs2_protocol_version
+        self.requested_configuration = dict(requested_configuration or {})
+        self.server_configuration = dict(config or {})
+        self.client_configuration = dict(client_configuration or {})
+        if server_configuration_reported is None:
+            server_configuration_reported = config is not None
+        self.server_configuration_reported = \
+            bool(server_configuration_reported)
+        self._configuration_records = []
 
         if hs2_protocol_version not in TProtocolVersion._VALUES_TO_NAMES:
             raise HiveServer2Error("Got HiveServer2 version {0}; "
@@ -1312,21 +1443,101 @@ class HS2Session(ThriftRPC):
 
         ThriftRPC.__init__(self, self.service.client, retries=retries)
 
+    @property
+    def configuration_record(self):
+        """Session-level record for only the OpenSession request/response."""
+        return ConfigurationRecord(
+            session=self,
+            requested_session=self.requested_configuration,
+            server_session=self.server_configuration,
+            client_options=self.client_configuration,
+            client_option_sources={
+                key: 'requested_session'
+                for key in self.client_configuration
+            },
+            submitted=False,
+            server_session_reported=self.server_configuration_reported)
+
+    @property
+    def last_configuration_record(self):
+        if self._configuration_records:
+            return self._configuration_records[-1]
+        return self.configuration_record
+
+    @property
+    def configuration_records(self):
+        return tuple(self._configuration_records)
+
+    @property
+    def operation_configuration_records(self):
+        return self.configuration_records
+
+    def get_configuration_record(self, index=-1):
+        return self._configuration_records[index]
+
+    def get_configuration_records(self):
+        return self.configuration_records
+
+    def _record_operation_configuration(self, op, statement,
+                                        statement_configuration,
+                                        client_configuration,
+                                        client_option_sources):
+        record = ConfigurationRecord(
+            session=self,
+            operation=op,
+            requested_session=self.requested_configuration,
+            server_session=self.server_configuration,
+            statement_configuration=statement_configuration,
+            client_options=client_configuration,
+            client_option_sources=client_option_sources,
+            statement=statement,
+            submitted=True,
+            server_session_reported=self.server_configuration_reported)
+        self._configuration_records.append(record)
+        return record
+
     def close(self):
         req = TCloseSessionReq(sessionHandle=self.handle)
         # CloseSession rpcs don't retry as a session cannot be closed twice.
         self._rpc('CloseSession', req, False)
 
-    def execute(self, statement, configuration=None, run_async=False):
+    def execute(self, statement, configuration=None, run_async=False,
+                client_options=None, client_option_sources=None):
+        server_configuration, embedded_client_options = \
+            split_configuration(configuration)
+        statement_client_options, embedded_client_sources = \
+            merge_client_options(
+                {}, embedded_client_options,
+                overlay_source='statement_configuration')
+        if client_options:
+            statement_client_options.update(client_options)
+        if client_option_sources:
+            embedded_client_sources.update(client_option_sources)
+
+        effective_client_options, effective_client_sources = \
+            merge_client_options(
+                self.client_configuration, statement_client_options,
+                base_source='cursor_configuration',
+                overlay_source='statement_configuration')
+        for key, source in embedded_client_sources.items():
+            if key in statement_client_options:
+                effective_client_sources[key] = source
+
         req = TExecuteStatementReq(sessionHandle=self.handle,
                                    statement=statement,
-                                   confOverlay=configuration,
+                                   confOverlay=(dict(server_configuration)
+                                                if server_configuration
+                                                else None),
                                    runAsync=run_async)
         # Do not attempt to retry requests.
         # Read queries should be idempotent but most dml queries are not. Also retrying
         # query execution from client could be expensive and so likely makes sense to do
         # it if server is also aware of the retries.
-        return self._operation('ExecuteStatement', req, False)
+        op = self._operation('ExecuteStatement', req, False)
+        op.configuration_record = self._record_operation_configuration(
+            op, statement, server_configuration,
+            effective_client_options, effective_client_sources)
+        return op
 
     def get_databases(self, schema='.*'):
         req = TGetSchemasReq(sessionHandle=self.handle, schemaName=schema)
@@ -1404,6 +1615,7 @@ class Operation(ThriftRPC):
         self.handle = handle
         self._schema = None
         self._state_has_result_set = None
+        self.configuration_record = None
         ThriftRPC.__init__(self, self.session.client, retries=retries)
 
     @property
