@@ -10,6 +10,8 @@ from .table import (  # noqa
     TableHDU,
     AsciiTableHDU,
     CompressedTableHDU,
+    ObservationStatus,
+    VariableColumnRead,
     _table_npy2fits_form,
     _npy2fits,
 )

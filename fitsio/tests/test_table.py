@@ -542,6 +542,225 @@ def test_variable_length_columns():
                             )
 
 
+def _make_variable_events_data(with_validity=True):
+    """
+    Make an event table with variable length signal and error columns.
+
+    row 0: real signal ending in a measured zero
+    row 1: completed observation, confirmed no signal (zero length)
+    row 2: not observed (zero length)
+    row 3: contradictory record, marked not observed but the
+           descriptor length is non-zero
+
+    The error column has different length bounds than the signal
+    column.
+    """
+    dtype = [('signal', 'O'), ('error', 'O')]
+    if with_validity:
+        dtype += [('observed', '?')]
+
+    data = np.zeros(4, dtype=dtype)
+
+    data['signal'][0] = np.array([1.5, 2.5, 0.0])
+    data['error'][0] = np.array([0.1, 0.2])
+
+    data['signal'][1] = np.zeros(0)
+    data['error'][1] = np.zeros(0)
+
+    data['signal'][2] = np.zeros(0)
+    data['error'][2] = np.zeros(0)
+
+    data['signal'][3] = np.array([9.0])
+    data['error'][3] = np.array([0.9])
+
+    if with_validity:
+        data['observed'] = [True, True, False, False]
+
+    return data
+
+
+def test_read_variable_columns_observation_status():
+    """
+    read variable length columns with true lengths and observation
+    status, in both object and fixed (padded) storage
+    """
+    from ..hdu.table import ObservationStatus, VariableColumnRead
+
+    rows = [2, 0, 3]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        with FITS(fname, 'rw') as fits:
+            fits.write(_make_variable_events_data())
+
+        with FITS(fname) as fits:
+            hdu = fits[1]
+
+            results = {}
+            for vstorage in ['fixed', 'object']:
+                res = hdu.read_variable_columns(
+                    ['signal', 'error'],
+                    rows=rows,
+                    vstorage=vstorage,
+                    validity_column='observed',
+                )
+                assert isinstance(res, VariableColumnRead)
+                results[vstorage] = res
+
+            fixed = results['fixed']
+            obj = results['object']
+
+            # both forms recover identical per-column true lengths,
+            # following the requested (unsorted) row order
+            assert list(obj.lengths['signal']) == [0, 3, 1]
+            assert list(obj.lengths['error']) == [0, 2, 1]
+            for name in ['signal', 'error']:
+                compare_array(
+                    fixed.lengths[name], obj.lengths[name], 'lengths'
+                )
+
+            # both forms recover identical per-row observation status
+            compare_array(fixed.status, obj.status, 'status')
+            assert obj.status[0] == ObservationStatus.NOT_OBSERVED
+            assert obj.status[1] == ObservationStatus.OBSERVED
+            assert obj.status[2] == ObservationStatus.CONTRADICTORY
+
+            # both forms recover identical valid elements; the fixed
+            # form is a padded matrix, so only the first length
+            # elements of each row are valid
+            for i in range(len(rows)):
+                for name in ['signal', 'error']:
+                    num = obj.lengths[name][i]
+                    valid_fixed = np.asarray(fixed.data[name][i]).ravel()[:num]
+                    valid_obj = np.asarray(obj.data[name][i]).ravel()[:num]
+                    compare_array(
+                        valid_fixed,
+                        valid_obj,
+                        'valid elements %s %d' % (name, i),
+                    )
+
+            # the fixed form is a padded matrix; each column keeps its
+            # own length bounds
+            assert fixed.data['signal'].shape[1] == 3
+            assert fixed.data['error'].shape[1] == 2
+
+            # the trailing zero of row 0 is a real measured value, not
+            # padding: it lies within the true length
+            i0 = rows.index(0)
+            sig = np.asarray(fixed.data['signal'][i0]).ravel()
+            assert sig[2] == 0.0
+            assert fixed.lengths['signal'][i0] == 3
+
+            # the two known zero length states are not merged
+            res_all = hdu.read_variable_columns(
+                ['signal', 'error'],
+                validity_column='observed',
+            )
+            assert res_all.status[1] == ObservationStatus.COMPLETED_EMPTY
+            assert res_all.status[2] == ObservationStatus.NOT_OBSERVED
+
+            # contradictory records can be queried back
+            (wcontra,) = np.where(
+                res_all.status == ObservationStatus.CONTRADICTORY
+            )
+            assert list(wcontra) == [3]
+            assert res_all.lengths['signal'][3] == 1
+
+            # existing calls still return the original types
+            d = hdu.read(columns=['signal'], rows=rows)
+            assert not isinstance(d, VariableColumnRead)
+            compare_array(
+                np.asarray(d['signal'][i0]).ravel(),
+                sig,
+                'original read unchanged',
+            )
+
+
+def test_read_variable_columns_no_validity_column():
+    """
+    without a validity column there is no evidence for the zero
+    length states, so they are reported as unknown
+    """
+    from ..hdu.table import ObservationStatus
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        with FITS(fname, 'rw') as fits:
+            fits.write(_make_variable_events_data(with_validity=False))
+
+        with FITS(fname) as fits:
+            res = fits[1].read_variable_columns(['signal', 'error'])
+
+            assert list(res.lengths['signal']) == [3, 0, 0, 1]
+            assert list(res.lengths['error']) == [2, 0, 0, 1]
+
+            assert res.status[0] == ObservationStatus.OBSERVED
+            assert res.status[1] == ObservationStatus.UNKNOWN
+            assert res.status[2] == ObservationStatus.UNKNOWN
+            assert res.status[3] == ObservationStatus.OBSERVED
+
+
+def test_read_variable_columns_no_max_size():
+    """
+    when a column has no maximum size in its TFORM, the reader falls
+    back to object arrays; the reported lengths and status must keep
+    their meaning
+    """
+    from ..hdu.table import ObservationStatus
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fname = os.path.join(tmpdir, 'test.fits')
+        with FITS(fname, 'rw') as fits:
+            fits.write(_make_variable_events_data())
+
+        # remove the maximum size from the TFORM of the variable
+        # length columns, editing the closed file in place so cfitsio
+        # does not normalize the keywords back
+        with FITS(fname) as fits:
+            tforms = {}
+            for i, cinfo in enumerate(fits[1].get_info()['colinfo']):
+                if cinfo['name'] in ('signal', 'error'):
+                    tforms['TFORM%d' % (i + 1)] = cinfo['tform']
+
+        with open(fname, 'r+b') as fobj:
+            contents = fobj.read()
+            for key, tform in tforms.items():
+                tform = tform.strip()
+                old = ("'%s'" % tform.ljust(8)).encode('ascii')
+                newform = tform[: tform.find('(')]
+                new = ("'%s'" % newform.ljust(8)).encode('ascii')
+                assert old in contents
+                fobj.seek(contents.index(old))
+                fobj.write(new)
+
+        with FITS(fname) as fits:
+            with pytest.warns(util.FITSRuntimeWarning):
+                res = fits[1].read_variable_columns(
+                    ['signal', 'error'],
+                    vstorage='fixed',
+                    validity_column='observed',
+                )
+
+            # forced to object arrays
+            assert util.is_object(res.data['signal'])
+            assert util.is_object(res.data['error'])
+
+            # lengths and status are unchanged in meaning
+            assert list(res.lengths['signal']) == [3, 0, 0, 1]
+            assert list(res.lengths['error']) == [2, 0, 0, 1]
+            assert list(res.status) == [
+                ObservationStatus.OBSERVED,
+                ObservationStatus.COMPLETED_EMPTY,
+                ObservationStatus.NOT_OBSERVED,
+                ObservationStatus.CONTRADICTORY,
+            ]
+            compare_array(
+                np.asarray(res.data['signal'][0]),
+                np.array([1.5, 2.5, 0.0]),
+                'nomax valid elements',
+            )
+
+
 def test_table_iter():
     """
     Test iterating over rows of a table

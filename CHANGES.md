@@ -1,5 +1,22 @@
 # Changes
 
+## Unreleased
+
+New Features
+
+- Added `TableHDU.read_variable_columns` to read variable length columns
+  together with their true per-row lengths and a per-row
+  `ObservationStatus`.  The lengths come from the column descriptors, so
+  valid elements never have to be guessed from the values: zero padding in
+  the fixed size (matrix) storage stays distinguishable from real measured
+  zeros.  A caller-specified validity column marks each row as
+  observed/completed or not observed; rows marked not observed with a
+  non-zero descriptor length are reported as `CONTRADICTORY`, and files
+  without a validity column report the zero length rows as `UNKNOWN`
+  rather than merging the completed-empty and not-observed states.  Both
+  the `object` and `fixed` storage forms return identical valid elements,
+  lengths and status.  Existing read methods are unchanged.
+
 ## 1.4.3
 
 New Features

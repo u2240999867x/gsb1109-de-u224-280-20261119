@@ -23,7 +23,9 @@ See the main docs at https://github.com/esheldon/fitsio
 
 from __future__ import with_statement, print_function
 import copy
+import enum
 import warnings
+from collections import namedtuple
 from functools import reduce
 
 import numpy as np
@@ -45,6 +47,145 @@ from .base import HDUBase, ASCII_TBL, IMAGE_HDU, _hdu_type_map
 # for python3 compat
 if IS_PY3:
     xrange = range
+
+
+class ObservationStatus(enum.IntEnum):
+    """
+    Per-row observation status returned by
+    TableHDU.read_variable_columns.
+
+    The status combines the true length of the variable length data
+    (from the column descriptors, never guessed from the values) with
+    the caller-specified validity column, when one is available.
+
+    UNKNOWN
+        No evidence is available, e.g. files written without a validity
+        column where a zero length array cannot be identified as a
+        completed, empty observation or an unobserved row.
+    OBSERVED
+        The row holds a non-empty data array.
+    COMPLETED_EMPTY
+        The observation completed and was confirmed to contain no
+        signal: the array has zero length and the validity column marks
+        the row as observed.
+    NOT_OBSERVED
+        The row was not observed: the array has zero length and the
+        validity column marks the row as not observed.
+    CONTRADICTORY
+        The validity column marks the row as not observed, but the
+        column descriptor holds a non-zero length.  Such records are
+        kept queryable rather than silently merged with other states.
+    """
+
+    UNKNOWN = 0
+    OBSERVED = 1
+    COMPLETED_EMPTY = 2
+    NOT_OBSERVED = 3
+    CONTRADICTORY = 4
+
+
+class VariableColumnRead(
+    namedtuple('VariableColumnRead', ['data', 'lengths', 'status'])
+):
+    """
+    Result of TableHDU.read_variable_columns.
+
+    attributes
+    ----------
+    data: recarray
+        The requested columns.  Variable length columns are stored
+        either as zero padded fixed size arrays or as object arrays,
+        depending on vstorage.  In the fixed size case, elements beyond
+        the true length of a row are padding; use lengths to tell them
+        apart from real measured (zero) values.
+    lengths: dict
+        Maps each variable length column name to an int64 array holding
+        the true length of the array stored in each row, in the same
+        row order as data.  Each column gets its own lengths, so
+        columns with different length bounds are tracked independently.
+    status: array
+        Per-row ObservationStatus, in the same row order as data.
+    """
+
+    __slots__ = ()
+
+
+# string values accepted for validity columns
+_OBSERVED_TRUE_STRINGS = set(
+    [
+        '1',
+        'true',
+        't',
+        'yes',
+        'y',
+        'observed',
+        'complete',
+        'completed',
+        'valid',
+    ]
+)
+_OBSERVED_FALSE_STRINGS = set(
+    [
+        '0',
+        'false',
+        'f',
+        'no',
+        'n',
+        'unobserved',
+        'not_observed',
+        'not-observed',
+        'invalid',
+        'none',
+        '',
+    ]
+)
+
+
+def _validity_to_observed(value):
+    """
+    Convert a validity column entry to True (observed/completed),
+    False (not observed), or raise a ValueError for unrecognized values
+    """
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+
+    if isinteger(value):
+        return bool(value != 0)
+
+    if isinstance(value, (float, np.floating)):
+        return bool(value != 0.0)
+
+    if IS_PY3 and isinstance(value, bytes):
+        value = value.decode('ascii')
+
+    if isstring(value):
+        sval = value.strip().lower()
+        if sval in _OBSERVED_TRUE_STRINGS:
+            return True
+        if sval in _OBSERVED_FALSE_STRINGS:
+            return False
+        raise ValueError(
+            "cannot interpret validity column value '%s'" % (value,)
+        )
+
+    raise ValueError("cannot interpret validity column value '%s'" % (value,))
+
+
+def _get_observation_status(length, observed):
+    """
+    Combine a true array length with a validity flag (or None when no
+    validity column is available) into an ObservationStatus
+    """
+    if length > 0:
+        if observed is not None and not observed:
+            return ObservationStatus.CONTRADICTORY
+        return ObservationStatus.OBSERVED
+
+    if observed is None:
+        return ObservationStatus.UNKNOWN
+    if observed:
+        return ObservationStatus.COMPLETED_EMPTY
+    return ObservationStatus.NOT_OBSERVED
 
 
 class TableHDU(HDUBase):
@@ -1211,6 +1352,120 @@ class TableHDU(HDUBase):
 
         return array
 
+    def read_variable_columns(
+        self,
+        columns,
+        rows=None,
+        vstorage=None,
+        validity_column=None,
+    ):
+        """
+        Read variable length columns together with the true per-row
+        array lengths and a per-row observation status.
+
+        The true lengths come from the column descriptors, so valid
+        elements never have to be guessed from the values: trailing
+        zeros measured in the data stay distinguishable from zero
+        padding when a fixed size (padded) matrix is requested.
+
+        parameters
+        ----------
+        columns: list/array
+            The columns to read.  At least one must be a variable
+            length column.  The first variable length column (in table
+            column order) determines, together with the validity
+            column, the per-row observation status.
+        rows: list/array, optional
+            An optional set of rows to read.  Rows may be given in any
+            order; all outputs follow the requested order.
+        vstorage: string, optional
+            Over-ride the default method to store variable length
+            columns.  Can be 'fixed' (zero padded matrix) or 'object'.
+            Both forms yield identical valid elements, lengths and
+            status.  If a column has no maximum size in its TFORM and
+            'fixed' storage is requested, that column is read as an
+            object array (with a warning); the reported lengths and
+            status are unaffected.
+        validity_column: string/int, optional
+            The name or number of a column marking each row as
+            observed/completed (truthy) or not observed (falsy).  If
+            the column is also listed in columns it is returned in
+            data as well.  For files without such a column, leave as
+            None; rows without data then get ObservationStatus.UNKNOWN
+            since the two zero length states cannot be told apart.
+
+        returns
+        -------
+        A VariableColumnRead named tuple with fields data, lengths and
+        status.  lengths maps each variable length column name to its
+        own array of true per-row lengths; status holds the per-row
+        ObservationStatus.
+        """
+
+        if self._info['hdutype'] == ASCII_TBL:
+            raise ValueError(
+                'variable length columns are not supported for ASCII tables'
+            )
+
+        colnums = self._extract_colnums(columns)
+        if not isinstance(colnums, np.ndarray):
+            # a scalar was sent; work with a recarray anyway so that
+            # lengths and status can be reported per column
+            colnums = np.array([colnums], dtype='i8')
+
+        rows_sorted, sortind = self._extract_rows(rows)
+
+        dtype, offsets, isvar = self.get_rec_dtype(
+            colnums=colnums, vstorage=vstorage
+        )
+
+        (wvar,) = np.where(isvar == True)  # noqa
+        if wvar.size == 0:
+            raise ValueError(
+                'no variable length columns found in %s' % (columns,)
+            )
+
+        if vstorage is None:
+            _vstorage = self._vstorage
+        else:
+            _vstorage = vstorage
+
+        lengths = {}
+        array = self._read_rec_with_var(
+            colnums,
+            rows_sorted,
+            sortind,
+            dtype,
+            offsets,
+            isvar,
+            _vstorage,
+            lengths=lengths,
+        )
+
+        if validity_column is not None:
+            # read_column applies the requested row order itself
+            vdata = self.read_column(validity_column, rows=rows)
+            observed = [_validity_to_observed(v) for v in vdata]
+        else:
+            observed = [None] * len(array)
+
+        # the first variable length column decides, with the validity
+        # column, whether a row holds data
+        primary_name = array.dtype.names[wvar[0]]
+        primary_lengths = lengths[primary_name]
+
+        status = np.zeros(len(array), dtype='i8')
+        for i in xrange(len(array)):
+            status[i] = _get_observation_status(
+                primary_lengths[i], observed[i]
+            )
+
+        return VariableColumnRead(
+            data=array,
+            lengths=lengths,
+            status=status,
+        )
+
     def read_slice(
         self,
         firstrow,
@@ -1539,7 +1794,15 @@ class TableHDU(HDUBase):
         return descr, isvar
 
     def _read_rec_with_var(
-        self, colnums, rows, sortind, dtype, offsets, isvar, vstorage
+        self,
+        colnums,
+        rows,
+        sortind,
+        dtype,
+        offsets,
+        isvar,
+        vstorage,
+        lengths=None,
     ):
         """
         Read columns from a table into a rec array, including variable length
@@ -1549,6 +1812,12 @@ class TableHDU(HDUBase):
         accounting for strides appropriately.
 
         row and column numbers should be checked before calling this function
+
+        If lengths is not None it must be a dict, and it is filled with
+        the true per-row length of each variable length column, keyed by
+        column name, in the caller-requested row order.  The lengths are
+        taken from the column descriptors, independent of how the data
+        are stored in the output array.
         """
 
         colnumsp = colnums + 1
@@ -1606,6 +1875,16 @@ class TableHDU(HDUBase):
                     is_string = True
                 else:
                     is_string = False
+
+                if lengths is not None:
+                    # true lengths from the descriptors, mapped to the
+                    # caller-requested row order
+                    these_lengths = np.zeros(len(dlist), dtype='i8')
+                    for irow, item in enumerate(dlist):
+                        if sortind is not None:
+                            irow = sortind[irow]
+                        these_lengths[irow] = len(item)
+                    lengths[name] = these_lengths
 
                 if array[name].dtype.descr[0][1][1] == 'O':
                     # storing in object array
