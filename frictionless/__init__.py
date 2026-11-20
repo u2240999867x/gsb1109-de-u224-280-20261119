@@ -13,6 +13,7 @@ from .actions import convert as convert
 from .actions import describe as describe
 from .actions import extract as extract
 from .actions import list as list
+from .actions import relocate as relocate
 from .actions import transform as transform
 from .actions import validate as validate
 from .analyzer import Analyzer as Analyzer
@@ -29,6 +30,11 @@ from .indexer import Indexer as Indexer
 from .inquiry import Inquiry as Inquiry
 from .inquiry import InquiryTask as InquiryTask
 from .metadata import Metadata as Metadata
+from .migration import Relocation as Relocation
+from .migration import RelocationError as RelocationError
+from .migration import RelocationMapping as RelocationMapping
+from .migration import RelocationResult as RelocationResult
+from .migration import relocate_package as relocate_package
 from .package import Package as Package
 from .pipeline import Pipeline as Pipeline
 from .pipeline import Step as Step

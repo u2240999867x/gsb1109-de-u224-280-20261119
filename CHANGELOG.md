@@ -2,6 +2,14 @@
 
 Here described only the breaking and most significant changes. The full changelog and documentation for all released versions could be found in nicely formatted [commit history](https://github.com/frictionlessdata/frictionless-py/commits/main).
 
+## Unreleased
+
+- feat: `relocate` publishes selected resources of several packages into a new
+  package, carrying foreign-key dependencies and keeping same-named resources
+  (e.g. each package's own `codes` dictionary) separate; the source packages
+  are only read, a `relocation.json` manifest records the source/target
+  mapping, and an incomplete relation is refused before anything is written
+
 ## v5.21.0
 
 - feat: Data Package v2, support `exclusiveMinimum`, `exclusiveMaximum` 

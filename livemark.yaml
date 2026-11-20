@@ -37,6 +37,7 @@ pages:
         - path: docs/guides/extracting-data
         - path: docs/guides/validating-data
         - path: docs/guides/transforming-data
+        - path: docs/guides/relocating-data
     - name: Working in Console
       items:
         - path: docs/console/overview
@@ -48,6 +49,7 @@ pages:
         - path: docs/console/list
         - path: docs/console/publish
         - path: docs/console/query
+        - path: docs/console/relocate
         - path: docs/console/script
         - path: docs/console/validate
     - name: Working in Python

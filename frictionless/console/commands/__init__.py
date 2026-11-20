@@ -9,6 +9,7 @@ from . import (
     list,
     publish,
     query,
+    relocate,
     script,
     summary,
     transform,
