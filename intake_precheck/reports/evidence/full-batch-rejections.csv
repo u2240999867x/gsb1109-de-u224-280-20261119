@@ -1,0 +1,4 @@
+arrival_date,note,quantity,remark,tail_note
+2026-11-18T08:30:00+09:00,late-arrival,1250.75,,tail-a
+2026-11-20,,1500,,tail-c
+,delayed-manifest,300,,tail-d

@@ -1,0 +1,117 @@
+{
+  "source": "/Users/guo/Documents/GSB/1109/batches/de-u224-280-20261119/control/questions/GSB1109-20261119-U224-DE-PY-100/workspace/intake_precheck/data/batch-arrival-2026-11-21.csv",
+  "contract_schema": "contract/inbound-contract.schema.json",
+  "scope": "partial",
+  "confirmed_range": "data rows 1..4 (of the scanned input)",
+  "scanned_rows": 4,
+  "truncated": true,
+  "limit": 4,
+  "legacy_date_sample_at_entry": [
+    {
+      "row_number": 1,
+      "field_name": "arrival_date",
+      "raw_cell": "2026-11-14"
+    },
+    {
+      "row_number": 2,
+      "field_name": "arrival_date",
+      "raw_cell": "2026-11-15"
+    },
+    {
+      "row_number": 3,
+      "field_name": "arrival_date",
+      "raw_cell": "2026-11-16"
+    }
+  ],
+  "verdict_under_saved_contract": "accepted-within-confirmed-range",
+  "column_profiles": [
+    {
+      "field_name": "arrival_date",
+      "contract_type": "date",
+      "total_cells": 4,
+      "blank_cells": 0,
+      "non_blank_cells": 4,
+      "entirely_blank": false,
+      "rejection_count": 0,
+      "earliest_rejection": null
+    },
+    {
+      "field_name": "note",
+      "contract_type": "string",
+      "total_cells": 4,
+      "blank_cells": 3,
+      "non_blank_cells": 1,
+      "entirely_blank": false,
+      "rejection_count": 0,
+      "earliest_rejection": null
+    },
+    {
+      "field_name": "quantity",
+      "contract_type": "number",
+      "total_cells": 4,
+      "blank_cells": 0,
+      "non_blank_cells": 4,
+      "entirely_blank": false,
+      "rejection_count": 0,
+      "earliest_rejection": null
+    },
+    {
+      "field_name": "remark",
+      "contract_type": "string",
+      "total_cells": 4,
+      "blank_cells": 4,
+      "non_blank_cells": 0,
+      "entirely_blank": true,
+      "rejection_count": 0,
+      "earliest_rejection": null
+    },
+    {
+      "field_name": "tail_note",
+      "contract_type": "string",
+      "total_cells": 4,
+      "blank_cells": 4,
+      "non_blank_cells": 0,
+      "entirely_blank": true,
+      "rejection_count": 0,
+      "earliest_rejection": null
+    }
+  ],
+  "rejections": [],
+  "rejected_rows": [],
+  "candidate_inference": {
+    "status": "hint-only, not used for any verdict",
+    "descriptor": {
+      "fields": [
+        {
+          "name": "arrival_date",
+          "type": "date"
+        },
+        {
+          "name": "note",
+          "type": "string"
+        },
+        {
+          "name": "quantity",
+          "type": "number"
+        },
+        {
+          "name": "remark",
+          "type": "any"
+        },
+        {
+          "name": "tail_note",
+          "type": "any"
+        }
+      ]
+    },
+    "warnings": [
+      "Column \"remark\" is entirely blank in the scanned range: there is no value to infer a type from. The detector's fallback entry is not evidence of a type change; the blank cells remain missing values under the saved contract.",
+      "Column \"tail_note\" is entirely blank in the scanned range: there is no value to infer a type from. The detector's fallback entry is not evidence of a type change; the blank cells remain missing values under the saved contract.",
+      "Only 4 of 8 expected rows have arrived; the inferred descriptor covers the confirmed head only."
+    ]
+  },
+  "evidence": {
+    "rejections_csv": null,
+    "rejections_jsonl": null
+  }
+}

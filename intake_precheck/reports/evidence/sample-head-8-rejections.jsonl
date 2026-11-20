@@ -1,0 +1,4 @@
+{"row_number": 5, "field_name": "arrival_date", "field_number": 1, "reason": "type", "note": "type is \"date/default\"", "raw_cell": "2026-11-18T08:30:00+09:00", "raw_row": ["2026-11-18T08:30:00+09:00", "late-arrival", "1250.75", "", "tail-a"]}
+{"row_number": 5, "field_name": "quantity", "field_number": 3, "reason": "constraint", "note": "constraint \"maximum\" is \"1000\"", "raw_cell": "1250.75", "raw_row": ["2026-11-18T08:30:00+09:00", "late-arrival", "1250.75", "", "tail-a"]}
+{"row_number": 7, "field_name": "quantity", "field_number": 3, "reason": "constraint", "note": "constraint \"maximum\" is \"1000\"", "raw_cell": "1500", "raw_row": ["2026-11-20", "", "1500", "", "tail-c"]}
+{"row_number": 8, "field_name": "arrival_date", "field_number": 1, "reason": "missing", "note": "constraint \"required\" is \"True\"", "raw_cell": "", "raw_row": ["", "delayed-manifest", "300", "", "tail-d"]}

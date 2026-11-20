@@ -1,0 +1,204 @@
+{
+  "source": "/Users/guo/Documents/GSB/1109/batches/de-u224-280-20261119/control/questions/GSB1109-20261119-U224-DE-PY-100/workspace/intake_precheck/data/batch-arrival-2026-11-21.csv",
+  "contract_schema": "contract/inbound-contract.schema.json",
+  "scope": "full",
+  "confirmed_range": "data rows 1..8 (of the scanned input)",
+  "scanned_rows": 8,
+  "truncated": false,
+  "limit": 8,
+  "legacy_date_sample_at_entry": [
+    {
+      "row_number": 1,
+      "field_name": "arrival_date",
+      "raw_cell": "2026-11-14"
+    },
+    {
+      "row_number": 2,
+      "field_name": "arrival_date",
+      "raw_cell": "2026-11-15"
+    },
+    {
+      "row_number": 3,
+      "field_name": "arrival_date",
+      "raw_cell": "2026-11-16"
+    }
+  ],
+  "verdict_under_saved_contract": "rejected",
+  "column_profiles": [
+    {
+      "field_name": "arrival_date",
+      "contract_type": "date",
+      "total_cells": 8,
+      "blank_cells": 1,
+      "non_blank_cells": 7,
+      "entirely_blank": false,
+      "rejection_count": 2,
+      "earliest_rejection": {
+        "row_number": 5,
+        "field_name": "arrival_date",
+        "field_number": 1,
+        "reason_family": "type",
+        "reason_title": "type cast failure",
+        "note": "type is \"date/default\"",
+        "raw_cell": "2026-11-18T08:30:00+09:00"
+      }
+    },
+    {
+      "field_name": "note",
+      "contract_type": "string",
+      "total_cells": 8,
+      "blank_cells": 5,
+      "non_blank_cells": 3,
+      "entirely_blank": false,
+      "rejection_count": 0,
+      "earliest_rejection": null
+    },
+    {
+      "field_name": "quantity",
+      "contract_type": "number",
+      "total_cells": 8,
+      "blank_cells": 0,
+      "non_blank_cells": 8,
+      "entirely_blank": false,
+      "rejection_count": 2,
+      "earliest_rejection": {
+        "row_number": 5,
+        "field_name": "quantity",
+        "field_number": 3,
+        "reason_family": "constraint",
+        "reason_title": "constraint violation",
+        "note": "constraint \"maximum\" is \"1000\"",
+        "raw_cell": "1250.75"
+      }
+    },
+    {
+      "field_name": "remark",
+      "contract_type": "string",
+      "total_cells": 8,
+      "blank_cells": 8,
+      "non_blank_cells": 0,
+      "entirely_blank": true,
+      "rejection_count": 0,
+      "earliest_rejection": null
+    },
+    {
+      "field_name": "tail_note",
+      "contract_type": "string",
+      "total_cells": 8,
+      "blank_cells": 4,
+      "non_blank_cells": 4,
+      "entirely_blank": false,
+      "rejection_count": 0,
+      "earliest_rejection": null
+    }
+  ],
+  "rejections": [
+    {
+      "row_number": 5,
+      "field_name": "arrival_date",
+      "field_number": 1,
+      "reason_family": "type",
+      "reason_title": "type cast failure",
+      "note": "type is \"date/default\"",
+      "raw_cell": "2026-11-18T08:30:00+09:00"
+    },
+    {
+      "row_number": 5,
+      "field_name": "quantity",
+      "field_number": 3,
+      "reason_family": "constraint",
+      "reason_title": "constraint violation",
+      "note": "constraint \"maximum\" is \"1000\"",
+      "raw_cell": "1250.75"
+    },
+    {
+      "row_number": 7,
+      "field_name": "quantity",
+      "field_number": 3,
+      "reason_family": "constraint",
+      "reason_title": "constraint violation",
+      "note": "constraint \"maximum\" is \"1000\"",
+      "raw_cell": "1500"
+    },
+    {
+      "row_number": 8,
+      "field_name": "arrival_date",
+      "field_number": 1,
+      "reason_family": "missing",
+      "reason_title": "missing value",
+      "note": "constraint \"required\" is \"True\"",
+      "raw_cell": ""
+    }
+  ],
+  "rejected_rows": [
+    {
+      "row_number": 5,
+      "raw_row": [
+        "2026-11-18T08:30:00+09:00",
+        "late-arrival",
+        "1250.75",
+        "",
+        "tail-a"
+      ],
+      "rejection_count": 2
+    },
+    {
+      "row_number": 7,
+      "raw_row": [
+        "2026-11-20",
+        "",
+        "1500",
+        "",
+        "tail-c"
+      ],
+      "rejection_count": 1
+    },
+    {
+      "row_number": 8,
+      "raw_row": [
+        "",
+        "delayed-manifest",
+        "300",
+        "",
+        "tail-d"
+      ],
+      "rejection_count": 1
+    }
+  ],
+  "candidate_inference": {
+    "status": "hint-only, not used for any verdict",
+    "descriptor": {
+      "fields": [
+        {
+          "name": "arrival_date",
+          "type": "string"
+        },
+        {
+          "name": "note",
+          "type": "string"
+        },
+        {
+          "name": "quantity",
+          "type": "number"
+        },
+        {
+          "name": "remark",
+          "type": "any"
+        },
+        {
+          "name": "tail_note",
+          "type": "string"
+        }
+      ]
+    },
+    "warnings": [
+      "Column \"remark\" is entirely blank in the scanned range: there is no value to infer a type from. The detector's fallback entry is not evidence of a type change; the blank cells remain missing values under the saved contract.",
+      "Column \"arrival_date\" has saved-contract rejections (missing, type); review the candidate type only as a renegotiation hint, never as grounds to accept this batch.",
+      "Column \"quantity\" has saved-contract rejections (constraint); review the candidate type only as a renegotiation hint, never as grounds to accept this batch."
+    ]
+  },
+  "evidence": {
+    "rejections_csv": "/Users/guo/Documents/GSB/1109/batches/de-u224-280-20261119/control/questions/GSB1109-20261119-U224-DE-PY-100/workspace/intake_precheck/reports/evidence/sample-head-8-rejections.csv",
+    "rejections_jsonl": "/Users/guo/Documents/GSB/1109/batches/de-u224-280-20261119/control/questions/GSB1109-20261119-U224-DE-PY-100/workspace/intake_precheck/reports/evidence/sample-head-8-rejections.jsonl"
+  }
+}

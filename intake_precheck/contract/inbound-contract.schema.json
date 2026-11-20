@@ -1,0 +1,38 @@
+{
+  "$schema": "https://frictionlessdata.io/schemas/table-schema.json",
+  "fields": [
+    {
+      "name": "arrival_date",
+      "type": "date",
+      "format": "default",
+      "constraints": {
+        "required": true
+      },
+      "description": "Mandatory arrival date only. Default format is %Y-%m-%d; a value carrying a time or timezone does not cast to a date, and a blank cell is a missing-value violation rather than a different type."
+    },
+    {
+      "name": "note",
+      "type": "string",
+      "missingValues": ["", "N/A"],
+      "description": "Free text note. Blank cells and the literal token N/A are both accepted as missing (null)."
+    },
+    {
+      "name": "quantity",
+      "type": "number",
+      "constraints": {
+        "maximum": 1000
+      },
+      "description": "Full numeric value. It still casts as a number above the bound, but any value greater than 1000 violates the maximum constraint."
+    },
+    {
+      "name": "remark",
+      "type": "string",
+      "description": "Reserved text column. The actual batch happens to be entirely blank here; blank cells stay missing and must not be reported as a type change."
+    },
+    {
+      "name": "tail_note",
+      "type": "string",
+      "description": "Text column whose leading fragment is blank and whose actual values only arrive in later rows. A blank head must not be interpreted as a type change."
+    }
+  ]
+}
