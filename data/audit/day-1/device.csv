@@ -1,0 +1,7 @@
+device_no,name,model,status,location
+D-001,Alpha  Pump,AP-100,running,North
+D-002,Beta Pump,BP-200,running,South
+D-003,Gamma Pump,GP-300,stopped,East
+D-004,Delta Pump,DP-400,running,West
+D-005,Epsilon Pump,EP-500,stopped,North
+D-009,Iota Pump,IP-900,running,North

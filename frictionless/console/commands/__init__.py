@@ -1,5 +1,6 @@
 # Register modules
 from . import (
+    audit,
     convert,
     describe,
     explore,

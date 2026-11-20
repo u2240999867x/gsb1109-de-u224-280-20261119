@@ -1,0 +1,97 @@
+{
+  "name": "device-audit-day-1",
+  "profile": "data-package",
+  "x-audit": {
+    "coverage": {
+      "device": {
+        "complete": true
+      },
+      "maintenance": {
+        "complete": true
+      }
+    }
+  },
+  "resources": [
+    {
+      "name": "device",
+      "path": "device.csv",
+      "schema": {
+        "fields": [
+          {
+            "name": "device_no",
+            "type": "string"
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "model",
+            "type": "string"
+          },
+          {
+            "name": "status",
+            "type": "string"
+          },
+          {
+            "name": "location",
+            "type": "string"
+          }
+        ],
+        "primaryKey": [
+          "device_no"
+        ]
+      },
+      "profile": "tabular-data-resource"
+    },
+    {
+      "name": "maintenance",
+      "path": "maintenance.csv",
+      "schema": {
+        "fields": [
+          {
+            "name": "work_order",
+            "type": "string"
+          },
+          {
+            "name": "device_no",
+            "type": "string"
+          },
+          {
+            "name": "technician",
+            "type": "string"
+          },
+          {
+            "name": "result",
+            "type": "string"
+          }
+        ],
+        "primaryKey": [
+          "work_order"
+        ]
+      },
+      "profile": "tabular-data-resource"
+    },
+    {
+      "name": "stats",
+      "path": "stats.csv",
+      "profile": "tabular-data-resource",
+      "schema": {
+        "fields": [
+          {
+            "name": "region",
+            "type": "string"
+          },
+          {
+            "name": "devices",
+            "type": "integer"
+          },
+          {
+            "name": "running",
+            "type": "integer"
+          }
+        ]
+      }
+    }
+  ]
+}

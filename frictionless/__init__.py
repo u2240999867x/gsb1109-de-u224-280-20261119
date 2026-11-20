@@ -16,6 +16,7 @@ from .actions import list as list
 from .actions import transform as transform
 from .actions import validate as validate
 from .analyzer import Analyzer as Analyzer
+from .auditing import audit as audit
 from .catalog import Catalog as Catalog
 from .catalog import Dataset as Dataset
 from .checklist import Check as Check

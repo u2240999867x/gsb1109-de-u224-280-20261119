@@ -1,0 +1,194 @@
+{
+  "tables": {
+    "device": {
+      "old": {
+        "resource": "device",
+        "mode": "natural"
+      },
+      "new": {
+        "resource": "device",
+        "mode": "surrogate"
+      },
+      "key": [
+        "deviceNo"
+      ],
+      "columns": {
+        "deviceNo": {
+          "old": "device_no",
+          "new": "asset_code",
+          "normalize": {
+            "old": [
+              "strip",
+              "upper"
+            ],
+            "new": [
+              "strip",
+              "upper",
+              {
+                "replace": {
+                  "pattern": "[^A-Z0-9]+",
+                  "with": "-",
+                  "literal": false
+                }
+              },
+              {
+                "replace": {
+                  "pattern": "^([A-Z])-?([0-9])$",
+                  "with": "\\1-00\\2",
+                  "literal": false
+                }
+              }
+            ]
+          },
+          "compare": "source"
+        },
+        "name": {
+          "old": "name",
+          "new": "label",
+          "normalize": [
+            "collapse_whitespace"
+          ],
+          "compare": "normalized"
+        },
+        "model": {
+          "old": "model",
+          "new": "model_name",
+          "compare": "source"
+        },
+        "status": {
+          "old": "status",
+          "new": "state",
+          "normalize": {
+            "old": [
+              "strip",
+              "lower"
+            ],
+            "new": [
+              "strip",
+              "lower"
+            ]
+          },
+          "compare": "normalized"
+        },
+        "location": {
+          "old": "location",
+          "new": "site",
+          "normalize": [
+            "strip"
+          ],
+          "compare": "normalized"
+        }
+      },
+      "references": [
+        {
+          "holding": "maintenance",
+          "column": "deviceNo"
+        }
+      ]
+    },
+    "maintenance": {
+      "old": {
+        "resource": "maintenance",
+        "mode": "natural"
+      },
+      "new": {
+        "resource": "maintenance",
+        "mode": "natural"
+      },
+      "key": [
+        "workOrder"
+      ],
+      "columns": {
+        "workOrder": {
+          "old": "work_order",
+          "new": "work_order",
+          "normalize": [
+            "strip",
+            "upper"
+          ]
+        },
+        "deviceNo": {
+          "old": "device_no",
+          "new": "device_no",
+          "normalize": {
+            "old": [
+              "strip",
+              "upper"
+            ],
+            "new": [
+              "strip",
+              "upper",
+              {
+                "replace": {
+                  "pattern": "[^A-Z0-9]+",
+                  "with": "-",
+                  "literal": false
+                }
+              },
+              {
+                "replace": {
+                  "pattern": "^([A-Z])-?([0-9])$",
+                  "with": "\\1-00\\2",
+                  "literal": false
+                }
+              }
+            ]
+          }
+        },
+        "technician": {
+          "old": "technician",
+          "new": "technician",
+          "compare": "normalized"
+        },
+        "result": {
+          "old": "result",
+          "new": "result",
+          "normalize": [
+            "strip",
+            "lower"
+          ],
+          "compare": "normalized"
+        }
+      }
+    },
+    "stats": {
+      "old": {
+        "resource": "stats",
+        "mode": "natural"
+      },
+      "new": {
+        "resource": "stats",
+        "mode": "natural"
+      },
+      "key": [
+        "region"
+      ],
+      "stats": true,
+      "columns": {
+        "region": {
+          "old": "region",
+          "new": "region",
+          "normalize": [
+            "strip"
+          ]
+        },
+        "devices": {
+          "old": "devices",
+          "new": "devices",
+          "normalize": [
+            "to_int"
+          ],
+          "compare": "normalized"
+        },
+        "running": {
+          "old": "running",
+          "new": "running",
+          "normalize": [
+            "to_int"
+          ],
+          "compare": "normalized"
+        }
+      }
+    }
+  }
+}

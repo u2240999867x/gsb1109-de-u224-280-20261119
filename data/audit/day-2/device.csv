@@ -1,0 +1,8 @@
+asset_code,label,model_name,state,site
+D-001,Alpha Pump,AP-100,RUNNING,North
+D-002,Beta Pump,BP-200,running,South
+D-004,Delta Pump,dp-400,RUNNING,West
+D-005,Epsilon Pump,EP-500,STOPPED,North
+D-6,Zeta Pump,ZP-600,RUNNING,East
+D_6,Six Pump,ZP-600,RUNNING,East
+D-007,Eta Pump,ZP-700,RUNNING,South

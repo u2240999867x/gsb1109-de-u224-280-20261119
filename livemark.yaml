@@ -37,6 +37,7 @@ pages:
         - path: docs/guides/extracting-data
         - path: docs/guides/validating-data
         - path: docs/guides/transforming-data
+        - path: docs/guides/auditing-snapshots
     - name: Working in Console
       items:
         - path: docs/console/overview
