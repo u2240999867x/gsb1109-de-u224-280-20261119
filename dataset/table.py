@@ -677,6 +677,54 @@ class Table:
                 return True
         return False
 
+    @staticmethod
+    def _is_partial_index(index: dict[str, Any]) -> bool:
+        """Check if a reflected index only covers a subset of the rows."""
+        sources = [index]
+        options = index.get("dialect_options")
+        if isinstance(options, dict):
+            sources.append(options)
+        for source in sources:
+            for key, value in source.items():
+                if key.endswith("_where") and value is not None:
+                    return True
+        return False
+
+    def _has_unique_index(self, columns: Sequence[str]) -> bool:
+        """Check if a full-table unique constraint exists on ``columns``.
+
+        Unlike :py:meth:`has_index`, this inspects the live database on every
+        call (no caching) and only matches constraints that are unique, cover
+        exactly the given columns in the same order, and apply to all rows
+        (i.e. are not partial indexes).
+        """
+        if not self.exists:
+            return False
+        columns_ = [self._get_column_name(c) for c in columns]
+        indexes = self.db.inspect.get_indexes(self.name, schema=self.db.schema)
+        for index in indexes:
+            if not index.get("unique"):
+                continue
+            if list(index.get("column_names") or []) != columns_:
+                continue
+            if self._is_partial_index(index):
+                continue
+            return True
+        try:
+            uniques = self.db.inspect.get_unique_constraints(
+                self.name, schema=self.db.schema
+            )
+        except NotImplementedError:
+            uniques = []
+        for constraint in uniques:
+            if list(constraint.get("column_names") or []) == columns_:
+                return True
+        if self.table.primary_key is not None:
+            pk_columns = [c.name for c in self.table.primary_key.columns]
+            if pk_columns == columns_:
+                return True
+        return False
+
     def create_index(
         self, columns: Sequence[str], name: str | None = None, **kw: object
     ) -> None:
@@ -686,6 +734,13 @@ class Table:
         ::
 
             table.create_index(['name', 'country'])
+
+        When ``unique=True`` is passed, an existing index is only considered
+        sufficient if it is itself unique, covers exactly the given columns
+        in the same order, and applies to the whole table (i.e. it is not a
+        partial index). If a concurrent connection has already created an
+        equivalent index, it is accepted as-is; genuine failures, such as
+        duplicate key values in the table, are raised to the caller.
         """
         columns = [self._get_column_name(c) for c in ensure_strings(columns)]
         with self.db.lock:
@@ -696,24 +751,40 @@ class Table:
                 if not self.has_column(column):
                     return
 
-            if not self.has_index(columns):
-                self._threading_warn()
-                name = name or index_name(self.name, columns)
-                columns_ = [self.table.c[c] for c in columns]
+            unique = bool(kw.get("unique"))
+            if unique:
+                if self._has_unique_index(columns):
+                    return
+            elif self.has_index(columns):
+                return
 
-                # MySQL crashes out if you try to index very long text fields,
-                # apparently. This defines (a somewhat random) prefix that
-                # will be captured by the index, after which I assume the engine
-                # conducts a more linear scan:
-                mysql_length = {}
-                for col in columns_:
-                    if isinstance(col.type, MYSQL_LENGTH_TYPES):
-                        mysql_length[col.name] = 10
-                kw["mysql_length"] = mysql_length
+            self._threading_warn()
+            name = name or index_name(self.name, columns)
+            columns_ = [self.table.c[c] for c in columns]
 
-                idx = Index(name, *columns_, **kw)  # type: ignore[arg-type]
+            # MySQL crashes out if you try to index very long text fields,
+            # apparently. This defines (a somewhat random) prefix that
+            # will be captured by the index, after which I assume the engine
+            # conducts a more linear scan:
+            mysql_length = {}
+            for col in columns_:
+                if isinstance(col.type, MYSQL_LENGTH_TYPES):
+                    mysql_length[col.name] = 10
+            kw["mysql_length"] = mysql_length
+
+            idx = Index(name, *columns_, **kw)  # type: ignore[arg-type]
+            try:
                 idx.create(self.db.executable)
-                self.db._auto_commit()
+            except Exception:
+                # A concurrent connection may have created an equivalent
+                # index in the meantime. Re-inspect the live schema before
+                # reporting the failure to the caller.
+                if unique and not self.db.in_transaction:
+                    self.db.executable.rollback()
+                    if self._has_unique_index(columns):
+                        return
+                raise
+            self.db._auto_commit()
 
     def find(
         self,

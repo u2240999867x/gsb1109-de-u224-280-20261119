@@ -449,3 +449,70 @@ def test_key_order(db, table):
 def test_empty_query(table):
     empty = list(table.find(place="not in data"))
     assert len(empty) == 0, empty
+
+
+def test_create_unique_index_concurrent_and_stale_cache(tmp_path):
+    import sqlalchemy
+
+    import dataset
+
+    url = "sqlite:///" + str(tmp_path / "ingest.db")
+    rows = [
+        {"source": "a", "recdate": "2026-01-01", "revoked": False},
+        {"source": "b", "recdate": "2026-01-02", "revoked": False},
+    ]
+
+    setup = dataset.connect(url)
+    table = setup["ingest"]
+    table.insert_many(rows)
+    # A reversed plain index and a partial unique index already exist:
+    setup.executable.execute(
+        sqlalchemy.text("CREATE INDEX ix_plain ON ingest (recdate, source)")
+    )
+    setup.executable.execute(
+        sqlalchemy.text(
+            "CREATE UNIQUE INDEX ix_partial ON ingest (source, recdate) "
+            "WHERE revoked = 0"
+        )
+    )
+    setup.executable.commit()
+    # The import process previously ran a plain coverage check:
+    assert table.has_index(["source", "recdate"]) is True
+
+    # Two independent connections ensure the full unique constraint:
+    db1 = dataset.connect(url)
+    db2 = dataset.connect(url)
+    tbl1 = db1["ingest"]
+    tbl2 = db2["ingest"]
+    tbl1.create_index(["source", "recdate"], unique=True)
+    tbl2.create_index(["source", "recdate"], unique=True)
+
+    indexes = db1.inspect.get_indexes("ingest")
+    full = [
+        i
+        for i in indexes
+        if i.get("unique")
+        and i["column_names"] == ["source", "recdate"]
+        and i["dialect_options"].get("sqlite_where") is None
+    ]
+    assert len(full) == 1, indexes
+    names = {i["name"] for i in indexes}
+    assert {"ix_plain", "ix_partial"} <= names
+
+    # Another connection drops the constraint and inserts duplicate keys:
+    db3 = dataset.connect(url)
+    db3.executable.execute(sqlalchemy.text(f"DROP INDEX {full[0]['name']}"))
+    db3.executable.commit()
+    db3["ingest"].insert_many(
+        [
+            {"source": "a", "recdate": "2026-01-01", "revoked": True},
+            {"source": "a", "recdate": "2026-01-01", "revoked": True},
+        ]
+    )
+
+    # The stale Table object must surface the real conflict, not cached state:
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        tbl1.create_index(["source", "recdate"], unique=True)
+
+    for conn in (setup, db1, db2, db3):
+        conn.close()
