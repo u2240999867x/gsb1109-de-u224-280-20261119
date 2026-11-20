@@ -820,6 +820,66 @@ class MSGFile:
 
         return value
 
+    def getStreamManifest(self, expected = None, prefix: bool = True,
+                          digest: Optional[str] = 'sha256'):
+        """
+        Builds an inventory of the streams in this message without retaining
+        their contents.
+
+        Each entry identifies the message storage that owns the stream, the
+        stream's full path in the original file, its path relative to that
+        owner, its byte length, and a digest of the bytes that were read.
+        Streams that are absent or cannot be read are reported with distinct
+        statuses. See :mod:`extract_msg.audit` for details.
+
+        :param expected: Optional iterable of stream paths to include even if
+            they do not exist. Such entries have the ``missing`` status. A
+            path that exists elsewhere in the original file is reported with
+            its actual owner and ``inScope = False``.
+        :param prefix: If ``True`` (default), values in ``expected`` are
+            relative to this message's prefix. If ``False``, they are full
+            paths from the root of the original file.
+        :param digest: A ``hashlib`` algorithm name, or ``None`` to disable
+            digests. Digests are only produced for streams that were read
+            successfully.
+
+        :raises ReferenceError: The file has already been closed.
+        """
+        from ..audit import buildStreamManifest
+        return buildStreamManifest(self, expected, prefix, digest)
+
+    def streamManifest(self, expected = None, prefix: bool = True,
+                       digest: Optional[str] = 'sha256'):
+        """Alias for :meth:`getStreamManifest`."""
+        return self.getStreamManifest(expected, prefix, digest)
+
+    def buildStreamManifest(self, expected = None, prefix: bool = True,
+                            digest: Optional[str] = 'sha256'):
+        """Alias for :meth:`getStreamManifest`."""
+        return self.getStreamManifest(expected, prefix, digest)
+
+    def getStreamManifestEntry(self, path, prefix: bool = True,
+                               digest: Optional[str] = 'sha256'):
+        """
+        Builds a single stream manifest entry for ``path``.
+
+        ``prefix`` has the same meaning as for :meth:`getStream`. A stream
+        that does not exist still returns an entry, with the ``missing``
+        status.
+        """
+        from ..audit import buildStreamManifestEntry
+        return buildStreamManifestEntry(self, path, prefix, digest)
+
+    def get_stream_manifest(self, expected = None, prefix: bool = True,
+                            digest: Optional[str] = 'sha256'):
+        """Snake-case alias for :meth:`getStreamManifest`."""
+        return self.getStreamManifest(expected, prefix, digest)
+
+    def stream_manifest(self, expected = None, prefix: bool = True,
+                        digest: Optional[str] = 'sha256'):
+        """Snake-case alias for :meth:`getStreamManifest`."""
+        return self.getStreamManifest(expected, prefix, digest)
+
     def listDir(self, streams: bool = True, storages: bool = False, includePrefix: bool = True) -> Tuple[MSGPath, ...]:
         """
         Replacement for ``OleFileIO.listdir`` that runs at the current prefix

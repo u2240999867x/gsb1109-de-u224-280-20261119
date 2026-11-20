@@ -17,6 +17,14 @@ Subpackages
 Submodules
 ----------
 
+extract\_msg.audit module
+-------------------------
+
+.. automodule:: extract_msg.audit
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 extract\_msg.enums module
 -------------------------
 

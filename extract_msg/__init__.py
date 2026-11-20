@@ -33,14 +33,17 @@ __version__ = '0.58.2'
 __all__ = [
     # Modules:
     'attachments',
+    'audit',
     'constants',
     'enums',
     'exceptions',
+    'manifest',
     'msg_classes',
     'msg_path',
     'open_msg',
     'null_date',
     'properties',
+    'stream_manifest',
     'structures',
     'utils',
 
@@ -56,10 +59,24 @@ __all__ = [
     'PropertiesStore',
     'Recipient',
     'SignedAttachment',
+    'AuditManifest',
+    'StreamEntry',
+    'StreamInfo',
+    'StreamListing',
+    'StreamManifest',
+    'StreamRecord',
+    'StreamState',
+    'StreamStatus',
 
     # Functions:
+    'buildStreamManifest',
+    'buildStreamManifestEntry',
+    'getStreamManifest',
+    'getStreamManifestEntry',
+    'manifestFromPath',
     'openMsg',
     'openMsgBulk',
+    'streamManifest',
 ]
 
 
@@ -67,8 +84,14 @@ __all__ = [
 from . import constants, enums, exceptions
 from . import utils
 
-from . import attachments, msg_classes, null_date, properties, structures
+from . import attachments, audit, manifest, msg_classes, null_date, properties, stream_manifest, structures
 from .attachments import Attachment, AttachmentBase, SignedAttachment
+from .audit import (
+        AuditManifest, buildStreamManifest, buildStreamManifestEntry,
+        getStreamManifest, getStreamManifestEntry, manifestFromPath,
+        streamManifest, StreamEntry, StreamInfo, StreamListing, StreamManifest,
+        StreamRecord, StreamState, StreamStatus
+    )
 from .msg_classes import Message, MSGFile
 from .msg_path import MSGPath
 from .ole_writer import OleWriter

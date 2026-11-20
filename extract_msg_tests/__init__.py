@@ -1,5 +1,6 @@
 __all__ = [
     'AttachmentTests',
+    'AuditManifestTests',
     'CommandLineTests',
     'MessageTests',
     'MSGBaseTests',
@@ -13,6 +14,7 @@ __all__ = [
 ]
 
 from .attachment_tests import AttachmentTests
+from .audit_tests import AuditManifestTests
 from .cmd_line_tests import CommandLineTests
 from .message_tests import MessageTests
 from .msg_base_tests import MSGBaseTests

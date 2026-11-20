@@ -142,6 +142,37 @@ own, simply change the code to:
 
 where ``CustomAttachmentClass`` is your custom class.
 
+Stream manifests
+----------------
+
+An audit can inventory the physical streams without keeping their contents:
+
+::
+
+     manifest = msg.getStreamManifest()
+     manifest.save("streams.json")
+
+Each entry records the owning message storage, the full source path, the path
+relative to that owner, the byte length, and a SHA-256 digest of the bytes that
+were read.  ``status`` is one of ``ok``, ``zero_bytes``, ``missing``, or
+``read_error``; a digest is only present for ``ok`` and ``zero_bytes``.  Entries
+are ordered by source path and read failures are isolated to the affected
+stream.
+
+To check an expected list, including a stream that should not be present:
+
+::
+
+     inner_manifest = embedded_msg.getStreamManifest(
+         expected = ["__substg1.0_0037001F", "__substg1.0_1000001F"],
+     )
+
+Paths in ``expected`` are relative to ``embedded_msg`` by default.  Pass
+``prefix = False`` to use full paths from the root of the original file instead;
+both forms resolve to the same source paths.  A named-property definition stored
+at the root is reported once with the root as its owner and is not duplicated
+into each embedded message that can refer to it.
+
 #TODO: Finish this section
 
 If you have any questions feel free to contact Destiny at arceusthe [at]
