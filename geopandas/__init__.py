@@ -17,6 +17,7 @@ from geopandas.tools import (
     clip,
     geocode,
     make_grid,
+    reassemble_parts,
     reverse_geocode,
 )
 from geopandas.tools._show_versions import show_versions

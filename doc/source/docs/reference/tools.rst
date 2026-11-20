@@ -7,6 +7,7 @@ Tools
    :toctree: api/
 
    make_grid
+   reassemble_parts
    sjoin
    sjoin_nearest
    overlay

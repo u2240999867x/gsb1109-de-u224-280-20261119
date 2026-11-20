@@ -2,6 +2,14 @@
 
 ## Development version
 
+New features and improvements:
+
+- Added ``geopandas.reassemble_parts`` (``geopandas.tools.reassemble_parts``) to
+  merge reviewed single-part geometries back into one geometry per facility,
+  keyed by a stable business identifier, an optional revision and the original
+  part position, with conflicting, missing and explicitly deleted parts
+  reported separately.
+
 Bug fixes:
 
 - Fix the colorbar being shrunk when plotting with a ``"compressed"`` matplotlib
