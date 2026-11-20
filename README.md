@@ -710,6 +710,32 @@ result table  location  temperature
 1  _result     1    Prague         25.3
 ```
 
+##### Merging multiple Flux tables
+
+`query_data_frame` returns a separate `DataFrame` per Flux table when their schemas differ. Use
+`query_merged_data_frame` to explicitly merge compatible tables into one `DataFrame`. The tables to
+merge are chosen with `DataFrameMergeConfig` by the source result name (the `result` column) and by
+group key values:
+
+``` python
+from influxdb_client.client.flux_data_frame import DataFrameMergeConfig, select_source_rows
+
+# merge only the compatible group of one source result
+config = DataFrameMergeConfig(result_names=["_result"], groups=[{"location": "Prague"}])
+data_frame = query_api.query_merged_data_frame(query, config=config)
+
+# every row keeps its source result name and group key
+prague_rows = select_source_rows(data_frame, "_result", {"location": "Prague"})
+```
+
+The merged `DataFrame` keeps the original Flux column declaration as the Pandas data type, so a
+nullable `long` stays `Int64` (including integers beyond the binary floating point precision) and is
+never silently cast to `float64` or `object`. The origin of each row is available in the
+`_flux_result` and `_flux_group` columns while the group key columns remain ordinary output columns.
+Tables that declare a different data type for the same column name raise
+`FluxMergedDataFrameException`, which names both source tables and the conflicting declarations;
+exclude the incompatible group (or result) with `DataFrameMergeConfig` to merge the rest.
+
 <!-- marker-pandas-end -->
 
 ### Examples

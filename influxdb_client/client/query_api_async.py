@@ -6,6 +6,7 @@ Flux is InfluxData’s functional data scripting language designed for querying,
 from typing import List, AsyncGenerator
 
 from influxdb_client.client._base import _BaseQueryApi
+from influxdb_client.client.flux_data_frame import DataFrameMergeConfig, merge_tables_to_data_frame
 from influxdb_client.client.flux_table import FluxRecord, TableList
 from influxdb_client.client.query_api import QueryOptions
 from influxdb_client.rest import _UTF_8_encoding, ApiException
@@ -162,6 +163,30 @@ class QueryApiAsync(_BaseQueryApi):
             dataframes.append(dataframe)
 
         return self._to_data_frames(dataframes)
+
+    async def query_merged_data_frame(self, query: str, config: DataFrameMergeConfig = None, org=None,
+                                      data_frame_index: List[str] = None, params: dict = None):
+        """
+        Execute asynchronous Flux query and merge the selected tables into one Pandas DataFrame.
+
+        Behaves like :meth:`influxdb_client.client.query_api.QueryApi.query_merged_data_frame`:
+        :class:`~influxdb_client.client.flux_data_frame.DataFrameMergeConfig` selects the source
+        result names and group keys to merge, each row keeps its origin in the ``_flux_result`` and
+        ``_flux_group`` columns and conflicting column declarations raise
+        :class:`~influxdb_client.client.flux_data_frame.FluxMergedDataFrameException`.
+
+        :param query: the Flux query
+        :param config: selection of source result names and group keys; ``None`` merges every table
+        :param str, Organization org: specifies the organization for executing the query;
+                                      Take the ``ID``, ``Name`` or ``Organization``.
+                                      If not specified the default value from ``InfluxDBClientAsync.org`` is used.
+        :param data_frame_index: the list of columns that are used as DataFrame index
+        :param params: bind parameters
+        :return: one :class:`~DataFrame` containing the records of all selected compatible tables
+        :rtype: DataFrame
+        """  # noqa: E501
+        tables = await self.query(query, org=org, params=params)
+        return merge_tables_to_data_frame(tables, config=config, data_frame_index=data_frame_index)
 
     async def query_data_frame_stream(self, query: str, org=None, data_frame_index: List[str] = None,
                                       params: dict = None, use_extension_dtypes: bool = False):

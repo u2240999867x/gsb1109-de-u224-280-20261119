@@ -1,5 +1,9 @@
 ## 1.51.0 [unreleased]
 
+### Features
+
+1. [#733](https://github.com/influxdata/influxdb-client-python/pull/733): Add `QueryApi.query_merged_data_frame` to merge selected Flux tables into one Pandas DataFrame. `DataFrameMergeConfig` selects tables by source result name and group key; the result keeps the original Flux column declarations (nullable `long` stays `Int64`, even beyond binary floating point precision), the source result and group key per row, and raises `FluxMergedDataFrameException` with the exact conflicting tables and declarations instead of coercing to `object`/`float64`.
+
 ### Documentation
 
 1. [#721](https://github.com/influxdata/influxdb-client-python/pull/721): Add examples for configure TLS/mTLS for the Influxdb client.

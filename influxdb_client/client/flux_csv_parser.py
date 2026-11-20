@@ -32,6 +32,30 @@ class FluxCsvParserException(Exception):
     pass
 
 
+def _convert_flux_value(str_val, data_type):
+    """Convert a non-empty annotated-CSV token according to its Flux data type."""
+    if "string" == data_type:
+        return str_val
+
+    if "boolean" == data_type:
+        return "true" == str_val
+
+    if "unsignedLong" == data_type or "long" == data_type:
+        return int(str_val)
+
+    if "double" == data_type:
+        return float(str_val)
+
+    if "base64Binary" == data_type:
+        return base64.b64decode(str_val)
+
+    if "dateTime:RFC3339" == data_type or "dateTime:RFC3339Nano" == data_type:
+        return get_date_helper().parse_date(str_val)
+
+    if "duration" == data_type:
+        return int(str_val)
+
+
 class FluxSerializationMode(Enum):
     """The type how we want to serialize data."""
 
@@ -305,27 +329,12 @@ class FluxCsvParser(object):
                 return None
             return self._to_value(default_value, column)
 
-        if "string" == column.data_type:
-            return str_val
+        return self._convert_flux_value(str_val, column.data_type)
 
-        if "boolean" == column.data_type:
-            return "true" == str_val
-
-        if "unsignedLong" == column.data_type or "long" == column.data_type:
-            return int(str_val)
-
-        if "double" == column.data_type:
-            return float(str_val)
-
-        if "base64Binary" == column.data_type:
-            return base64.b64decode(str_val)
-
-        if "dateTime:RFC3339" == column.data_type or "dateTime:RFC3339Nano" == column.data_type:
-            return get_date_helper().parse_date(str_val)
-
-        if "duration" == column.data_type:
-            # todo better type ?
-            return int(str_val)
+    @staticmethod
+    def _convert_flux_value(str_val, data_type):
+        """Convert a non-empty CSV token according to a Flux column data type."""
+        return _convert_flux_value(str_val, data_type)
 
     @staticmethod
     def add_data_types(table, data_types):

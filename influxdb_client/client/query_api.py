@@ -8,6 +8,7 @@ from typing import List, Generator, Any, Callable
 
 from influxdb_client import Dialect
 from influxdb_client.client._base import _BaseQueryApi
+from influxdb_client.client.flux_data_frame import DataFrameMergeConfig, merge_tables_to_data_frame
 from influxdb_client.client.flux_table import FluxRecord, TableList, CSVIterator
 
 
@@ -259,6 +260,54 @@ class QueryApi(_BaseQueryApi):
         _generator = self.query_data_frame_stream(query, org=org, data_frame_index=data_frame_index, params=params,
                                                   use_extension_dtypes=use_extension_dtypes)
         return self._to_data_frames(_generator)
+
+    def query_merged_data_frame(self, query: str, config: DataFrameMergeConfig = None, org=None,
+                                data_frame_index: List[str] = None, params: dict = None):
+        """
+        Execute synchronous Flux query and merge the selected tables into one Pandas DataFrame.
+
+        Unlike :meth:`query_data_frame`, which returns a separate DataFrame for every Flux table
+        with a differing schema, this always returns one DataFrame. The tables to merge are chosen
+        by :class:`~influxdb_client.client.flux_data_frame.DataFrameMergeConfig` using the source
+        result name (the ``result`` column) and the group key values.
+
+        Every row keeps its origin in two additional columns:
+
+        * ``_flux_result`` - the source result name,
+        * ``_flux_group`` - the source group key as a ``{column: value}`` mapping.
+
+        Group key columns (for example ``host``) remain regular output columns. The original Flux
+        column declarations drive the Pandas data types, so nullable ``long`` values keep
+        ``Int64`` (including integers beyond the binary floating point precision) instead of being
+        silently cast to ``float64`` or ``object``. Tables declaring different data types for the
+        same column name cannot be merged; :class:`~influxdb_client.client.flux_data_frame.FluxMergedDataFrameException`
+        names both source tables and the conflicting declarations. Use
+        :func:`~influxdb_client.client.flux_data_frame.select_source_rows` to get the rows of one
+        source table back from the merged result.
+
+        :param query: the Flux query
+        :param config: selection of source result names and group keys; ``None`` merges every table
+        :param str, Organization org: specifies the organization for executing the query;
+                                      Take the ``ID``, ``Name`` or ``Organization``.
+                                      If not specified the default value from ``InfluxDBClient.org`` is used.
+        :param data_frame_index: the list of columns that are used as DataFrame index
+        :param params: bind parameters
+        :return: one :class:`~DataFrame` containing the records of all selected compatible tables
+        :rtype: DataFrame
+
+        .. code-block:: python
+
+            from influxdb_client import InfluxDBClient
+            from influxdb_client.client.flux_data_frame import DataFrameMergeConfig, select_source_rows
+
+            with InfluxDBClient(url="http://localhost:8086", token="my-token", org="my-org") as client:
+                # merge only the compatible group of one source result
+                config = DataFrameMergeConfig(result_names=["_result"], groups=[{"host": "north"}])
+                data_frame = client.query_api().query_merged_data_frame(query, config=config)
+                rows = select_source_rows(data_frame, "_result", {"host": "north"})
+        """  # noqa: E501
+        tables = self.query(query, org=org, params=params)
+        return merge_tables_to_data_frame(tables, config=config, data_frame_index=data_frame_index)
 
     def query_data_frame_stream(self, query: str, org=None, data_frame_index: List[str] = None, params: dict = None,
                                 use_extension_dtypes: bool = False):
