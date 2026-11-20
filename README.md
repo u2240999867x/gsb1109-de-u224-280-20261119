@@ -471,6 +471,17 @@ if d.frozen:
 ```python
 # Group a list of dicts at key by the value of the given by_key and return a new dict.
 g = d.groupby("cities", by_key="country_code")
+
+# Group by multiple keys; each key can fall back to a legacy key when it is
+# missing (explicit None and [] values never fall back).
+g = d.groupby(
+    "invoices",
+    by_key=["source", "billing.category"],
+    fallback_keys={"billing.category": "billing.legacy_category"},
+)
+
+# Compare two groupings and return only the groups whose members changed.
+changes = g.diff(previous_g, identity_key="source_line")
 ```
 
 #### `invert`

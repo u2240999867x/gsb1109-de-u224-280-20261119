@@ -211,12 +211,28 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
     ) -> Any:
         return self._cast(super().get_list_item(key, index, default, separator))
 
-    def groupby(self, key: _KPT, by_key: _KPT) -> Self:
+    def groupby(
+        self,
+        key: _KPT,
+        by_key: Any = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Self:
         """
         Group a list of dicts at key by the value of the given by_key and return a new dict.
+
+        Multiple keys can be passed as a list/tuple in by_key; fallback keys
+        are only used when the primary key is missing.
         """
-        result = _groupby(self[key], by_key)
-        keypath_util.check_keys(result, self._keypath_separator)
+        result = _groupby(
+            self[key],
+            by_key,
+            *args,
+            separator=self._keypath_separator,
+            **kwargs,
+        )
+        if not isinstance(result, dict) or not getattr(result, "composite", False):
+            keypath_util.check_keys(result, self._keypath_separator)
         return cast("Self", self._cast(result))
 
     def invert(self, flat: bool = False) -> Self:
