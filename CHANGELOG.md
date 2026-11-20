@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Add
+  [`datajudge.WithinRequirement.add_date_no_overlap_2d_heterogeneous_constraint`][datajudge.requirements.WithinRequirement.add_date_no_overlap_2d_heterogeneous_constraint]
+  for detecting rows whose date ranges overlap simultaneously in two date
+  dimensions. The two dimensions may use different end-inclusion semantics
+  (e.g. an inclusive business end and an exclusive version-visibility end), a
+  `NULL` end denotes a still-open range, and every reported pair is accompanied
+  by the recomputable intersection in both dimensions.
+- The new two-dimensional overlap detection is symmetric, so its selected
+  pairs and intersections do not depend on input row ordering, and it also
+  detects overlaps where the ordering of the interval starts differs between
+  the two dimensions.
+
 ## 1.13.0 - 2026.01.21
 
 - Deprecate `sqlalchemy` <2.0.0.

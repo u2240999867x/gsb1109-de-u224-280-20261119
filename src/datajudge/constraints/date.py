@@ -217,6 +217,106 @@ class DateNoOverlap2d(NoOverlapConstraint):
         return result, assertion_text
 
 
+class DateNoOverlap2dHeterogeneous(Constraint):
+    """Two-dimensional no-overlap with per-dimension end inclusion and open ends.
+
+    Unlike :class:`DateNoOverlap2d`, the two date dimensions may use different
+    end-inclusion semantics and a ``NULL`` end denotes an interval that is still
+    open (unbounded). Every reported violation additionally carries the
+    recomputable intersection of the two intervals in both dimensions.
+    """
+
+    _DIMENSIONS = 2
+
+    def __init__(
+        self,
+        ref: DataReference,
+        key_columns: list[str] | None,
+        start_columns: list[str],
+        end_columns: list[str],
+        max_relative_n_violations: float,
+        end_included: list[bool] | bool,
+        identifier_columns: list[str] | None = None,
+        name: str | None = None,
+        cache_size=None,
+    ):
+        super().__init__(ref, ref_value=object(), name=name, cache_size=cache_size)
+        self._key_columns = key_columns
+        self._identifier_columns = identifier_columns
+        self._start_columns = start_columns
+        self._end_columns = end_columns
+        self._max_relative_n_violations = max_relative_n_violations
+        if isinstance(end_included, bool):
+            self._end_included = [end_included] * self._DIMENSIONS
+        else:
+            self._end_included = list(end_included)
+        if len(self._start_columns) != self._DIMENSIONS:
+            raise ValueError(
+                f"Expected {self._DIMENSIONS} start columns, got "
+                f"{len(self._start_columns)}."
+            )
+        if len(self._end_columns) != self._DIMENSIONS:
+            raise ValueError(
+                f"Expected {self._DIMENSIONS} end columns, got "
+                f"{len(self._end_columns)}."
+            )
+        if len(self._end_included) != self._DIMENSIONS:
+            raise ValueError(
+                f"Expected {self._DIMENSIONS} end-inclusion flags, got "
+                f"{len(self._end_included)}."
+            )
+
+    def _retrieve(
+        self, engine: sa.engine.Engine, ref: DataReference
+    ) -> tuple[tuple[int, int], _OptionalSelections]:
+        keys_ref = DataReference(
+            data_source=self._ref.data_source,
+            columns=self._key_columns,
+            condition=self._ref.condition,
+        )
+        n_distinct_key_values, n_keys_selections = db_access.get_unique_count(
+            engine, keys_ref
+        )
+
+        sample_selection, n_violations_selection = (
+            db_access.get_interval_overlaps_nd_with_intersection(
+                engine,
+                ref,
+                self._key_columns,
+                start_columns=self._start_columns,
+                end_columns=self._end_columns,
+                end_included=self._end_included,
+                identifier_columns=self._identifier_columns,
+            )
+        )
+        with engine.connect() as connection:
+            self.sample = connection.execute(sample_selection).first()
+            n_violation_keys = int(
+                str(connection.execute(n_violations_selection).scalar())
+            )
+
+        selections = [*n_keys_selections, sample_selection, n_violations_selection]
+        return (n_violation_keys, n_distinct_key_values), selections
+
+    def _compare(
+        self, value_factual: tuple[int, int], value_target: Any
+    ) -> tuple[bool, str | None]:
+        n_violation_keys, n_distinct_key_values = value_factual
+        if n_distinct_key_values == 0:
+            return True, None
+        violation_fraction = n_violation_keys / n_distinct_key_values
+        assertion_text = (
+            f"{self._ref} has a ratio of {violation_fraction} > "
+            f"{self._max_relative_n_violations} keys in columns {self._key_columns} "
+            f"with overlapping date ranges in {self._start_columns[0]} and "
+            f"{self._end_columns[0]} (end included: {self._end_included[0]}) and "
+            f"{self._start_columns[1]} and {self._end_columns[1]} (end included: "
+            f"{self._end_included[1]}). E.g. for: {self.sample}."
+        )
+        result = violation_fraction <= self._max_relative_n_violations
+        return result, assertion_text
+
+
 class DateNoGap(NoGapConstraint):
     _DIMENSIONS = 1
 

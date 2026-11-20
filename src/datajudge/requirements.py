@@ -902,6 +902,92 @@ class WithinRequirement(Requirement):
             )
         )
 
+    def add_date_no_overlap_2d_heterogeneous_constraint(
+        self,
+        start_column1: str,
+        end_column1: str,
+        start_column2: str,
+        end_column2: str,
+        key_columns: list[str] | None = None,
+        end_included: list[bool] | bool = True,
+        identifier_columns: list[str] | None = None,
+        max_relative_n_violations: float = 0,
+        condition: Condition | None = None,
+        name: str | None = None,
+        cache_size=None,
+    ) -> None:
+        """Express that two date dimensions of rows do not simultaneously overlap.
+
+        A pair of rows violates the constraint only if its intervals have a
+        non-empty intersection in *both* date dimensions. This is useful when an
+        entity (identified by ``key_columns``, e.g. an account) carries two
+        independent date ranges per row, e.g. a business-validity range and a
+        version-visibility range.
+
+        The two dimensions may use different end-inclusion semantics via
+        ``end_included``: pass a single boolean to apply it to both dimensions or
+        a two-element list to set each dimension separately, e.g.
+        ``[True, False]`` for an inclusive business end and an exclusive
+        visibility end. Interval starts are always included.
+
+        A ``NULL`` value in an end column denotes an open interval: an empty
+        business end means the business range is still valid and an empty
+        visibility end means the version is still visible. Such a range never
+        terminates and therefore never prevents an overlap on its own.
+
+        ``identifier_columns`` label the two rows participating in a reported
+        pair (e.g. a unique contract number), exposed as ``<column>_1`` and
+        ``<column>_2``. A row is never compared against itself, but two distinct
+        physical rows are always considered: rows with identical interval columns
+        but different identifiers are reported as one pair, and fully identical
+        duplicate rows are reported as a pair too (exact duplicates are
+        violations, consistent with the other interval overlap constraints). If
+        ``identifier_columns`` is ``None``, all columns of the reference are used
+        to label the pair.
+
+        Every reported violation is accompanied by the recomputable intersection
+        in both dimensions, exposed as ``intersection_start_0``,
+        ``intersection_end_0``, ``intersection_start_1`` and
+        ``intersection_end_1`` in the factual query. An intersection end is
+        ``NULL`` exactly when the intersection is unbounded in that dimension.
+
+        The selection of violating pairs and their intersections is symmetric, so
+        it is invariant to the ordering of the input rows.
+
+        ``max_relative_n_violations`` expresses the fraction of all distinct key
+        values for which at least one overlapping pair may exist.
+        """
+        start_columns = [start_column1, start_column2]
+        end_columns = [end_column1, end_column2]
+        relevant_columns: list[str] = [
+            *start_columns,
+            *end_columns,
+            *(key_columns if key_columns else []),
+            *(identifier_columns if identifier_columns else []),
+        ]
+        # Preserve order while removing duplicates.
+        relevant_columns = list(dict.fromkeys(relevant_columns))
+        ref = DataReference(
+            self._data_source,
+            relevant_columns,
+            condition,
+        )
+        self._constraints.append(
+            date_constraints.DateNoOverlap2dHeterogeneous(
+                ref,
+                key_columns=key_columns,
+                start_columns=start_columns,
+                end_columns=end_columns,
+                end_included=list(end_included)
+                if not isinstance(end_included, bool)
+                else end_included,
+                identifier_columns=identifier_columns,
+                max_relative_n_violations=max_relative_n_violations,
+                name=name,
+                cache_size=cache_size,
+            )
+        )
+
     def add_date_no_gap_constraint(
         self,
         start_column: str,

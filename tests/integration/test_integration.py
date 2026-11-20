@@ -2243,6 +2243,45 @@ def test_date_no_overlap_2d_within_inclusion_exclusion(
 @pytest.mark.parametrize(
     "data",
     [
+        # Account 1 overlaps in both dimensions under mixed end inclusion.
+        (negation, 0, [True, False], Condition(raw_string="account_id = 1")),
+        # It also overlaps when both ends are inclusive.
+        (negation, 0, [True, True], Condition(raw_string="account_id = 1")),
+        # Account 2: identical intervals, distinct contract numbers -> one pair.
+        (negation, 0, [True, False], Condition(raw_string="account_id = 2")),
+        # Account 3 only touches at the visibility end: exclusive -> no overlap.
+        (identity, 0, [True, False], Condition(raw_string="account_id = 3")),
+        # The same rows overlap once the visibility end is inclusive.
+        (negation, 0, [True, True], Condition(raw_string="account_id = 3")),
+        # Across all accounts, accounts 1-3 each carry at least one violating pair.
+        (negation, 0, [True, False], None),
+    ],
+)
+def test_date_no_overlap_2d_heterogeneous_within(
+    engine, date_table_overlap_2d_heterogeneous, data
+):
+    operation, max_relative_n_violations, end_included, condition = data
+    req = requirements.WithinRequirement.from_table(
+        *date_table_overlap_2d_heterogeneous
+    )
+    req.add_date_no_overlap_2d_heterogeneous_constraint(
+        key_columns=["account_id"],
+        start_column1="biz_start",
+        end_column1="biz_end",
+        start_column2="vis_start",
+        end_column2="vis_end",
+        end_included=end_included,
+        identifier_columns=["contract_no"],
+        max_relative_n_violations=max_relative_n_violations,
+        condition=condition,
+    )
+    test_result = req[0].test(engine)
+    assert operation(test_result.outcome), test_result.failure_message
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
         (identity, 0, Condition(raw_string="id1 = 1")),
         (identity, 0, Condition(raw_string="id1 = 2")),
         (identity, 0, Condition(raw_string="id1 = 3")),

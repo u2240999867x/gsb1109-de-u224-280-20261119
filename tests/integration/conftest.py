@@ -440,6 +440,84 @@ def date_table_overlap_2d(engine, metadata):
 
 
 @pytest.fixture(scope="module")
+def date_table_overlap_2d_heterogeneous(engine, metadata):
+    table_name = "date_table_overlap_2d_heterogeneous"
+    columns = [
+        sa.Column("account_id", sa.Integer()),
+        sa.Column("contract_no", _string_column(engine)),
+        sa.Column("biz_start", sa.DateTime()),
+        sa.Column("biz_end", sa.DateTime()),
+        sa.Column("vis_start", sa.DateTime()),
+        sa.Column("vis_end", sa.DateTime()),
+    ]
+    data = []
+    # Account 1: A and B overlap in both dimensions. Business end is inclusive,
+    # visibility end is exclusive. NULL ends denote still-open ranges.
+    # Business intersection is the single day Jan 10; visibility intersection
+    # is [Jan 5, Jan 6), i.e. Jan 5 without the exclusive Jan 6.
+    data += [
+        {
+            "account_id": 1,
+            "contract_no": "A",
+            "biz_start": datetime.datetime(2016, 1, 1),
+            "biz_end": datetime.datetime(2016, 1, 10),
+            "vis_start": datetime.datetime(2016, 1, 5),
+            "vis_end": None,
+        },
+        {
+            "account_id": 1,
+            "contract_no": "B",
+            "biz_start": datetime.datetime(2016, 1, 10),
+            "biz_end": None,
+            "vis_start": datetime.datetime(2016, 1, 3),
+            "vis_end": datetime.datetime(2016, 1, 6),
+        },
+    ]
+    # Account 2: identical intervals but distinct contract numbers. They must
+    # be reported as one pair and never as a self-comparison.
+    data += [
+        {
+            "account_id": 2,
+            "contract_no": "X",
+            "biz_start": datetime.datetime(2016, 1, 1),
+            "biz_end": datetime.datetime(2016, 1, 10),
+            "vis_start": datetime.datetime(2016, 1, 5),
+            "vis_end": datetime.datetime(2016, 1, 8),
+        },
+        {
+            "account_id": 2,
+            "contract_no": "Y",
+            "biz_start": datetime.datetime(2016, 1, 1),
+            "biz_end": datetime.datetime(2016, 1, 10),
+            "vis_start": datetime.datetime(2016, 1, 5),
+            "vis_end": datetime.datetime(2016, 1, 8),
+        },
+    ]
+    # Account 3: visibility intervals only touch at Jan 5. With an exclusive
+    # visibility end there is no shared point, hence no two-dimensional overlap.
+    data += [
+        {
+            "account_id": 3,
+            "contract_no": "C",
+            "biz_start": datetime.datetime(2016, 1, 1),
+            "biz_end": datetime.datetime(2016, 1, 10),
+            "vis_start": datetime.datetime(2016, 1, 1),
+            "vis_end": datetime.datetime(2016, 1, 5),
+        },
+        {
+            "account_id": 3,
+            "contract_no": "D",
+            "biz_start": datetime.datetime(2016, 1, 2),
+            "biz_end": datetime.datetime(2016, 1, 9),
+            "vis_start": datetime.datetime(2016, 1, 5),
+            "vis_end": datetime.datetime(2016, 1, 9),
+        },
+    ]
+    _handle_table(engine, metadata, table_name, columns, data)
+    return TEST_DB_NAME, SCHEMA, table_name
+
+
+@pytest.fixture(scope="module")
 def integer_table_overlap(engine, metadata):
     table_name = "integer_table_overlap"
     columns = [

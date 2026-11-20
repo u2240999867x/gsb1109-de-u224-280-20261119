@@ -153,3 +153,43 @@ ranges in distinct dimensions, respectively:
 
 Analogously to the unidimensional scenario illustrated here, one might care
 for certain constraints in two dimensions.
+
+## Heterogeneous two-dimensional overlap
+
+In some domains the two date dimensions do not share the same semantics. For
+example, a contract may carry a business-validity range whose end date is
+included, and a version-visibility range whose end date is excluded. In
+addition, an empty end date often means that the range is still open: an empty
+business end means the contract is still valid and an empty visibility end
+means the version is still visible.
+
+For this scenario, use
+[`add_date_no_overlap_2d_heterogeneous_constraint`][datajudge.requirements.WithinRequirement.add_date_no_overlap_2d_heterogeneous_constraint].
+Pass `end_included` as a two-element list to control each dimension separately,
+e.g. `[True, False]` for an inclusive business end and an exclusive visibility
+end. A `NULL` end is treated as an unbounded range and never terminates an
+interval on its own.
+
+```python
+contracts_req.add_date_no_overlap_2d_heterogeneous_constraint(
+    start_column1="business_start",
+    end_column1="business_end",
+    start_column2="visibility_start",
+    end_column2="visibility_end",
+    # Group the different versions of the same account together.
+    key_columns=["account_id"],
+    # Business end is inclusive, visibility end is exclusive.
+    end_included=[True, False],
+    # Distinguish individual contracts so that rows are never compared to
+    # themselves, even when their date ranges happen to be identical.
+    identifier_columns=["contract_number"],
+)
+```
+
+Two rows violate the constraint only when their ranges have a non-empty
+intersection in *both* dimensions. Every reported pair additionally exposes
+`intersection_start_0`, `intersection_end_0`, `intersection_start_1` and
+`intersection_end_1`, i.e. the recomputable intersection in each dimension. An
+intersection end is `NULL` exactly when the intersection is unbounded in that
+dimension. The comparison is symmetric, so reversing the order of the input
+rows neither changes the selected pairs nor their intersections.

@@ -472,6 +472,171 @@ def get_interval_overlaps_nd(
     return violation_selection, n_violations_selection
 
 
+def get_interval_overlaps_nd_with_intersection(
+    engine: sa.engine.Engine,
+    ref: DataReference,
+    key_columns: list[str] | None,
+    start_columns: list[str],
+    end_columns: list[str],
+    end_included: list[bool] | bool,
+    identifier_columns: list[str] | None = None,
+) -> tuple[sa.Select, sa.Select]:
+    r"""Create selectables for interval overlaps in n dimensions.
+
+    In contrast to :func:`get_interval_overlaps_nd`, this function
+
+    - treats a ``NULL`` end of an interval as an open, i.e. unbounded, end that
+      never terminates the interval (and hence never prevents an overlap),
+    - allows the end-inclusion semantics to differ between dimensions, and
+    - reports, for every overlapping pair of distinct rows, the recomputable
+      intersection interval in every dimension.
+
+    Two rows qualify as an overlapping pair only if their intervals have a
+    non-empty intersection in *every* dimension. The comparison is symmetric in
+    the two rows, so the result does not depend on the physical ordering of the
+    input rows.
+
+    A row is never compared against itself: every physical row receives a unique
+    row id and each pair of distinct rows is considered exactly once. Hence, two
+    rows with identical interval columns but different identifiers still form a
+    single reported pair, and so do fully identical duplicate rows. The latter
+    mirrors the behavior of the other interval overlap constraints, which treat
+    exact duplicates as violations.
+
+    ``identifier_columns`` only label the two rows of a reported pair in the
+    output (``<column>_1`` and ``<column>_2``); they default to all columns of
+    the reference.
+
+    ``end_included`` may be a single boolean, applied to every dimension, or a
+    list with one boolean per dimension. An included end makes the interval
+    closed on its end (``end >= other_start``); an excluded end makes it
+    half-open on its end (``end > other_start``). Interval starts are always
+    included.
+
+    The returned sample selection contains one row per overlapping pair. In
+    addition to the key, identifier and interval columns of both rows, it
+    exposes ``intersection_start_k`` and ``intersection_end_k`` columns for
+    every dimension ``k``. An intersection end is ``NULL`` if and only if the
+    intersection is unbounded in that dimension, i.e. both input ends are
+    ``NULL``.
+    """
+    if is_snowflake(engine):
+        if key_columns:
+            key_columns = lowercase_column_names(key_columns)
+        if identifier_columns:
+            identifier_columns = lowercase_column_names(identifier_columns)
+        start_columns = lowercase_column_names(start_columns)
+        end_columns = lowercase_column_names(end_columns)
+    if len(start_columns) != len(end_columns):
+        raise ValueError(
+            f"Expected same dimensionality for start_columns and end_columns. "
+            f"Instead, start_columns has dimensionality {len(start_columns)} and "
+            f"end_columns has dimensionality {len(end_columns)}."
+        )
+    dimensionality = len(start_columns)
+    if isinstance(end_included, bool):
+        end_included_by_dimension = [end_included] * dimensionality
+    else:
+        if len(end_included) != dimensionality:
+            raise ValueError(
+                "Expected end_included to be a boolean or to contain one boolean "
+                f"per dimension ({dimensionality}), got {len(end_included)} values."
+            )
+        end_included_by_dimension = list(end_included)
+
+    base_selection = ref.get_selection(engine)
+    base = base_selection.subquery()
+    all_column_names = [column.name for column in base.columns]
+    if not identifier_columns:
+        identifier_columns = list(all_column_names)
+
+    # A stable row id lets us pair every two distinct rows exactly once and,
+    # crucially, never pairs a row with itself.
+    row_id = (
+        sa.func.row_number()
+        .over(order_by=[base.c[name] for name in all_column_names])
+        .label("__row_id__")
+    )
+    numbered = sa.select(base, row_id).subquery()
+    table1 = numbered.alias()
+    table2 = numbered.alias()
+
+    join_conditions: list[sa.ColumnElement] = [
+        table1.c["__row_id__"] < table2.c["__row_id__"]
+    ]
+    if key_columns:
+        join_conditions += [
+            table1.c[key_column] == table2.c[key_column] for key_column in key_columns
+        ]
+
+    intersection_columns: list[sa.ColumnElement] = []
+    for dimension in range(dimensionality):
+        start_column = start_columns[dimension]
+        end_column = end_columns[dimension]
+        start1 = table1.c[start_column]
+        end1 = table1.c[end_column]
+        start2 = table2.c[start_column]
+        end2 = table2.c[end_column]
+        end_operator = (
+            operator.ge if end_included_by_dimension[dimension] else operator.gt
+        )
+        # An interval with a NULL end is unbounded and therefore never fails the
+        # "my end reaches the other interval's start" requirement.
+        overlap_in_dimension = sa.and_(
+            sa.or_(end1.is_(None), end_operator(end1, start2)),
+            sa.or_(end2.is_(None), end_operator(end2, start1)),
+        )
+        join_conditions.append(overlap_in_dimension)
+
+        intersection_start = sa.case((start1 >= start2, start1), else_=start2).label(
+            f"intersection_start_{dimension}"
+        )
+        intersection_end = sa.case(
+            (end1.is_(None), end2),
+            (end2.is_(None), end1),
+            (end1 <= end2, end1),
+            else_=end2,
+        ).label(f"intersection_end_{dimension}")
+        intersection_columns += [intersection_start, intersection_end]
+
+    key_columns_table1 = (
+        [table1.c[key_column] for key_column in key_columns] if key_columns else []
+    )
+    identifier_columns_table1 = [
+        table1.c[column].label(f"{column}_1") for column in identifier_columns
+    ]
+    identifier_columns_table2 = [
+        table2.c[column].label(f"{column}_2") for column in identifier_columns
+    ]
+    interval_columns = [
+        table.c[column]
+        for table in [table1, table2]
+        for column in [*start_columns, *end_columns]
+    ]
+
+    sample_selection = sa.select(
+        *key_columns_table1,
+        *identifier_columns_table1,
+        *identifier_columns_table2,
+        *interval_columns,
+        *intersection_columns,
+    ).select_from(table1.join(table2, sa.and_(*join_conditions)))
+
+    sample_subquery = sample_selection.subquery()
+    if key_columns:
+        violating_keys = [sample_subquery.c[key] for key in key_columns]
+        distinct_violating_keys = (
+            sa.select(*violating_keys).group_by(*violating_keys).subquery()
+        )
+    else:
+        distinct_violating_keys = sa.select(sample_subquery).distinct().subquery()
+    n_violations_selection = sa.select(sa.func.count()).select_from(
+        distinct_violating_keys
+    )
+
+    return sample_selection, n_violations_selection
+
+
 def _not_in_interval_condition(
     main_table: sa.Table | sa.Subquery,
     helper_table: sa.Table | sa.Subquery,
