@@ -163,6 +163,58 @@ def test_load_dicts(testdb_conn, test_tables, test_table_data_dict):
     assert result == test_table_data_dict
 
 
+@pytest.mark.parametrize('chunk_size', [5, 2, 1])
+def test_load_missing_columns_uses_database_defaults(testdb_conn, chunk_size):
+    # Arrange
+    create_sql = dedent("""
+        CREATE TABLE field_log
+          (
+            audit_seq integer primary key autoincrement,
+            label text not null,
+            remark text default '待检查' check (remark != '禁止')
+          )
+        """).strip()
+    execute(create_sql, testdb_conn)
+
+    rows = [
+        {'label': 'A'},
+        {'label': 'B', 'remark': '自有备注'},
+        {'label': 'C', 'remark': '禁止'},
+        {'label': 'D'},
+        {'label': 'E', 'remark': None},
+    ]
+
+    # Act
+    errors = []
+    processed, failed = load('field_log', testdb_conn, iter(rows),
+                             on_error=errors.extend,
+                             chunk_size=chunk_size,
+                             allow_missing_columns=True)
+
+    # Assert
+    result = fetchall("SELECT label, remark FROM field_log ORDER BY audit_seq",
+                      testdb_conn)
+
+    assert processed == len(rows)
+    assert failed == 1
+    assert [row['label'] for row in result] == ['A', 'B', 'D', 'E']
+    assert [row['remark'] for row in result] == ['待检查', '自有备注', '待检查', None]
+    assert [row[0]['label'] for row in errors] == ['C']
+    assert len(errors[0]) == 2
+
+
+def test_load_missing_columns_disabled_by_default(testdb_conn, test_tables):
+    # Arrange
+    rows = [{'id': 10, 'value': 1.0, 'simple_text': 'text'},
+            {'id': 11, 'value': 2.0}]
+
+    # Act and assert
+    # Without allow_missing_columns, the first row defines the column set and
+    # the second row cannot provide the required parameter.
+    with pytest.raises(ETLHelperInsertError):
+        load('dest', testdb_conn, rows)
+
+
 def test_generate_insert_sql_tuple(testdb_conn):
     # Act
     data = (1, 'one')

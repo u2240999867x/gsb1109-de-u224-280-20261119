@@ -71,6 +71,30 @@ on_error
 Accepts a Python function that will be applied to failed rows.
 See :ref:`on_error <on_error>` section for details.
 
+allow_missing_columns
+"""""""""""""""""""""
+
+By default, later rows must contain all of the columns in the first row.
+Set ``allow_missing_columns=True`` to allow rows to omit columns.  Omitted
+columns are left out of the INSERT statement so that the database applies its
+DEFAULT expression.  ETL Helper does not evaluate the default value itself.
+A column that is present with a value of ``None`` is inserted as SQL NULL,
+which is different from omitting the column.
+
+Rows with the same columns are inserted together, around rows with different
+columns.  This preserves the original row order for different ``chunk_size``
+values.
+
+.. code:: python
+
+   rows = [
+       {"name": "basalt"},
+       {"name": "granite", "grain_size": "coarse"},
+       {"name": "shale", "grain_size": None},
+   ]
+
+   etl.load("igneous_rock", conn, rows, allow_missing_columns=True)
+
 
 Return values
 -------------

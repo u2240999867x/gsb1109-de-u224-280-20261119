@@ -514,6 +514,7 @@ def load(
         on_error: Optional[Callable] = None,
         commit_chunks: bool = True,
         chunk_size: int = CHUNKSIZE,
+        allow_missing_columns: bool = False,
         ) -> tuple[int, int]:
     """
     Load data from iterable of named tuples or dictionaries into pre-existing
@@ -526,6 +527,13 @@ def load(
     tuples.  on_error is a function that is called at the end of each chunk,
     with the list as the only argument.
 
+    By default, all rows must contain the same columns.  Set
+    ``allow_missing_columns`` to allow dictionaries within the data to omit
+    columns.  Omitted columns are left out of the INSERT statement so that the
+    database applies its DEFAULT expression (the default value is not evaluated
+    or substituted in Python).  A column that is present with a value of
+    ``None`` is inserted as SQL NULL.
+
     :param table: name of table
     :param conn: dbapi connection
     :param rows: iterable of named tuples or dictionaries of data
@@ -534,6 +542,8 @@ def load(
     :param on_error: function to be applied to failed rows in each chunk
     :param commit_chunks: commit after each chunk (see executemany)
     :param chunk_size: size of chunks to group data by
+    :param allow_missing_columns: allow dictionary rows to omit columns so
+                                  that database defaults are used
     :return: the number of rows processed and the number of rows failed
     """
     # Return early if rows is empty
@@ -547,6 +557,21 @@ def load(
         first_row = next(rows)  # This line throws an exception if empty
         rows = chain([first_row], rows)
 
+    except StopIteration:
+        return 0, 0
+
+    if allow_missing_columns:
+        return _load_with_missing_columns(
+            table,
+            conn,
+            rows,
+            transform=transform,
+            on_error=on_error,
+            commit_chunks=commit_chunks,
+            chunk_size=chunk_size,
+        )
+
+    try:
         if transform:
             # next(iter(var)) is equivalent to var[0] but also works for generators,
             # which may be returned by the transform.
@@ -572,6 +597,166 @@ def load(
         chunk_size=chunk_size,
     )
     return processed, failed
+
+
+def _load_with_missing_columns(
+        table: str,
+        conn: Connection,
+        rows: Iterable[InputRow],
+        transform: Optional[Transform] = None,
+        on_error: Optional[Callable] = None,
+        commit_chunks: bool = True,
+        chunk_size: int = CHUNKSIZE,
+        ) -> tuple[int, int]:
+    """
+    Load rows whose columns may vary, leaving omitted columns to be populated
+    by database DEFAULT expressions.
+
+    Contiguous rows with the same columns are inserted together with a
+    statement generated for those columns.  This preserves the original row
+    order, including across different chunk sizes.  If a chunk fails, the
+    chunk is rolled back and retried row-by-row so that ``on_error`` receives
+    only the rows that actually failed.
+    """
+    logger.info("Loading rows with missing columns (chunk_size=%s)", chunk_size)
+    helper = DB_HELPER_FACTORY.from_conn(conn)
+    processed = 0
+    failed = 0
+
+    with helper.cursor(conn) as cursor:
+        for chunk_with_nones in _chunker(rows, chunk_size):
+            raise_for_abort(
+                "abort_etlhelper_threads() called during load")
+
+            # Chunker pads to whole chunk with None; remove these
+            chunk = [row for row in chunk_with_nones if row is not None]
+
+            # Apply transform
+            if transform:
+                # Materialise chunk as list as `transform` can return generator
+                chunk = list(transform(chunk))
+
+            if not chunk:
+                continue
+
+            if processed == 0:
+                logger.debug("First row: %s", chunk[0])
+
+            groups = _group_rows_by_insert(table, conn, chunk)
+
+            # Run each group, keeping the order in which the columns first
+            # appear so that rows are inserted in their original order.
+            try:
+                for query, group in groups:
+                    helper.executemany(cursor, query, group)
+
+            except helper.sql_exceptions as exc:
+                # Rollback the entire chunk before retrying row-by-row.  This
+                # also removes any earlier groups in the chunk that succeeded,
+                # which are re-inserted below in their original order.
+                conn.rollback()
+
+                if on_error:
+                    # Temporarily disable logging
+                    old_level = logger.level
+                    logger.setLevel(logging.ERROR)
+
+                    try:
+                        failed_rows = _execute_by_row_with_columns(
+                            table, conn, chunk)
+                    finally:
+                        # Restore logging
+                        logger.setLevel(old_level)
+
+                    failed += len(failed_rows)
+                    logger.debug("Calling on_error function on %s failed rows",
+                                 failed)
+                    on_error(failed_rows)
+                else:
+                    msg = (f"SQL query raised an error.\n\n{query}\n\n"
+                           f"Required paramstyle: {helper.paramstyle}\n\n{exc}\n")
+                    raise ETLHelperInsertError(msg)
+
+            processed += len(chunk)
+            logger.info('%s rows processed (%s failed)', processed, failed)
+
+            # Commit changes so far
+            if commit_chunks:
+                conn.commit()
+
+    # Commit changes where not already committed
+    if not commit_chunks:
+        conn.commit()
+
+    logger.info(f'{processed} rows processed in total')
+    return processed, failed
+
+
+def _row_type_and_columns(row: Row) -> tuple[str, tuple[str, ...]]:
+    """Return the kind of row and its column names in order."""
+    # Namedtuples use a query with positional placeholders
+    if hasattr(row, '_asdict'):
+        return 'namedtuple', tuple(row._asdict().keys())
+
+    # Dictionaries use a query with named placeholders
+    if hasattr(row, 'keys'):
+        return 'mapping', tuple(row.keys())
+
+    msg = f"Row is not a dictionary or namedtuple ({type(row)})"
+    raise ETLHelperInsertError(msg)
+
+
+def _group_rows_by_insert(
+        table: str,
+        conn: Connection,
+        chunk: Chunk,
+        ) -> list[tuple[str, Chunk]]:
+    """
+    Group contiguous rows that have the same columns, returning a generated
+    INSERT statement and the rows that use it for each group.
+    """
+    groups: list[tuple[str, Chunk]] = []
+    previous_key = None
+
+    for row in chunk:
+        row_type, columns = _row_type_and_columns(row)
+        key = (row_type, columns)
+
+        if not groups or key != previous_key:
+            query = generate_insert_sql(table, row, conn)
+            groups.append((query, []))
+
+        groups[-1][1].append(row)
+        previous_key = key
+
+    return groups
+
+
+def _execute_by_row_with_columns(
+        table: str,
+        conn: Connection,
+        chunk: Chunk
+        ) -> list[FailedRow]:
+    """
+    Retry execution of rows individually using an INSERT statement generated
+    for each row's columns.  Successful inserts are committed.
+
+    :param table: name of table
+    :param conn: dbapi connection
+    :param chunk: list of rows
+    :return: a list failed rows
+    """
+    failed_rows: list[FailedRow] = []
+
+    for row in chunk:
+        try:
+            query = generate_insert_sql(table, row, conn)
+            # Use etlhelper execute to isolate transactions
+            execute(query, conn, parameters=row)
+        except ETLHelperQueryError as exc:
+            failed_rows.append(FailedRow(row, exc))
+
+    return failed_rows
 
 
 def generate_insert_sql(
