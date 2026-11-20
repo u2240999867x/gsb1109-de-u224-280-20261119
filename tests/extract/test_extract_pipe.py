@@ -489,6 +489,42 @@ def test_filter_step() -> None:
     assert _f_items(list(PipeIterator.from_pipe(p))) == [2, [4]]
 
 
+def test_filter_step_metrics() -> None:
+    calls: List[int] = []
+
+    def even(item: int) -> bool:
+        calls.append(item)
+        return item % 2 == 0
+
+    # the filter is named after the callable unless a name is given
+    step = FilterItem(even)
+    assert step.name == "even"
+    assert FilterItem(even, name="valid").name == "valid"
+
+    # items are counted as they are evaluated, the filter runs exactly once per item
+    assert step([1, 2, 3, 4]) == [2, 4]
+    assert calls == [1, 2, 3, 4]
+    assert step.step_metrics == {"items_in": 4, "items_filtered": 2}
+    # single items and lists are counted the same way
+    assert step(5) is None
+    assert step(6) == 6
+    assert step.step_metrics == {"items_in": 6, "items_filtered": 3}
+    # empty lists pass through without counting
+    assert step([]) == []
+    assert step.step_metrics == {"items_in": 6, "items_filtered": 3}
+
+    # an item that raises is counted as received but not as filtered out
+    def boom(item: int) -> bool:
+        if item == 2:
+            raise ValueError("cannot process item")
+        return True
+
+    step = FilterItem(boom)
+    with pytest.raises(ValueError):
+        step([1, 2, 3])
+    assert step.step_metrics == {"items_in": 2, "items_filtered": 0}
+
+
 def test_map_step() -> None:
     p = Pipe.from_data("data", ["A", "B", "C"])
     # doubles all letters

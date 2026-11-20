@@ -905,6 +905,48 @@ resource_metrics = trace.last_extract_info.metrics[load_id][0]["resource_metrics
 print(f"Custom metrics: {resource_metrics.custom_metrics}")
 ```
 
+### Track filtered items with filter step metrics
+
+Every `add_filter` step counts the items it receives and the items it rejects while the data
+flows through the pipe. The counts are reported per resource and filter name in the extract
+info, so you can see exactly at which step records were dropped:
+
+```py
+@dlt.resource
+def orders():
+    yield [{"id": 1, "fmt": "bad"}, {"id": 2, "fmt": "ok"}, {"id": 3, "fmt": "ok"}]
+
+orders.add_filter(lambda order: order["fmt"] == "ok", name="format")
+
+pipeline = dlt.pipeline(
+    pipeline_name="orders",
+    destination="duckdb",
+    dataset_name="orders_data",
+)
+load_info = pipeline.run(orders)
+
+trace = pipeline.last_trace
+load_id = load_info.loads_ids[0]
+resource_metrics = trace.last_extract_info.metrics[load_id][0]["resource_metrics"]["orders"]  # ty: ignore
+
+print(resource_metrics.step_metrics)
+# {"format": {"items_in": 3, "items_filtered": 1}}
+```
+
+- `items_in` counts the items the filter actually received, whether they arrived one by one or
+  in list batches. An item that made the filter function raise is counted here but never as
+  filtered out.
+- `items_filtered` counts the items the filter function rejected.
+
+The filter function is called exactly once per received item to compute these counts. Give each
+filter a `name` to tell several filters apart: two filters with the same name on different
+resources are still reported separately, under their own resource. When the trace is
+[loaded into a destination](../running-in-production/running.md#inspect-and-save-the-load-info-and-trace),
+step metrics are stored as rows of the `resource_metrics__step_metrics` child table.
+
+If an extract attempt fails, its counts are kept in a separate metrics entry for the same load
+id and are not merged into the totals of the successful retry.
+
 ## Load resources
 
 You can pass individual resources or a list of resources to the `dlt.pipeline` object. The resources loaded outside the source context will be added to the [default schema](schema.md) of the pipeline.

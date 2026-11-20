@@ -445,7 +445,7 @@ class DltResource(Iterable[TDataItem], DltResourceHints):
         return self
 
     def add_filter(
-        self, item_filter: ItemTransformFunc[bool], insert_at: int = None
+        self, item_filter: ItemTransformFunc[bool], insert_at: int = None, name: str = None
     ) -> Self:  # noqa: A003
         """Adds filter defined in `item_filter` to the resource pipe at position `inserted_at`
 
@@ -454,13 +454,16 @@ class DltResource(Iterable[TDataItem], DltResourceHints):
         Args:
             item_filter (ItemTransformFunc[bool]): A function taking a single data item and optional meta argument. Returns bool. If True, item is kept
             insert_at (int, optional): At which step in pipe to insert the filter. Defaults to None which inserts after last step
+            name (str, optional): Name of the filter step. The counts of received and filtered out items are
+                reported under this name in the extract info step metrics of this resource. Defaults to the name
+                of `item_filter`.
         Returns:
             "DltResource": returns self
         """
         if insert_at is None:
-            self._pipe.append_step(FilterItem(item_filter))
+            self._pipe.append_step(FilterItem(item_filter, name=name))
         else:
-            self._pipe.insert_step(FilterItem(item_filter), insert_at)
+            self._pipe.insert_step(FilterItem(item_filter, name=name), insert_at)
         return self
 
     def add_limit(

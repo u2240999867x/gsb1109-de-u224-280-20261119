@@ -287,6 +287,10 @@ class BufferedDataWriter(Generic[TWriter]):
             self._writer.write_footer()
             self._file.flush()
         else:
+            # the writer is killed without flushing: drop the buffered items so they are
+            # not flushed into the next file if the writer is reused (ie. on a retried extract)
+            self._buffered_items = []
+            self._buffered_items_count = 0
             if not self._writer:
                 return None
         self._writer.close()

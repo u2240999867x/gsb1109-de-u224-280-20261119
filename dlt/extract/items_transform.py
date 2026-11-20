@@ -18,6 +18,7 @@ from typing import (
 from dlt.common.data_writers.writers import count_rows_in_items
 from dlt.common.schema.typing import TTableSchema
 from dlt.common.typing import TAny, TDataItem, TDataItems, TypeVar
+from dlt.common.utils import get_callable_name
 
 from dlt.extract.utils import (
     wrap_iterator,
@@ -75,9 +76,42 @@ class ItemTransform(BaseItemTransform[TCustomMetrics], ABC, Generic[TAny, TCusto
 
 
 class FilterItem(ItemTransform[bool, Dict[str, Any]]):
+    """Filters data items with a boolean function and counts what it received and rejected.
+
+    Counts are kept per item as the filter function is evaluated, so the function is never
+    called more than once per item and an item that raises is counted as received but never
+    as filtered out. The counts are reported in the extract info under the filter `name`.
+    """
+
     # mypy needs those to type correctly
     _f_meta: ItemTransformFunctionWithMeta[bool]
     _f: ItemTransformFunctionNoMeta[bool]
+
+    def __init__(self, filter_f: ItemTransformFunc[bool], name: str = None) -> None:
+        super().__init__(filter_f)
+        self.name = name or get_callable_name(filter_f) or "filter"
+        self._items_in = 0
+        self._items_filtered = 0
+
+    @property
+    def items_in(self) -> int:
+        """Items received by this filter, including items that raised during evaluation."""
+        return self._items_in
+
+    @property
+    def items_filtered(self) -> int:
+        """Items rejected by the filter function. Items that raised are not counted here."""
+        return self._items_filtered
+
+    @property
+    def step_metrics(self) -> Dict[str, int]:
+        return {"items_in": self._items_in, "items_filtered": self._items_filtered}
+
+    def _keep(self, item: TDataItem, meta: Any) -> bool:
+        self._items_in += 1
+        if self._f_meta:
+            return self._f_meta(item, meta)  # type: ignore[no-any-return]
+        return self._f(item)  # type: ignore[no-any-return]
 
     def __call__(self, item: TDataItems, meta: Any = None) -> Optional[TDataItems]:
         if isinstance(item, list):
@@ -85,19 +119,21 @@ class FilterItem(ItemTransform[bool, Dict[str, Any]]):
             if len(item) == 0:
                 return item
 
-            if self._f_meta:
-                item = [i for i in item if self._f_meta(i, meta)]
-            else:
-                item = [i for i in item if self._f(i)]
-            if not item:
+            kept = []
+            for i in item:
+                if self._keep(i, meta):
+                    kept.append(i)
+                else:
+                    self._items_filtered += 1
+            if not kept:
                 # item was fully consumed by the filter
                 return None
-            return item
+            return kept
         else:
-            if self._f_meta:
-                return item if self._f_meta(item, meta) else None
-            else:
-                return item if self._f(item) else None
+            if self._keep(item, meta):
+                return item
+            self._items_filtered += 1
+            return None
 
 
 class MapItem(ItemTransform[TDataItem, Dict[str, Any]]):

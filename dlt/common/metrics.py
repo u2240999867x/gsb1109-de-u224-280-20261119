@@ -63,6 +63,8 @@ def aggregate_job_metrics(
 
 class DataWriterAndCustomMetrics(DataWriterMetrics):
     custom_metrics: Dict[str, Any]
+    step_metrics: Dict[str, Dict[str, int]]
+    """Counts collected by the resource pipe steps (ie. filters), keyed by step name."""
 
     def __new__(
         cls,
@@ -73,11 +75,13 @@ class DataWriterAndCustomMetrics(DataWriterMetrics):
         last_modified: float,
         files_count: Optional[int] = None,
         custom_metrics: Dict[str, Any] = None,
+        step_metrics: Dict[str, Dict[str, int]] = None,
     ) -> "DataWriterAndCustomMetrics":
         self = super(DataWriterAndCustomMetrics, cls).__new__(
             cls, file_path, items_count, file_size, created, last_modified, files_count
         )
         self.custom_metrics = custom_metrics or {}
+        self.step_metrics = step_metrics or {}
         return self
 
     def _asdict(self) -> Dict[str, Any]:
@@ -94,6 +98,12 @@ class DataWriterAndCustomMetrics(DataWriterMetrics):
                 nested[key] = value
         if nested:
             result["custom_metrics"] = nested
+        if self.step_metrics:
+            # one row per step so the counts load as a child table of resource metrics
+            result["step_metrics"] = [
+                {"step_name": step_name, **counts}
+                for step_name, counts in self.step_metrics.items()
+            ]
         return result
 
 

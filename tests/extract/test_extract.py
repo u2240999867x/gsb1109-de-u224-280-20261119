@@ -1137,6 +1137,203 @@ def test_custom_metrics_preserved_when_all_items_filtered(extract_step: Extract)
     assert rm.custom_metrics == {"early_count": 1, "seen_via_current": True}
 
 
+def test_filter_step_metrics_by_resource_and_name(extract_step: Extract) -> None:
+    """Filter steps count received and rejected items. The counts are queryable per resource
+    and filter name in the extract metrics, so two filters named the same on different
+    resources are reported separately."""
+
+    @dlt.resource
+    def orders():
+        # mixed single items and list batches
+        yield {"id": 1, "fmt": "bad", "lines": ["x"]}
+        yield [
+            {"id": 2, "fmt": "ok", "lines": ["a", "b"]},
+            {"id": 3, "fmt": "ok", "lines": []},
+        ]
+
+    format_calls: List[int] = []
+
+    def format_ok(order: Dict[str, Any]) -> bool:
+        format_calls.append(order["id"])
+        return order["fmt"] == "ok"
+
+    orders.add_filter(format_ok, name="format")
+    # expand one order into zero or more rows
+    orders.add_yield_map(
+        lambda order: ({"order_id": order["id"], "line": line} for line in order["lines"])
+    )
+
+    valid_a_calls: List[str] = []
+
+    def valid_a(row: Dict[str, Any]) -> bool:
+        valid_a_calls.append(row["line"])
+        return row["line"] != "a"
+
+    @dlt.transformer
+    def downstream_a(row: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+        yield row
+
+    downstream_a.add_filter(valid_a, name="valid")
+
+    @dlt.transformer
+    def downstream_b(row: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+        yield row
+
+    downstream_b.add_filter(lambda row: True, name="valid")
+
+    source = DltSource(
+        dlt.Schema("orders"), "module", [orders | downstream_a, orders | downstream_b]
+    )
+    load_id = extract_step.extract(source, 20, 1)
+    step_info = extract_step.get_step_info(MockPipeline("buba", first_run=False))  # type: ignore[abstract]
+    resource_metrics = step_info.metrics[load_id][0]["resource_metrics"]
+
+    # the first gate counts the orders it actually received, the rejected order included
+    assert resource_metrics["orders"].step_metrics == {
+        "format": {"items_in": 3, "items_filtered": 1}
+    }
+    # each downstream counts the expanded rows it actually received: the order rejected at
+    # the first gate never reaches them and the empty expansion produces no rows
+    assert resource_metrics["downstream_a"].step_metrics == {
+        "valid": {"items_in": 2, "items_filtered": 1}
+    }
+    assert resource_metrics["downstream_b"].step_metrics == {
+        "valid": {"items_in": 2, "items_filtered": 0}
+    }
+    # the business filters were called exactly once per received item to get the counts
+    assert format_calls == [1, 2, 3]
+    assert sorted(valid_a_calls) == ["a", "b"]
+    # no custom metrics are fabricated for the resources
+    assert resource_metrics["orders"].custom_metrics == {}
+    # step metrics serialize as one row per step
+    d = resource_metrics["downstream_a"]._asdict()
+    assert d["step_metrics"] == [{"step_name": "valid", "items_in": 2, "items_filtered": 1}]
+
+
+def test_filter_step_metrics_failed_attempt_and_retry(extract_step: Extract) -> None:
+    """A failed extract attempt records the counts of the items it processed in its own
+    metrics entry. The entry is kept separate from the successful retry so a delivered
+    row is counted once, and the item that raised is not reported as filtered out."""
+
+    def _orders_source(lines: List[str]) -> DltSource:
+        @dlt.resource
+        def orders():
+            yield [{"id": 1, "fmt": "ok", "lines": lines}]
+
+        orders.add_filter(lambda order: order["fmt"] == "ok", name="format")
+        orders.add_yield_map(
+            lambda order: ({"order_id": order["id"], "line": line} for line in order["lines"])
+        )
+
+        @dlt.transformer
+        def downstream_b(row: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+            yield row
+
+        def valid(row: Dict[str, Any]) -> bool:
+            if row["line"] == "boom":
+                raise ValueError("cannot process row")
+            return True
+
+        downstream_b.add_filter(valid, name="valid")
+        return DltSource(dlt.Schema("orders_retry"), "module", [orders | downstream_b])
+
+    # first attempt fails on the second expanded row of the downstream
+    with pytest.raises(ResourceExtractionError):
+        extract_step.extract(_orders_source(["keep", "boom"]), 20, 1)
+    (load_id,) = extract_step._load_id_metrics.keys()
+
+    # retry only the batch that was not delivered, with the row fixed
+    retry_load_id = extract_step.extract(_orders_source(["keep", "fixed"]), 20, 1)
+    # the failed package is reused so both attempts report under the same load id
+    assert retry_load_id == load_id
+
+    step_info = extract_step.get_step_info(MockPipeline("buba", first_run=False))  # type: ignore[abstract]
+    attempts = step_info.metrics[load_id]
+    # the failed attempt and the successful retry are separate entries
+    assert len(attempts) == 2
+    failed_metrics, retry_metrics = (
+        attempts[0]["resource_metrics"],
+        attempts[1]["resource_metrics"],
+    )
+
+    # the failed attempt shows what it processed: the row that raised was received by the
+    # filter but is not misreported as filtered out
+    assert failed_metrics["downstream_b"].step_metrics == {
+        "valid": {"items_in": 2, "items_filtered": 0}
+    }
+    assert failed_metrics["orders"].step_metrics == {
+        "format": {"items_in": 1, "items_filtered": 0}
+    }
+    # nothing was delivered by the failed attempt
+    assert failed_metrics["downstream_b"].items_count == 0
+
+    # the retry counts only what it processed itself, each delivered row is counted once
+    assert retry_metrics["downstream_b"].step_metrics == {
+        "valid": {"items_in": 2, "items_filtered": 0}
+    }
+    assert retry_metrics["downstream_b"].items_count == 2
+
+
+def test_filter_step_metrics_coexist_with_custom_metrics(extract_step: Extract) -> None:
+    """Resources that already carry custom metrics outside of steps return them as usual,
+    with the filter step counts reported alongside."""
+
+    @dlt.resource
+    def orders():
+        dlt.current.resource_metrics()["pages"] = 1
+        yield [{"id": 1, "keep": True}, {"id": 2, "keep": False}]
+
+    orders.add_filter(lambda order: order["keep"], name="keep_filter")
+
+    source = DltSource(dlt.Schema("coexist"), "module", [orders])
+    load_id = extract_step.extract(source, 20, 1)
+    step_info = extract_step.get_step_info(MockPipeline("buba", first_run=False))  # type: ignore[abstract]
+    rm = step_info.metrics[load_id][0]["resource_metrics"]["orders"]
+    assert rm.custom_metrics == {"pages": 1}
+    assert rm.step_metrics == {"keep_filter": {"items_in": 2, "items_filtered": 1}}
+
+
+def test_filter_step_metrics_in_pipeline_trace(deactivate_pipeline: Any) -> None:
+    """Filter step counts are reported in the extract info of a real pipeline run and
+    serialize as one row per step in the loadable representation."""
+
+    @dlt.resource
+    def orders():
+        yield {"id": 1, "fmt": "bad", "lines": ["x"]}
+        yield [{"id": 2, "fmt": "ok", "lines": ["a", "b"]}, {"id": 3, "fmt": "ok", "lines": []}]
+
+    orders.add_filter(lambda order: order["fmt"] == "ok", name="format")
+    orders.add_yield_map(
+        lambda order: ({"order_id": order["id"], "line": line} for line in order["lines"])
+    )
+
+    @dlt.transformer
+    def downstream_a(row: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+        yield row
+
+    downstream_a.add_filter(lambda row: row["line"] != "a", name="valid")
+
+    pipeline = dlt.pipeline(pipeline_name="step_metrics_trace", destination="dummy")
+    extract_info = pipeline.extract([orders | downstream_a])
+    load_id = extract_info.loads_ids[0]
+    extract_info = pipeline.last_trace.last_extract_info
+    # the first metrics entry is the source extract, the second is the dlt state
+    resource_metrics = extract_info.metrics[load_id][0]["resource_metrics"]
+    assert resource_metrics["orders"].step_metrics == {
+        "format": {"items_in": 3, "items_filtered": 1}
+    }
+    assert resource_metrics["downstream_a"].step_metrics == {
+        "valid": {"items_in": 2, "items_filtered": 1}
+    }
+    # step metrics serialize as one row per step
+    rows = [
+        row
+        for row in extract_info.asdict()["resource_metrics"]
+        if row["resource_name"] == "downstream_a"
+    ]
+    assert rows[0]["step_metrics"] == [{"step_name": "valid", "items_in": 2, "items_filtered": 1}]
+
+
 def test_object_mixed_case_columns_normalized(extract_step: Extract) -> None:
     """Column hints with PascalCase names are normalized to snake_case in the schema.
 

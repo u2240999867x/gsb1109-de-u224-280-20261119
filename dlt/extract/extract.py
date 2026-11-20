@@ -64,7 +64,7 @@ from dlt.extract.exceptions import (
 )
 from dlt.extract.incremental import IncrementalResourceWrapper
 from dlt.extract.items import TableNameMeta
-from dlt.extract.items_transform import ItemTransform
+from dlt.extract.items_transform import FilterItem, ItemTransform
 from dlt.extract.pipe_iterator import PipeIterator
 from dlt.extract.source import DltSource
 from dlt.extract.reference import SourceReference, SourceFactory
@@ -397,12 +397,24 @@ class Extract(WithStepInfo[ExtractMetrics, ExtractInfo]):
         table_metrics = metrics_by_table(job_metrics)
 
         # aggregate by resource name
-        def _get_all_resource_custom_metrics(resource_name: str) -> Dict[str, Any]:
-            all_custom_metrics = source.resources[resource_name].custom_metrics
-            for step in source.resources[resource_name]._pipe.steps:
+        def _get_all_resource_custom_metrics(resource: DltResource) -> Dict[str, Any]:
+            all_custom_metrics = resource.custom_metrics
+            for step in resource._pipe.steps:
                 if isinstance(step, ItemTransform):
                     all_custom_metrics = update_dict_nested(all_custom_metrics, step.custom_metrics)
             return all_custom_metrics
+
+        # collect the counts of the filter steps in the resource pipe, keyed by filter name
+        def _get_resource_step_metrics(resource: DltResource) -> Dict[str, Dict[str, int]]:
+            step_metrics: Dict[str, Dict[str, int]] = {}
+            for step in resource._pipe.steps:
+                if isinstance(step, FilterItem):
+                    metrics = step_metrics.setdefault(
+                        step.name, {"items_in": 0, "items_filtered": 0}
+                    )
+                    metrics["items_in"] += step.items_in
+                    metrics["items_filtered"] += step.items_filtered
+            return step_metrics
 
         resource_agg = aggregate_job_metrics(
             table_metrics,
@@ -411,21 +423,27 @@ class Extract(WithStepInfo[ExtractMetrics, ExtractInfo]):
         resource_metrics = {
             resource_name: DataWriterAndCustomMetrics(
                 *metrics,
-                custom_metrics=_get_all_resource_custom_metrics(resource_name),
+                custom_metrics=_get_all_resource_custom_metrics(source.resources[resource_name]),
+                step_metrics=_get_resource_step_metrics(source.resources[resource_name]),
             )
             for resource_name, metrics in resource_agg.items()
         }
         # backfill resources that produced no writer output but carry custom metrics
         # (e.g. every item was filtered out) so `add_metrics` /
-        # `dlt.current.resource_metrics()` counters are not silently dropped
-        for resource_name in source.selected_resources:
+        # `dlt.current.resource_metrics()` counters are not silently dropped.
+        # all extracted resources are considered, also parents that only fed their
+        # transformers: their filter steps still counted the items they received
+        for resource in source.resources.extracted:
+            resource_name = resource.name
             if resource_name in resource_metrics:
                 continue
-            custom = _get_all_resource_custom_metrics(resource_name)
-            if custom:
+            custom = _get_all_resource_custom_metrics(resource)
+            step_metrics = _get_resource_step_metrics(resource)
+            if custom or any(m["items_in"] for m in step_metrics.values()):
                 resource_metrics[resource_name] = DataWriterAndCustomMetrics(
                     *EMPTY_DATA_WRITER_METRICS,
                     custom_metrics=custom,
+                    step_metrics=step_metrics,
                 )
         # collect resource hints
         clean_hints: Dict[str, Dict[str, Any]] = {}
