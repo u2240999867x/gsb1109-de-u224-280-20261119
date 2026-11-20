@@ -20,6 +20,7 @@ from typing import (
 from typing_extensions import TypeVar
 
 from benedict.core import clean as _clean
+from benedict.core import cleanup as _cleanup
 from benedict.core import clone as _clone
 from benedict.core import dump as _dump
 from benedict.core import filter as _filter
@@ -130,6 +131,43 @@ class benedict(KeyattrDict[_K, _V], KeypathDict[_V], IODict[_K, _V], ParseDict[_
         related empty values will not be deleted.
         """
         _clean(self, strings=strings, collections=collections)
+
+    def cleanup_preview(
+        self,
+        pattern: str | re.Pattern[str],
+        scope: int = 1,
+        indexes: bool = True,
+    ) -> _cleanup.CleanupPreview:
+        """
+        Preview the values whose keypath matches the given pattern, without
+        deleting anything. The returned snapshot can later be applied with
+        ``cleanup_apply``.
+
+        ``scope`` is the number of key levels (from the root) identifying the
+        owning scope of each value, e.g. ``scope=2`` for an entry of a
+        ``stations`` list. Applying the preview fails if a scoped object has
+        moved away from its previewed path.
+        """
+        return _cleanup.cleanup_preview(
+            self,
+            pattern,
+            scope=scope,
+            separator=self._keypath_separator,
+            indexes=indexes,
+        )
+
+    def cleanup_apply(
+        self, preview: _cleanup.CleanupPreview
+    ) -> list[_cleanup.CleanupReceipt]:
+        """
+        Apply a cleanup preview produced by ``cleanup_preview`` and return one
+        receipt per preview target, in preview order.
+
+        If any target no longer belongs to its original scope, a
+        ``StaleTargetError`` is raised and no value is deleted.
+        """
+        self._check_frozen()
+        return _cleanup.cleanup_apply(self, preview)
 
     def clone(self) -> Self:
         """

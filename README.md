@@ -304,6 +304,8 @@ Here are the details of the supported formats, operations and extra options docs
 -   **Utility methods**
 
     -   [`clean`](#clean)
+    -   [`cleanup_apply`](#cleanup_apply)
+    -   [`cleanup_preview`](#cleanup_preview)
     -   [`clone`](#clone)
     -   [`dump`](#dump)
     -   [`filter`](#filter)
@@ -398,6 +400,33 @@ Utilities that return a dictionary always return a new `benedict` instance.
 # If strings or collections (dict, list, set, tuple) flags are False,
 # related empty values will not be deleted.
 d.clean(strings=True, collections=True)
+```
+
+#### `cleanup_preview`
+
+```python
+# Preview all values whose keypath matches the given pattern (a regex or
+# string), without deleting anything. The returned immutable snapshot can
+# later be passed to `cleanup_apply`.
+# `scope` is the number of key levels (from the root) that identify the
+# owning scope of each value, e.g. scope=2 for an entry of a `stations`
+# list. Local identifiers are only unique inside their scope, so each
+# target also carries its scope and object identity.
+p = d.cleanup_preview(pattern, scope=1, indexes=True)
+```
+
+#### `cleanup_apply`
+
+```python
+# Apply a preview produced by `cleanup_preview` and return one receipt per
+# preview target, in preview order. Each receipt points back to its target
+# and reports whether the value was actually deleted or was already removed
+# together with an ancestor selected in the same preview.
+# If a target no longer lives inside its original scope (e.g. it moved to
+# another scope, or a same-id replacement took its place), a
+# `StaleTargetError` naming the stale object and its current scope is raised
+# and the whole batch is rejected without deleting anything.
+r = d.cleanup_apply(p)
 ```
 
 #### `clone`

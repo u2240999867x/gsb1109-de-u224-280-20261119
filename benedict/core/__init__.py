@@ -1,4 +1,12 @@
 from benedict.core.clean import clean
+from benedict.core.cleanup import (
+    CleanupPreview,
+    CleanupReceipt,
+    CleanupTarget,
+    StaleTargetError,
+    cleanup_apply,
+    cleanup_preview,
+)
 from benedict.core.clone import clone
 from benedict.core.dump import dump
 from benedict.core.filter import filter
@@ -25,6 +33,12 @@ from benedict.core.unique import unique
 
 __all__ = [
     "clean",
+    "CleanupPreview",
+    "CleanupReceipt",
+    "CleanupTarget",
+    "StaleTargetError",
+    "cleanup_apply",
+    "cleanup_preview",
     "clone",
     "dump",
     "filter",
