@@ -11,7 +11,7 @@ from itertools import chain
 from pathlib import Path
 
 from bidsschematools import rules
-from sqlalchemy import Boolean, Column, ForeignKey, String, Table
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Table
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import backref, object_session, reconstructor, relationship
 from sqlalchemy.orm.collections import attribute_mapped_collection
@@ -540,6 +540,23 @@ class BIDSFile(Base):
         md.update(self.get_entities(metadata=True))
         return md
 
+    def get_metadata_provenance(self):
+        """Return frozen audit evidence for the file's metadata keys.
+
+        Returns
+        -------
+        :obj:`bids.layout.provenance.MetadataProvenanceReport`
+            A snapshot of every JSON sidecar eligible for each metadata key
+            at indexing time, including candidate values, paths, override and
+            explicit-null reasons, and any unresolved same-level ambiguity.
+            The report is read from the index, so it remains valid if the
+            index is moved or the on-disk sidecars later change.
+
+        """
+        from .provenance import file_metadata_provenance
+
+        return file_metadata_provenance(self)
+
     def get_entities(self, metadata=False, values='tags'):
         """Return entity information for the current file.
 
@@ -987,6 +1004,52 @@ class FileAssociation(Base):  # noqa: D101
     src = Column(String, ForeignKey('files.path'), primary_key=True)
     dst = Column(String, ForeignKey('files.path'), primary_key=True)
     kind = Column(String, primary_key=True)
+
+
+class MetadataProvenance(Base):
+    """Audit evidence for a metadata key of an indexed data file.
+
+    Each row records one JSON sidecar that was eligible to provide a value
+    for a specific ``(file, key)`` pair at indexing time. Rows are a frozen
+    snapshot: they are stored inside the index database and therefore remain
+    available after the index is moved to another machine or after the
+    original sidecars on disk are modified or removed.
+
+    Parameters
+    ----------
+    file_path : str
+        Path of the data file the metadata was resolved for.
+    key : str
+        Metadata key (JSON field name) the evidence applies to.
+    source_path : str
+        Path of the JSON sidecar that contained the key.
+    value : str or None
+        JSON-serialized value found in the sidecar. A null entry in a
+        sidecar is stored as ``None`` together with ``is_null=True``.
+    is_null : bool
+        True when the sidecar explicitly set the key to JSON ``null``.
+    discovery_order : int
+        Zero-based position of the sidecar in discovery order. Sidecars are
+        discovered from the most specific (closest to the data file) to the
+        least specific (dataset root). Within a directory, sidecars are
+        sorted by path.
+
+    """
+
+    __tablename__ = 'metadata_provenance'
+
+    file_path = Column(String, ForeignKey('files.path'), primary_key=True)
+    key = Column(String, primary_key=True)
+    source_path = Column(String, ForeignKey('files.path'), primary_key=True)
+    value = Column(String, nullable=True)
+    is_null = Column(Boolean, default=False, nullable=False)
+    discovery_order = Column(Integer, nullable=False)
+
+    def __repr__(self):
+        return (
+            f'<MetadataProvenance file:{self.file_path!r} key:{self.key!r} '
+            f'source:{self.source_path!r} value:{self.value!r} null:{self.is_null}>'
+        )
 
 
 # Association objects

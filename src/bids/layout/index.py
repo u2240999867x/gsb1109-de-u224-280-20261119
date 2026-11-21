@@ -6,12 +6,13 @@ import warnings
 from collections import defaultdict
 from functools import cache, partial
 
+import sqlalchemy as sa
 from bids_validator import BIDSValidator
 from upath import UPath as Path
 
 from ..exceptions import BIDSConflictingValuesError
 from ..utils import listify, make_bidsfile
-from .models import Config, Entity, FileAssociation, Tag, _create_tag_dict
+from .models import Config, Entity, FileAssociation, MetadataProvenance, Tag, _create_tag_dict
 from .validation import validate_indexing_args
 
 
@@ -146,6 +147,13 @@ class BIDSLayoutIndexer:
         self._exclude_patterns = [
             _regexfy(patt, root=self._layout._root) for patt in listify(ignore)
         ]
+
+        # Determine provenance support once, before any write opens a
+        # transaction. Inspecting the schema later (after pending inserts)
+        # would roll those inserts back on SQLite.
+        self._provenance_enabled = sa.inspect(self.session.get_bind()).has_table(
+            MetadataProvenance.__tablename__
+        )
 
         all_bfs, all_tag_dicts = self._index_dir(self._layout._root, self._config)
 
@@ -369,6 +377,7 @@ class BIDSLayoutIndexer:
 
         all_objs = []
         all_tag_dicts = []
+        all_provenance_dicts = []
         for bf in filenames:
             file_ents = bf.entities.copy()
             suffix = file_ents.pop('suffix', None)
@@ -402,7 +411,9 @@ class BIDSLayoutIndexer:
                         continue
                     matches = [js_ents[name] == file_ents[name] for name in js_keys]
                     if all(matches):
-                        payloads.append((js_md, js_path))
+                        # payloads are collected most-specific first; the bool
+                        # flags a FileNotFoundError while loading the sidecar
+                        payloads.append((js_md, js_path, False))
 
                 # Get all files this file inherits from
                 candidates = file_data.get(ext_key, {}).get(dirname, [])
@@ -431,9 +442,13 @@ class BIDSLayoutIndexer:
             js_file = payloads[0][1]
             all_objs += create_association_pair(js_file, bf.path, 'Metadata')
 
-            # Consolidate metadata by looping over inherited JSON files
+            # Consolidate metadata by looping over inherited JSON files.
+            # Sidecars were collected most-specific first (payloads order);
+            # reversing gives root-to-leaf application so closer sidecars
+            # override more distant ones.
             file_md = {}
-            for pl, js_file in payloads[::-1]:  # noqa: B007
+            for idx in range(len(payloads) - 1, -1, -1):
+                pl, js_file, missing = payloads[idx]
                 try:
                     file_md.update(pl())
                 except FileNotFoundError:
@@ -442,11 +457,32 @@ class BIDSLayoutIndexer:
                     # Drop metadata if any files are missing
                     # Otherwise missing overrides could give misleading metadata
                     file_md = {}
+                    payloads[idx] = (pl, js_file, True)
                     break
+
+            # Build frozen provenance evidence from the JSON each eligible
+            # sidecar actually contributed at indexing time. Stored as strings
+            # so the snapshot survives later edits or removal of the sidecars.
+            provenance_dicts = []
+            if not any(missing for _, _, missing in payloads):
+                for order, (pl, js_path, _missing) in enumerate(payloads):
+                    sidecar_md = pl()
+                    for prov_key, prov_val in sidecar_md.items():
+                        provenance_dicts.append(
+                            {
+                                'file_path': bf.path,
+                                'key': prov_key,
+                                'source_path': js_path,
+                                'value': None if prov_val is None else json.dumps(prov_val),
+                                'is_null': prov_val is None,
+                                'discovery_order': order,
+                            }
+                        )
+            all_provenance_dicts.extend(provenance_dicts)
 
             # Create FileAssociation records for JSON inheritance
             n_pl = len(payloads)
-            for i, (pl, js_file) in enumerate(payloads):  # noqa: B007
+            for i, (pl, js_file, _missing) in enumerate(payloads):  # noqa: B007
                 if (i + 1) < n_pl:
                     other = payloads[i + 1][1]
                     all_objs += create_association_pair(js_file, other, 'Child', 'Parent')
@@ -521,7 +557,19 @@ class BIDSLayoutIndexer:
 
         self.session.bulk_save_objects(all_objs)
         self.session.bulk_insert_mappings(Tag, all_tag_dicts)
+        self._insert_provenance(all_provenance_dicts)
         self.session.commit()
+
+    def _insert_provenance(self, provenance_dicts):
+        """Persist provenance rows when the index table is available.
+
+        Databases created by older PyBIDS releases lack the
+        ``metadata_provenance`` table. Reindexing into such a database must
+        keep working; the provenance feature is simply unavailable there.
+        """
+        if not provenance_dicts or not getattr(self, '_provenance_enabled', False):
+            return
+        self.session.bulk_insert_mappings(MetadataProvenance, provenance_dicts)
 
 
 def _resolve_intent(intent: str, root: Path, subject: str) -> str | None:

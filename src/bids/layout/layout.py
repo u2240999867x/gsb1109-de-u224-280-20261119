@@ -1110,6 +1110,42 @@ class BIDSLayout:
 
         return md
 
+    def get_metadata_provenance(self, path, scope='all'):
+        """Return frozen audit provenance for a file's metadata.
+
+        The report lists, for every metadata key, each JSON sidecar that was
+        eligible at indexing time, together with the value it claimed, its
+        path, its discovery order, and the resolution reason (sole source,
+        override, explicit null, or unresolved same-level ambiguity). Because
+        the evidence is stored inside the index, it stays available after the
+        index is moved or the on-disk sidecars are later modified or removed.
+
+        Parameters
+        ----------
+        path : str
+            Path of the data file to report on.
+        scope : str or list, optional
+            Scope of the search space; see :meth:`get_metadata`.
+
+        Returns
+        -------
+        :obj:`bids.layout.provenance.MetadataProvenanceReport`
+
+        """
+        from .provenance import build_metadata_provenance
+
+        return build_metadata_provenance(self, path, scope=scope)
+
+    def explain_metadata_provenance(self, path, scope='all'):
+        """Return a human-readable explanation of a file's metadata provenance.
+
+        Ambiguous fields are described with the concrete field name and every
+        competing candidate; no winner is selected without an explicit policy.
+        """
+        from .provenance import explain_metadata_provenance
+
+        return explain_metadata_provenance(self.get_metadata_provenance(path, scope=scope))
+
     def get_dataset_description(self, scope='self', all_=False):
         """Return contents of dataset_description.json.
 
