@@ -180,6 +180,9 @@ class BIDSLayout:
         self.derivatives = DerivativeDatasets()
         self.sources = sources
         self.regex_search = regex_search
+        # Set by the BIDSLayoutIndexer while building the index. Layouts loaded
+        # from a saved database have no indexer until refresh_metadata() is used.
+        self._indexer = None
 
         # Initialize a completely new layout and index the dataset
         if not load_db:
@@ -405,6 +408,47 @@ class BIDSLayout:
         # Recursively save children
         for pipeline_name, der in self.derivatives.items():
             der.save(database_path / pipeline_name)
+
+    def refresh_metadata(self, sidecar_paths=None):
+        """Refresh metadata after one or more JSON sidecars change.
+
+        Only the metadata derived from sidecars is re-indexed; data files are
+        not re-scanned, so their paths, filename entities, and timestamps stay
+        untouched. Sidecar value edits, deletions that expose inherited parent
+        values, newly added sidecars, explicit ``null`` overrides, and
+        ``IntendedFor`` reference changes are all reflected in subsequent
+        :meth:`get`, :meth:`get_metadata`, and association queries.
+
+        Parameters
+        ----------
+        sidecar_paths : str or path-like or list, optional
+            JSON sidecar path(s) that were added, edited, or deleted. Paths may
+            be absolute or relative to the dataset root. The recomputed scope is
+            derived from every existing dependency and any newly matching
+            sidecar, not merely the keys currently in effect. If ``None``, all
+            indexed sidecars are treated as changed (brand-new sidecars must be
+            passed explicitly).
+
+        Returns
+        -------
+        dict
+            Summary of the refreshed ``sidecars``, recomputed
+            ``affected_data`` files, and ``added_sidecars``.
+
+        Raises
+        ------
+        OSError
+            If an in-scope sidecar cannot be parsed. The previous index remains
+            in effect in that case; no mixed version is published.
+
+        """
+        if self._indexer is None:
+            # Layouts loaded from a saved database retain no indexer. Recreate a
+            # default one bound to this layout so refreshes remain available.
+            self._indexer = BIDSLayoutIndexer()
+            self._indexer._bind(self)
+
+        return self._indexer.refresh_metadata(sidecar_paths)
 
     def get_entities(self, scope='all', metadata=None):
         """Get entities for all layouts in the specified scope.
