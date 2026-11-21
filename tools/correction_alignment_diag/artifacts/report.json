@@ -1,0 +1,915 @@
+{
+  "versions": {
+    "pandas": "3.1.1",
+    "narwhals": "2.29.0",
+    "polars": "2.1.0"
+  },
+  "inputs": {
+    "raw": [
+      {
+        "row_label": 4103,
+        "business_key": "S-B",
+        "business_time": 35,
+        "raw": 120.0
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C",
+        "business_time": 20,
+        "raw": 200.0
+      },
+      {
+        "row_label": 4102,
+        "business_key": "S-A",
+        "business_time": 10,
+        "raw": 100.0
+      }
+    ],
+    "correction_series": {
+      "row_labels": [
+        4102,
+        4101,
+        4103
+      ],
+      "business_keys": [
+        "S-A",
+        "S-C",
+        "S-B"
+      ],
+      "values": [
+        7.0,
+        3.0,
+        null
+      ]
+    }
+  },
+  "recipes": {
+    "native": {
+      "name": "native-pandas-labels",
+      "calls": [
+        {
+          "stage": 0,
+          "call": "attach correction",
+          "row_labels": [
+            4103,
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-B",
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              120.0,
+              200.0,
+              100.0
+            ],
+            "correction": [
+              null,
+              3.0,
+              7.0
+            ]
+          },
+          "note": "pandas __setitem__ aligns by label"
+        },
+        {
+          "stage": 1,
+          "call": "adjusted arithmetic",
+          "row_labels": [
+            4103,
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-B",
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "adjusted": [
+              null,
+              203.0,
+              107.0
+            ]
+          },
+          "note": "df['raw'] + Series aligns by label before the sum"
+        },
+        {
+          "stage": 1,
+          "call": "attach adjusted",
+          "row_labels": [
+            4103,
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-B",
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              120.0,
+              200.0,
+              100.0
+            ],
+            "correction": [
+              null,
+              3.0,
+              7.0
+            ],
+            "adjusted": [
+              null,
+              203.0,
+              107.0
+            ]
+          },
+          "note": ""
+        },
+        {
+          "stage": 2,
+          "call": "filter business_time <= 25",
+          "row_labels": [
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              200.0,
+              100.0
+            ],
+            "correction": [
+              3.0,
+              7.0
+            ],
+            "adjusted": [
+              203.0,
+              107.0
+            ]
+          },
+          "note": ""
+        },
+        {
+          "stage": 3,
+          "call": "sort business_time",
+          "row_labels": [
+            4102,
+            4101
+          ],
+          "business_keys": [
+            "S-A",
+            "S-C"
+          ],
+          "values": {
+            "raw": [
+              100.0,
+              200.0
+            ],
+            "correction": [
+              7.0,
+              3.0
+            ],
+            "adjusted": [
+              107.0,
+              203.0
+            ]
+          },
+          "note": ""
+        },
+        {
+          "stage": 4,
+          "call": "patch S-A with one-row business-key Series",
+          "row_labels": [
+            4102,
+            4101
+          ],
+          "business_keys": [
+            "S-A",
+            "S-C"
+          ],
+          "values": {
+            "raw": [
+              100.0,
+              200.0
+            ],
+            "correction": [
+              null,
+              3.0
+            ],
+            "adjusted": [
+              107.0,
+              203.0
+            ]
+          },
+          "note": "patch index ['S-A'] does not overlap target row label 4102"
+        },
+        {
+          "stage": 5,
+          "call": "recompute adjusted",
+          "row_labels": [
+            4102,
+            4101
+          ],
+          "business_keys": [
+            "S-A",
+            "S-C"
+          ],
+          "values": {
+            "raw": [
+              100.0,
+              200.0
+            ],
+            "correction": [
+              null,
+              3.0
+            ],
+            "adjusted": [
+              null,
+              203.0
+            ]
+          },
+          "note": ""
+        }
+      ],
+      "result": [
+        {
+          "row_label": 4102,
+          "business_key": "S-A",
+          "business_time": 10,
+          "raw": 100.0,
+          "correction": null,
+          "adjusted": null
+        },
+        {
+          "row_label": 4101,
+          "business_key": "S-C",
+          "business_time": 20,
+          "raw": 200.0,
+          "correction": 3.0,
+          "adjusted": 203.0
+        }
+      ]
+    },
+    "narwhals": {
+      "name": "narwhals-positional",
+      "calls": [
+        {
+          "stage": 0,
+          "call": "attach correction",
+          "row_labels": [
+            4103,
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-B",
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              120.0,
+              200.0,
+              100.0
+            ],
+            "correction": [
+              7.0,
+              3.0,
+              null
+            ]
+          },
+          "note": "with_columns inserts the Series positionally"
+        },
+        {
+          "stage": 1,
+          "call": "attach adjusted",
+          "row_labels": [
+            4103,
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-B",
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              120.0,
+              200.0,
+              100.0
+            ],
+            "correction": [
+              7.0,
+              3.0,
+              null
+            ],
+            "adjusted": [
+              127.0,
+              203.0,
+              null
+            ]
+          },
+          "note": ""
+        },
+        {
+          "stage": 2,
+          "call": "filter business_time <= 25",
+          "row_labels": [
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              200.0,
+              100.0
+            ],
+            "correction": [
+              3.0,
+              null
+            ],
+            "adjusted": [
+              203.0,
+              null
+            ]
+          },
+          "note": ""
+        },
+        {
+          "stage": 3,
+          "call": "sort business_time",
+          "row_labels": [
+            4102,
+            4101
+          ],
+          "business_keys": [
+            "S-A",
+            "S-C"
+          ],
+          "values": {
+            "raw": [
+              100.0,
+              200.0
+            ],
+            "correction": [
+              null,
+              3.0
+            ],
+            "adjusted": [
+              null,
+              203.0
+            ]
+          },
+          "note": ""
+        }
+      ],
+      "result": [
+        {
+          "row_label": 4102,
+          "business_key": "S-A",
+          "business_time": 10,
+          "raw": 100.0,
+          "correction": null,
+          "adjusted": null
+        },
+        {
+          "row_label": 4101,
+          "business_key": "S-C",
+          "business_time": 20,
+          "raw": 200.0,
+          "correction": 3.0,
+          "adjusted": 203.0
+        }
+      ]
+    },
+    "polars": {
+      "name": "polars-no-index",
+      "calls": [
+        {
+          "stage": 0,
+          "call": "attach correction",
+          "row_labels": [
+            4103,
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-B",
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              120.0,
+              200.0,
+              100.0
+            ],
+            "correction": [
+              7.0,
+              3.0,
+              null
+            ]
+          },
+          "note": "with_columns inserts the Series positionally; no index exists"
+        },
+        {
+          "stage": 1,
+          "call": "attach adjusted",
+          "row_labels": [
+            4103,
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-B",
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              120.0,
+              200.0,
+              100.0
+            ],
+            "correction": [
+              7.0,
+              3.0,
+              null
+            ],
+            "adjusted": [
+              127.0,
+              203.0,
+              null
+            ]
+          },
+          "note": ""
+        },
+        {
+          "stage": 2,
+          "call": "filter business_time <= 25",
+          "row_labels": [
+            4101,
+            4102
+          ],
+          "business_keys": [
+            "S-C",
+            "S-A"
+          ],
+          "values": {
+            "raw": [
+              200.0,
+              100.0
+            ],
+            "correction": [
+              3.0,
+              null
+            ],
+            "adjusted": [
+              203.0,
+              null
+            ]
+          },
+          "note": ""
+        },
+        {
+          "stage": 3,
+          "call": "sort business_time",
+          "row_labels": [
+            4102,
+            4101
+          ],
+          "business_keys": [
+            "S-A",
+            "S-C"
+          ],
+          "values": {
+            "raw": [
+              100.0,
+              200.0
+            ],
+            "correction": [
+              null,
+              3.0
+            ],
+            "adjusted": [
+              null,
+              203.0
+            ]
+          },
+          "note": ""
+        }
+      ],
+      "result": [
+        {
+          "row_label": 4102,
+          "business_key": "S-A",
+          "business_time": 10,
+          "raw": 100.0,
+          "correction": null,
+          "adjusted": null
+        },
+        {
+          "row_label": 4101,
+          "business_key": "S-C",
+          "business_time": 20,
+          "raw": 200.0,
+          "correction": 3.0,
+          "adjusted": 203.0
+        }
+      ]
+    }
+  },
+  "first_divergence_native_vs_narwhals": {
+    "stage": 0,
+    "left_call": "attach correction",
+    "right_call": "attach correction",
+    "left_rows": [
+      {
+        "row_label": 4103,
+        "business_key": "S-B"
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C"
+      },
+      {
+        "row_label": 4102,
+        "business_key": "S-A"
+      }
+    ],
+    "right_rows": [
+      {
+        "row_label": 4103,
+        "business_key": "S-B"
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C"
+      },
+      {
+        "row_label": 4102,
+        "business_key": "S-A"
+      }
+    ],
+    "left_values": {
+      "raw": [
+        120.0,
+        200.0,
+        100.0
+      ],
+      "correction": [
+        null,
+        3.0,
+        7.0
+      ]
+    },
+    "right_values": {
+      "raw": [
+        120.0,
+        200.0,
+        100.0
+      ],
+      "correction": [
+        7.0,
+        3.0,
+        null
+      ]
+    }
+  },
+  "first_divergence_narwhals_vs_polars": null,
+  "first_truth_deviation": {
+    "native": {
+      "call_index": 5,
+      "stage": 4,
+      "call": "patch S-A with one-row business-key Series",
+      "column": "correction",
+      "business_key": "S-A",
+      "expected": 7.0,
+      "actual": null,
+      "row_label": 4102
+    },
+    "narwhals": {
+      "call_index": 0,
+      "stage": 0,
+      "call": "attach correction",
+      "column": "correction",
+      "business_key": "S-B",
+      "expected": null,
+      "actual": 7.0,
+      "row_label": 4103
+    },
+    "polars": {
+      "call_index": 0,
+      "stage": 0,
+      "call": "attach correction",
+      "column": "correction",
+      "business_key": "S-B",
+      "expected": null,
+      "actual": 7.0,
+      "row_label": 4103
+    }
+  },
+  "final_payloads_equal": true,
+  "final_payload": [
+    {
+      "row_label": 4102,
+      "business_key": "S-A",
+      "business_time": 10,
+      "raw": 100.0,
+      "correction": null,
+      "adjusted": null
+    },
+    {
+      "row_label": 4101,
+      "business_key": "S-C",
+      "business_time": 20,
+      "raw": 200.0,
+      "correction": 3.0,
+      "adjusted": 203.0
+    }
+  ],
+  "audited_amounts": {
+    "S-B": {
+      "correction": null,
+      "adjusted": null
+    },
+    "S-C": {
+      "correction": 3.0,
+      "adjusted": 203.0
+    },
+    "S-A": {
+      "correction": 7.0,
+      "adjusted": 107.0
+    }
+  },
+  "no_index_backend_final": [
+    {
+      "row_label": 4102,
+      "business_key": "S-A",
+      "business_time": 10,
+      "raw": 100.0,
+      "correction": null,
+      "adjusted": null
+    },
+    {
+      "row_label": 4101,
+      "business_key": "S-C",
+      "business_time": 20,
+      "raw": 200.0,
+      "correction": 3.0,
+      "adjusted": 203.0
+    }
+  ],
+  "repairs": {
+    "business_key_join": [
+      {
+        "row_label": 4103,
+        "business_key": "S-B",
+        "business_time": 35,
+        "raw": 120.0,
+        "correction": null,
+        "adjusted": null
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C",
+        "business_time": 20,
+        "raw": 200.0,
+        "correction": 3.0,
+        "adjusted": 203.0
+      },
+      {
+        "row_label": 4102,
+        "business_key": "S-A",
+        "business_time": 10,
+        "raw": 100.0,
+        "correction": 7.0,
+        "adjusted": 107.0
+      }
+    ],
+    "scalar_assignment": [
+      {
+        "row_label": 4102,
+        "business_key": "S-A",
+        "business_time": 10,
+        "raw": 100.0,
+        "correction": 7.0,
+        "adjusted": 107.0
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C",
+        "business_time": 20,
+        "raw": 200.0,
+        "correction": 3.0,
+        "adjusted": 203.0
+      }
+    ],
+    "narwhals_scalar_literal": [
+      {
+        "row_label": 4102,
+        "business_key": "S-A",
+        "business_time": 10,
+        "raw": 100.0,
+        "correction": 7.0,
+        "adjusted": 107.0
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C",
+        "business_time": 20,
+        "raw": 200.0,
+        "correction": 3.0,
+        "adjusted": 203.0
+      }
+    ]
+  },
+  "scalar_controls": {
+    "native_scalar_assignment": [
+      {
+        "row_label": 4102,
+        "business_key": "S-A",
+        "business_time": 10,
+        "raw": 100.0,
+        "correction": 7.0,
+        "adjusted": 107.0
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C",
+        "business_time": 20,
+        "raw": 200.0,
+        "correction": 3.0,
+        "adjusted": 203.0
+      }
+    ],
+    "native_row_label_series": [
+      {
+        "row_label": 4102,
+        "business_key": "S-A",
+        "business_time": 10,
+        "raw": 100.0,
+        "correction": 7.0,
+        "adjusted": 107.0
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C",
+        "business_time": 20,
+        "raw": 200.0,
+        "correction": 3.0,
+        "adjusted": 203.0
+      }
+    ],
+    "narwhals_literal_conditional": [
+      {
+        "row_label": 4102,
+        "business_key": "S-A",
+        "business_time": 10,
+        "raw": 100.0,
+        "correction": 7.0,
+        "adjusted": 107.0
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C",
+        "business_time": 20,
+        "raw": 200.0,
+        "correction": 3.0,
+        "adjusted": 203.0
+      }
+    ],
+    "narwhals_literal_broadcast": [
+      {
+        "row_label": 4102,
+        "business_key": "S-A",
+        "business_time": 10,
+        "raw": 100.0,
+        "correction": null,
+        "adjusted": null,
+        "flag": 7.0
+      },
+      {
+        "row_label": 4101,
+        "business_key": "S-C",
+        "business_time": 20,
+        "raw": 200.0,
+        "correction": 3.0,
+        "adjusted": 203.0,
+        "flag": 7.0
+      }
+    ],
+    "with_columns_one_row_series": {
+      "ok": false,
+      "error": "ShapeError",
+      "message": "Expected object of length 2, got: 1."
+    },
+    "when_then_one_row_series": {
+      "ok": false,
+      "error": "ShapeError",
+      "message": "Expected object of length 2, got length: 1"
+    }
+  },
+  "duplicate_labels": {
+    "duplicate_series": {
+      "row_labels": [
+        4103,
+        4103,
+        4102
+      ],
+      "business_keys": [
+        "S-B",
+        "S-B",
+        "S-A"
+      ],
+      "correction_ids": [
+        "C-02",
+        "C-07",
+        "C-01"
+      ],
+      "values": [
+        -2.0,
+        7.0,
+        7.0
+      ]
+    },
+    "native_assignment": {
+      "ok": false,
+      "error": "ValueError",
+      "message": "cannot reindex on an axis with duplicate labels"
+    },
+    "narwhals_assignment": {
+      "ok": true,
+      "value": "          business_key  business_time    raw  correction\nrow_label                                               \n4103               S-B             35  120.0        -2.0\n4101               S-C             20  200.0         7.0\n4102               S-A             10  100.0         7.0"
+    },
+    "merge_many_to_one": {
+      "ok": false,
+      "error": "MergeError",
+      "message": "Merge keys are not unique in right dataset; not a many-to-one merge\n\nDuplicates in right:\n business_key\n         S-B ..."
+    },
+    "merge_no_validation": {
+      "ok": true,
+      "value": "   row_label business_key  business_time    raw  correction\n0       4103          S-B             35  120.0        -2.0\n1       4103          S-B             35  120.0         7.0\n2       4101          S-C             20  200.0         NaN\n3       4102          S-A             10  100.0         7.0"
+    },
+    "unique_labels_duplicate_key": {
+      "table": [
+        {
+          "correction_id": "C-11",
+          "row_label": 4103,
+          "business_key": "S-B",
+          "correction": -2.0
+        },
+        {
+          "correction_id": "C-12",
+          "row_label": 4104,
+          "business_key": "S-B",
+          "correction": 7.0
+        },
+        {
+          "correction_id": "C-13",
+          "row_label": 4102,
+          "business_key": "S-A",
+          "correction": 7.0
+        }
+      ],
+      "native_assignment": {
+        "ok": true,
+        "value": "          business_key  business_time    raw  correction\nrow_label                                               \n4103               S-B             35  120.0        -2.0\n4101               S-C             20  200.0         NaN\n4102               S-A             10  100.0         7.0"
+      },
+      "narwhals_assignment": {
+        "ok": true,
+        "value": "          business_key  business_time    raw  correction\nrow_label                                               \n4103               S-B             35  120.0        -2.0\n4101               S-C             20  200.0         7.0\n4102               S-A             10  100.0         7.0"
+      },
+      "merge_many_to_one": {
+        "ok": false,
+        "error": "MergeError",
+        "message": "Merge keys are not unique in right dataset; not a many-to-one merge\n\nDuplicates in right:\n business_key\n         S-B ..."
+      }
+    },
+    "conflicting_key": "S-B",
+    "conflicting_rows": [
+      {
+        "correction_id": "C-02",
+        "row_label": 4103,
+        "business_key": "S-B",
+        "correction": -2.0
+      },
+      {
+        "correction_id": "C-07",
+        "row_label": 4103,
+        "business_key": "S-B",
+        "correction": 7.0
+      }
+    ]
+  }
+}
