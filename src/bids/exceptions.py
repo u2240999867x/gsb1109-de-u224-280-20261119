@@ -39,3 +39,25 @@ class BIDSConflictingValuesError(BIDSValidationError):
 
 class BIDSChildDatasetError(ValueError, PyBIDSError):
     """An invalid BIDS dataset."""
+
+
+class MirrorError(PyBIDSError):
+    """Base class for mirror/archive planning problems."""
+
+
+class UnregisteredRootError(MirrorError):
+    """A source URI does not belong to any registered archive root.
+
+    Raised (or reported) when a string prefix is close to a registered root
+    but is not contained by one, so that approximate prefixes cannot be
+    silently treated as a known archive.
+    """
+
+
+class PlanValidationError(MirrorError):
+    """A saved download plan can no longer be honored.
+
+    This covers stale plans whose pinned content is superseded, whose source
+    evidence is inaccessible, or whose target is outside the permitted mirror
+    scope.
+    """

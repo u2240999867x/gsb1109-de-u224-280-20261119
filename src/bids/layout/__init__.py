@@ -3,6 +3,18 @@ from bids_validator import BIDSValidator
 
 from .index import BIDSLayoutIndexer
 from .layout import BIDSLayout, Query
+from .mirror import (
+    ContentManifest,
+    ContentRecord,
+    DownloadPlan,
+    FileState,
+    MirrorMap,
+    MirrorMount,
+    MirrorPlanner,
+    PlanItem,
+    PlanReport,
+    RemoteArchiveRegistry,
+)
 from .models import BIDSDataFile, BIDSFile, BIDSImageFile, BIDSJSONFile, Config, Entity, Tag
 from .utils import add_config_paths, parse_file_entities
 
@@ -20,4 +32,14 @@ __all__ = [
     'Entity',
     'Tag',
     'Query',
+    'ContentManifest',
+    'ContentRecord',
+    'DownloadPlan',
+    'FileState',
+    'MirrorMap',
+    'MirrorMount',
+    'MirrorPlanner',
+    'PlanItem',
+    'PlanReport',
+    'RemoteArchiveRegistry',
 ]
