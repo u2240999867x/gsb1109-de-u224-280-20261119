@@ -131,3 +131,38 @@ $ parquet-tools csv s3://bucket-name/test.parquet |csvq "select one, three where
 | 2.5   | True  |
 +-------+-------+
 ```
+
+#### Merge parquet files with a caller-specified target schema
+
+`parquet_tools.parquet.merge.read_with_schema` reads a batch of files (for
+example monthly billing extracts) into one table typed and laid out by a
+target schema you supply, and reports acceptance per file:
+
+```python
+import pyarrow as pa
+from parquet_tools.parquet.merge import read_with_schema
+
+billing_schema = pa.schema([
+    pa.field('invoice_id', pa.string(), nullable=False),
+    pa.field('amount', pa.decimal128(20, 2), nullable=False),
+    pa.field('meta', pa.struct([
+        pa.field('channel', pa.string(), nullable=False),
+        pa.field('note', pa.string(), nullable=True),
+    ]), nullable=True),
+])
+
+result = read_with_schema(['2026-09.parquet', '2026-10.parquet'], billing_schema)
+print(result.format_report())
+result.table  # accepted files only, as per-file blocks in input order
+```
+
+- Each file is fully validated before any of its rows enter the unified
+  table; a rejected file contributes nothing, not even its well-formed row
+  groups.
+- Decimal sources are rescaled only when every value is exactly reducible
+  (trailing zeros); row groups with non-reducible values are reported by
+  index. Floats are never silently coerced into a decimal target.
+- Missing paths are filled with nulls only where the target allows nulls;
+  a missing required path rejects the file.
+- Only paths requested by the target schema are inspected, so input order
+  never changes which files are accepted or the result column types.
