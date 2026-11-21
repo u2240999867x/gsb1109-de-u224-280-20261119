@@ -27,6 +27,7 @@
 - [narwhals.exceptions](exceptions.md)
 - [narwhals.selectors](selectors.md)
 - [narwhals.sql](sql.md)
+- [narwhals.billing](billing.md)
 - [narwhals.testing](testing.md)
 - [narwhals.typing](typing.md)
 - [narwhals.utils](utils.md)
