@@ -4,3 +4,4 @@ from .fixtures.test_data import(
     parquet_file_s3_1,
     parquet_file_s3_2,
 )
+from .fixtures.sampling_data import workspace

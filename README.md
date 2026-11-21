@@ -131,3 +131,36 @@ $ parquet-tools csv s3://bucket-name/test.parquet |csvq "select one, three where
 | 2.5   | True  |
 +-------+-------+
 ```
+
+#### Resumable, quota-limited sampling (`--sample`)
+
+For review workflows that first show a small batch and may expand it before
+sign-off, `show` and `csv` share a resumable sampling credential. The
+credential fixes the actual sampling order, so two reports with different
+display columns always select the same rows.
+
+The first run filters on a column (it does not have to be displayed) and
+writes a credential:
+
+```bash
+$ parquet-tools show first.parquet second.parquet \
+    --sample 20 --where "status == OK" \
+    --columns amount --emit-token credential.json
+```
+
+A later run continues the same selection and may add reconciliation-only
+columns. The credential is updated in place; replaying a request never counts
+the same row twice, and a missing display column is rendered empty:
+
+```bash
+$ parquet-tools csv first.parquet second.parquet \
+    --sample 50 --where "status == OK" \
+    --columns amount,source --sample-token credential.json
+```
+
+Add `--reconcile` to append `_source_file`, `_row_group` and
+`_row_in_group` so every selected row can be checked against a full read.
+A credential is rejected when the file order or the predicate changes.
+Reliable row-group statistics skip groups that cannot match; groups without
+statistics are still filtered row by row, and scanning stops as soon as the
+quota is reached.

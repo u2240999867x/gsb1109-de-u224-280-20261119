@@ -37,7 +37,12 @@ def parquet_file():
             'file': ['file1.parquet'],
             'head': -1,
             'awsprofile': None,
-            'endpoint_url': None
+            'endpoint_url': None,
+            'sample': None,
+            'where': None,
+            'sample_token': None,
+            'emit_token': None,
+            'reconcile': False
         }
     ),
     # most complex one
@@ -48,7 +53,12 @@ def parquet_file():
             'file': ['file1.parquet', 'file2.parquet'],
             'head': 100,
             'awsprofile': 'user1',
-            'endpoint_url': 'http://localhost:9000'
+            'endpoint_url': 'http://localhost:9000',
+            'sample': None,
+            'where': None,
+            'sample_token': None,
+            'emit_token': None,
+            'reconcile': False
         }
     ),
     # empty columns

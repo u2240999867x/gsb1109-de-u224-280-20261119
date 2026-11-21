@@ -2,11 +2,13 @@ import os
 import sys
 from argparse import ArgumentParser, Namespace
 from logging import getLogger
-from typing import List, Optional
+from typing import List
 
 import pandas as pd
 from tabulate import tabulate
 
+from .sampling import (SampleToken, add_sampling_arguments,
+                       run_sampling)
 from .utils import (FileNotFoundException, InvalidCommandExcpetion,
                     ParquetFile, get_datafame_from_objs,
                     to_parquet_file)
@@ -52,6 +54,7 @@ def configure_parser(paser: ArgumentParser) -> ArgumentParser:
                        required=False,
                        default=os.environ.get('ENDPOINT_URL'),
                        help='A custom S3 endpoint URL')
+    add_sampling_arguments(paser)
 
     paser.set_defaults(handler=_cli)
     return paser
@@ -62,6 +65,23 @@ def _cli(args: Namespace) -> None:
         pfs: List[ParquetFile] = [
             to_parquet_file(file_exp=f, awsprofile=args.awsprofile, endpoint_url=args.endpoint_url)
             for f in args.file]
+        if args.sample is not None:
+            token = SampleToken.load(args.sample_token) if args.sample_token else None
+            df, new_token = run_sampling(
+                pfs,
+                quota=args.sample,
+                predicate_spec=args.where,
+                columns=args.columns,
+                token=token,
+                reconcile=args.reconcile,
+            )
+            # A continuation updates the credential in place so the next
+            # request resumes from the advanced checkpoint instead of re-scanning.
+            persist_path = args.emit_token or args.sample_token
+            if persist_path:
+                new_token.dump(persist_path)
+            _print_sample(df, table_format=args.format)
+            return
         with get_datafame_from_objs(pfs, args.head) as df:
             if df is None:
                 raise FileNotFoundException('File matching that expression not found.')
@@ -75,6 +95,10 @@ def _cli(args: Namespace) -> None:
         print(str(e), file=sys.stderr)
     except FileNotFoundException as e:
         print(str(e), file=sys.stderr)
+
+
+def _print_sample(df: pd.DataFrame, table_format: str) -> None:
+    print(tabulate(df, df.columns, tablefmt=table_format, showindex=False))
 
 
 def _execute(df: pd.DataFrame, format: str, head: int, columns: list) -> None:

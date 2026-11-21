@@ -23,7 +23,12 @@ def parser():
             'format': 'psql',
             'head': -1,
             'awsprofile': None,
-            'endpoint_url': None
+            'endpoint_url': None,
+            'sample': None,
+            'where': None,
+            'sample_token': None,
+            'emit_token': None,
+            'reconcile': False
         }
     ),
     # most complex one
@@ -35,7 +40,12 @@ def parser():
             'format': 'github',
             'head': 100,
             'awsprofile': None,
-            'endpoint_url': None
+            'endpoint_url': None,
+            'sample': None,
+            'where': None,
+            'sample_token': None,
+            'emit_token': None,
+            'reconcile': False
         }
     ),
     # file is on S3
@@ -47,7 +57,12 @@ def parser():
             'format': 'psql',
             'head': -1,
             'awsprofile': 'user1',
-            'endpoint_url': None
+            'endpoint_url': None,
+            'sample': None,
+            'where': None,
+            'sample_token': None,
+            'emit_token': None,
+            'reconcile': False
         }
     ),
     # empty columns
