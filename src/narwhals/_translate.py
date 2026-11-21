@@ -74,6 +74,8 @@ if TYPE_CHECKING:
     import pyarrow as pa
     from typing_extensions import Required, Self, TypedDict, TypeIs
 
+    from narwhals._index_mapping import IndexMapping
+
 
 class ArrowStreamExportable(Protocol):
     def __arrow_c_stream__(self, requested_schema: object | None = None) -> object: ...
@@ -213,6 +215,7 @@ if TYPE_CHECKING:
 
     class ExcludeSeries(_ExcludeSeries, total=False, closed=True):
         pass_through: bool
+        index_mapping: IndexMapping | None
 
     class ExcludeSeriesV1(_ExcludeSeries, total=False, closed=True):
         pass_through: bool | None
@@ -229,6 +232,7 @@ if TYPE_CHECKING:
 
     class AllowSeries(_AllowSeries, total=False, closed=True):
         pass_through: bool
+        index_mapping: IndexMapping | None
 
     class AllowSeriesV1(_AllowSeries, total=False, closed=True):
         pass_through: bool | None
@@ -272,6 +276,7 @@ if TYPE_CHECKING:
 
     class AllowLazy(_AllowLazy, total=False, closed=True):
         pass_through: bool
+        index_mapping: IndexMapping | None
 
     class AllowLazyV1(_AllowLazy, total=False, closed=True):
         pass_through: bool | None
@@ -288,6 +293,7 @@ if TYPE_CHECKING:
 
     class AllowAny(_AllowAny, total=False, closed=True):
         pass_through: bool
+        index_mapping: IndexMapping | None
 
     class AllowAnyV1(_AllowAny, total=False, closed=True):
         pass_through: bool | None
@@ -304,6 +310,7 @@ if TYPE_CHECKING:
 
     class PassThroughUnknown(_Unknown, total=False, closed=True):
         pass_through: Required[Literal[True]]
+        index_mapping: IndexMapping | None
 
     class PassThroughUnknownV1(_Unknown, total=False, closed=True):
         pass_through: Required[Literal[True]]

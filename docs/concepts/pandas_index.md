@@ -82,3 +82,48 @@ print(nw.to_native(df))
 If you keep these two rules in mind, then Narwhals will both help you avoid
 Index-related surprises whilst letting you preserve the Index for the subset
 of your users who consciously make great use of it.
+
+## 3. Explicitly mapped keys can be restored as an Index
+
+Some data suppliers carry business keys in the pandas (Multi)Index, others in
+ordinary columns. If you declare, explicitly, where each restoration key lives,
+then Narwhals can conform both kinds of sources to the same business table, and
+restore the pandas Index from those keys later:
+
+```python exec="yes" source="above" session="ex3"
+import pandas as pd
+import narwhals as nw
+
+df_pd = pd.DataFrame(
+    {"value": [10.0, 20.0]},
+    index=pd.MultiIndex.from_tuples([("a", 1), ("a", 2)], names=["batch_id", None]),
+)
+df = nw.from_native(
+    df_pd,
+    index_mapping={"batch": nw.IndexLevel("batch_id"), "record": nw.IndexLevel(1)},
+)
+```
+
+The mapped index levels become ordinary columns, so you can clean, reshape, and
+concatenate just like with any other business table:
+
+```python exec="yes" source="material-block" session="ex3" result="python"
+print(df.columns)
+```
+
+Narwhals tracks the keys through operations such as `select`, `rename`,
+`filter`, and `concat`. If the evidence is still complete when you convert
+back, `to_native` rebuilds the index levels - in their original order, with
+their original names - from the current rows and the latest column names:
+
+```python exec="yes" source="material-block" session="ex3" result="python"
+df = df.filter(nw.col("value") > 15).rename({"batch": "batch_key"})
+print(nw.to_native(df))
+```
+
+If a restoration key was dropped along the way (for example by a projection),
+then the corresponding layer is simply absent from the result - a column which
+merely shares a name (and even values) with a dropped key is never used as
+evidence. Without an `index_mapping`, `from_native`/`to_native` behave exactly
+as described in the sections above.
+

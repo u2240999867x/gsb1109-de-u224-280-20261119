@@ -11,6 +11,7 @@ from narwhals._expression_parsing import (
     is_expr,
     is_series,
 )
+from narwhals._index_mapping import merge_index_keys
 from narwhals._utils import (
     Implementation,
     Version,
@@ -170,9 +171,16 @@ def concat(items: Iterable[FrameT], *, how: ConcatMethod = "vertical") -> FrameT
         )
         raise InvalidOperationError(msg)
     plx = first_item.__narwhals_namespace__()
-    return first_item._with_compliant(
+    result = first_item._with_compliant(
         plx.concat([df._compliant_frame for df in items], how=how)
     )
+    if how in {"vertical", "diagonal"} and any(
+        getattr(df, "_index_keys", None) is not None for df in items
+    ):
+        result._index_keys = merge_index_keys(  # type: ignore[attr-defined]
+            [getattr(df, "_index_keys", None) for df in items]
+        )
+    return result
 
 
 def new_series(

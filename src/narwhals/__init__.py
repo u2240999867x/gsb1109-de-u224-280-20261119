@@ -3,6 +3,7 @@ from __future__ import annotations
 import typing as _t
 
 from narwhals import dependencies, dtypes, exceptions, selectors
+from narwhals._index_mapping import IndexColumn, IndexLevel
 from narwhals._utils import (
     Implementation,
     generate_temporary_column_name,
@@ -114,6 +115,8 @@ __all__ = [
     "Float32",
     "Float64",
     "Implementation",
+    "IndexColumn",
+    "IndexLevel",
     "Int8",
     "Int16",
     "Int32",

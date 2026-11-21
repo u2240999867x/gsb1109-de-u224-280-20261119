@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
     from typing_extensions import Unpack
 
+    from narwhals._index_mapping import IndexMapping
     from narwhals._translate import (
         AllowAny,
         AllowLazy,
@@ -105,9 +106,11 @@ def to_native(
     Returns:
         Object of class that user started with.
     """
-    from narwhals.dataframe import BaseFrame
+    from narwhals.dataframe import BaseFrame, DataFrame
     from narwhals.series import Series
 
+    if isinstance(narwhals_object, DataFrame):
+        return narwhals_object.to_native()
     if isinstance(narwhals_object, BaseFrame):
         return narwhals_object._compliant_frame._native_frame
     if isinstance(narwhals_object, Series):
@@ -165,6 +168,7 @@ def from_native(
     eager_only: bool,
     series_only: bool,
     allow_series: bool | None,
+    index_mapping: IndexMapping | None,
 ) -> Any: ...
 def from_native(
     native_object: IntoLazyFrameT
@@ -178,6 +182,7 @@ def from_native(
     eager_only: bool = False,
     series_only: bool = False,
     allow_series: bool | None = None,
+    index_mapping: IndexMapping | None = None,
 ) -> LazyFrame[IntoLazyFrameT] | DataFrame[IntoDataFrameT] | Series[IntoSeriesT] | T:
     """Convert `native_object` to Narwhals Dataframe, Lazyframe, or Series.
 
@@ -204,11 +209,63 @@ def from_native(
 
             - `False` or `None` (default): don't convert to Narwhals if `native_object` is a Series
             - `True`: allow `native_object` to be a Series
+        index_mapping: Optionally, an explicit declaration of where the restoration
+            keys of a business table live, so that sources which carry them in the
+            pandas index and sources which carry them in ordinary columns can be
+            conformed to the same business table. Pass either
+
+            - a dict of `{alias: locator}`, where each locator is
+              `nw.IndexLevel(name_or_position)` (a pandas index level) or
+              `nw.IndexColumn(name)` (an ordinary column), or
+            - a sequence of locators, in which case each alias defaults to the
+              level/column name (unnamed levels require an explicit alias).
+
+            Mapped index levels are extracted into ordinary columns named by their
+            alias, and mapped columns are renamed to their alias. Narwhals tracks
+            the keys through subsequent operations and, if the evidence is still
+            complete, `nw.to_native` restores the pandas index levels (or the
+            original column names) from the current rows and the latest column
+            names. Only supported for eager pandas-like, Polars, and PyArrow
+            DataFrames. When `None` (default), `from_native`/`to_native` behave
+            as they always have.
 
     Returns:
         DataFrame, LazyFrame, Series, or original object, depending
             on which combination of parameters was passed.
+
+    Examples:
+        >>> import pandas as pd
+        >>> import narwhals as nw
+        >>> df_native = pd.DataFrame(
+        ...     {"value": [10, 20]},
+        ...     index=pd.MultiIndex.from_tuples(
+        ...         [("a", 1), ("a", 2)], names=["batch_id", None]
+        ...     ),
+        ... )
+        >>> df = nw.from_native(
+        ...     df_native,
+        ...     index_mapping={
+        ...         "batch": nw.IndexLevel("batch_id"),
+        ...         "record": nw.IndexLevel(1),
+        ...     },
+        ... )
+        >>> df.columns
+        ['value', 'batch', 'record']
+        >>> nw.to_native(df)  # doctest: +NORMALIZE_WHITESPACE
+                    value
+        batch_id
+        a        1     10
+                 2     20
     """
+    if index_mapping is not None:
+        return _from_native_with_index_mapping(
+            native_object,
+            index_mapping,
+            pass_through=pass_through,
+            eager_only=eager_only,
+            series_only=series_only,
+            allow_series=allow_series,
+        )
     return _from_native_impl(  # type: ignore[no-any-return]
         native_object,
         pass_through=pass_through,
@@ -218,6 +275,40 @@ def from_native(
         allow_series=allow_series,
         version=Version.MAIN,
     )
+
+
+def _from_native_with_index_mapping(
+    native_object: Any,
+    index_mapping: IndexMapping,
+    *,
+    pass_through: bool,
+    eager_only: bool,
+    series_only: bool,
+    allow_series: bool | None,
+) -> Any:
+    from narwhals._index_mapping import attach_index_mapping
+    from narwhals.dataframe import DataFrame
+
+    if series_only:
+        msg = "Cannot only use `series_only` with `index_mapping`"
+        raise TypeError(msg)
+    native_object, keys, renames = attach_index_mapping(native_object, index_mapping)
+    result = _from_native_impl(
+        native_object,
+        pass_through=pass_through,
+        eager_only=eager_only,
+        eager_or_interchange_only=False,
+        series_only=series_only,
+        allow_series=allow_series,
+        version=Version.MAIN,
+    )
+    if not isinstance(result, DataFrame):  # pragma: no cover
+        msg = "`index_mapping` is only supported for (eager) DataFrames"
+        raise TypeError(msg)
+    if renames:
+        result = result.rename(renames)
+    result._index_keys = keys
+    return result
 
 
 def _translate_if_compliant(  # noqa: C901,PLR0911

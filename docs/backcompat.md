@@ -123,6 +123,15 @@ Which should you use? In general we recommend:
 
 ## `main` vs `stable.v2` differences
 
+- Since Narwhals 2.30:
+
+    - `nw.from_native` accepts an `index_mapping` argument, and `nw.IndexLevel` /
+      `nw.IndexColumn` are available, in the main Narwhals namespace only. These
+      let you declare, explicitly, where the restoration keys of a business table
+      live (pandas index levels or ordinary columns) so that `nw.to_native` can
+      restore the pandas index from them. In `narwhals.stable.v1` and
+      `narwhals.stable.v2`, `from_native` does not accept `index_mapping`.
+
 - Since Narwhals 2.26:
 
     - `Expr.cat.get_categories` and `Series.cat.get_categories` are deprecated in the main

@@ -23,6 +23,15 @@ from narwhals._expression_parsing import (
     is_bare_selector,
     is_scalar_like,
 )
+from narwhals._index_mapping import (
+    overwrite_index_keys,
+    passthrough_column_names,
+    prune_index_keys,
+    rename_index_keys,
+    restore_index_mapping,
+    select_index_keys,
+    with_columns_overwritten_names,
+)
 from narwhals._typing import Arrow, Pandas, _LazyAllowedImpl, _LazyFrameCollectImpl
 from narwhals._utils import (
     Implementation,
@@ -76,6 +85,7 @@ if TYPE_CHECKING:
     from narwhals._compliant import CompliantDataFrame, CompliantLazyFrame
     from narwhals._compliant.typing import CompliantExprAny
     from narwhals._expression_parsing import ExprMetadata
+    from narwhals._index_mapping import _IndexKey
     from narwhals._translate import IntoArrowTable
     from narwhals._typing import (
         EagerAllowed,
@@ -544,12 +554,19 @@ class DataFrame(BaseFrame[DataFrameT]):
 
     def __init__(self, df: Any, *, level: Literal["full", "lazy", "interchange"]) -> None:
         self._level: Literal["full", "lazy", "interchange"] = level
+        self._index_keys: tuple[_IndexKey, ...] | None = None
         self._compliant_frame: CompliantDataFrame[Any, Any, DataFrameT, Self]
         if is_compliant_dataframe(df):
             self._compliant_frame = df.__narwhals_dataframe__()
         else:  # pragma: no cover
             msg = f"Expected an object which implements `__narwhals_dataframe__`, got: {type(df)}"
             raise AssertionError(msg)
+
+    def _with_compliant(self, df: Any) -> Self:
+        out = super()._with_compliant(df)
+        if self._index_keys is not None:
+            out._index_keys = prune_index_keys(self._index_keys, out.columns)
+        return out
 
     @classmethod
     def from_arrow(
@@ -915,6 +932,11 @@ class DataFrame(BaseFrame[DataFrameT]):
     def to_native(self) -> DataFrameT:
         """Convert Narwhals DataFrame to native one.
 
+        If the DataFrame was created via `narwhals.from_native` with an
+        `index_mapping`, restoration keys which are still present are used to
+        rebuild the pandas index levels (or the original column names) from
+        the current rows and the latest column names.
+
         Examples:
             >>> import pandas as pd
             >>> import narwhals as nw
@@ -930,6 +952,10 @@ class DataFrame(BaseFrame[DataFrameT]):
             1    2  7.0   b
             2    3  8.0   c
         """
+        if self._index_keys:
+            return restore_index_mapping(
+                self._compliant_frame._native_frame, self._index_keys
+            )
         return self._compliant_frame._native_frame
 
     def to_pandas(self) -> pd.DataFrame:
@@ -1544,7 +1570,15 @@ class DataFrame(BaseFrame[DataFrameT]):
             0  1  0.5    2
             1  2  4.0    4
         """
-        return super().with_columns(*exprs, **named_exprs)
+        result = super().with_columns(*exprs, **named_exprs)
+        if self._index_keys is not None:
+            overwritten = with_columns_overwritten_names(flatten(exprs), named_exprs)
+            result._index_keys = (
+                tuple(key._replace(column=None) for key in self._index_keys)
+                if overwritten is None
+                else overwrite_index_keys(self._index_keys, overwritten)
+            )
+        return result
 
     def select(
         self, *exprs: IntoExpr | Iterable[IntoExpr], **named_exprs: IntoExpr
@@ -1575,7 +1609,12 @@ class DataFrame(BaseFrame[DataFrameT]):
             |a_plus_1: [[2,3]] |
             └──────────────────┘
         """
-        return super().select(*exprs, **named_exprs)
+        result = super().select(*exprs, **named_exprs)
+        if self._index_keys is not None:
+            result._index_keys = select_index_keys(
+                self._index_keys, passthrough_column_names(flatten(exprs))
+            )
+        return result
 
     def rename(self, mapping: dict[str, str]) -> Self:
         """Rename column names.
@@ -1595,7 +1634,10 @@ class DataFrame(BaseFrame[DataFrameT]):
             apple: [[1,2]]
             bar: [[6,7]]
         """
-        return super().rename(mapping)
+        result = super().rename(mapping)
+        if self._index_keys is not None:
+            result._index_keys = rename_index_keys(self._index_keys, mapping)
+        return result
 
     def cast(self, dtypes: Mapping[str, IntoDType]) -> Self:
         """Cast columns to the given dtypes.

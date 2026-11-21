@@ -23,7 +23,11 @@ def test_stable_api_completeness() -> None:
     main_namespace_api = nw.__all__
     extra = set(v2_api).difference(main_namespace_api)
     assert not extra
-    missing = set(main_namespace_api).difference(v2_api).difference({"stable", "list"})
+    missing = set(main_namespace_api).difference(v2_api).difference(
+        # `IndexColumn`/`IndexLevel` are only in the main namespace for now,
+        # see `docs/backcompat.md`.
+        {"stable", "list", "IndexColumn", "IndexLevel"}
+    )
     assert not missing
 
 
@@ -33,6 +37,11 @@ def test_stable_api_docstrings() -> None:
         if item == "from_dict":
             # We keep `native_namespace` around in the main namespace
             # until at least hierarchical forecast make a release
+            continue
+        if item in {"from_native", "IndexColumn", "IndexLevel"}:
+            # `from_native` documents `index_mapping` only in the main namespace,
+            # and `IndexColumn`/`IndexLevel` are only in the main namespace for
+            # now, see `docs/backcompat.md`.
             continue
         if item == "list":
             continue
