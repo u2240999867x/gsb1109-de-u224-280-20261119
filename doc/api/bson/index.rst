@@ -10,6 +10,7 @@ Sub-modules:
 .. toctree::
    :maxdepth: 2
 
+   batch_archive
    binary
    code
    codec_options
