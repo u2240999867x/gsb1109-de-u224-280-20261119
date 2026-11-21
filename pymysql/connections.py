@@ -12,6 +12,7 @@ import struct
 import sys
 import traceback
 import warnings
+import weakref
 
 from . import VERSION_STRING, _auth, converters, err
 from .charset import charset_by_id, charset_by_name
@@ -347,6 +348,7 @@ class Connection:
         self._result = None
         self._affected_rows = 0
         self.host_info = "Not connected"
+        self._batch_progress_reports = []
 
         # specified autocommit mode. None means use server default.
         self.autocommit_mode = autocommit
@@ -505,6 +507,7 @@ class Connection:
         """
         self._execute_command(COMMAND.COM_QUERY, "COMMIT")
         self._read_ok_packet()
+        self._notify_batch_progress("committed")
 
     def rollback(self):
         """
@@ -515,6 +518,39 @@ class Connection:
         """
         self._execute_command(COMMAND.COM_QUERY, "ROLLBACK")
         self._read_ok_packet()
+        self._notify_batch_progress("rolled_back")
+
+    def _register_batch_progress(self, report):
+        """Track *report* so a confirmed COMMIT/ROLLBACK updates its batches."""
+        try:
+            self._batch_progress_reports = [
+                ref for ref in self._batch_progress_reports if ref() is not None
+            ]
+            if not any(ref() is report for ref in self._batch_progress_reports):
+                self._batch_progress_reports.append(weakref.ref(report))
+        except TypeError:
+            # The report cannot be weakly referenced; do not retain it.
+            pass
+
+    def _unregister_batch_progress(self, report):
+        self._batch_progress_reports = [
+            ref
+            for ref in self._batch_progress_reports
+            if ref() is not None and ref() is not report
+        ]
+
+    def _notify_batch_progress(self, outcome):
+        live = []
+        for ref in self._batch_progress_reports:
+            report = ref()
+            if report is None:
+                continue
+            live.append(ref)
+            if outcome == "committed":
+                report._mark_committed()
+            else:
+                report._mark_rolled_back()
+        self._batch_progress_reports = live
 
     def show_warnings(self):
         """Send the "SHOW WARNINGS" SQL command."""
@@ -589,7 +625,26 @@ class Connection:
             sql = sql.encode(self.encoding)
         self._execute_command(COMMAND.COM_QUERY, sql)
         self._affected_rows = self._read_query_result(unbuffered=unbuffered)
+        self._note_transaction_command(sql)
         return self._affected_rows
+
+    def _note_transaction_command(self, sql):
+        """Update batch progress after a confirmed transaction statement."""
+        if not self._batch_progress_reports:
+            return
+        # Inspect only a small prefix so ordinary (possibly huge) statements
+        # are not copied or normalized.
+        head = bytes(sql[:16]).lstrip().upper()
+        if head.startswith(b"COMMIT"):
+            verb = b"COMMIT"
+        elif head.startswith(b"ROLLBACK"):
+            verb = b"ROLLBACK"
+        else:
+            return
+        rest = bytes(sql).lstrip()[len(verb) :].strip().rstrip(b";").strip().upper()
+        if rest not in (b"", b"WORK"):
+            return
+        self._notify_batch_progress("committed" if verb == b"COMMIT" else "rolled_back")
 
     def next_result(self, unbuffered=False):
         self._affected_rows = self._read_query_result(unbuffered=unbuffered)

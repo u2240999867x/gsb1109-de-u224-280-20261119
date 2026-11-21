@@ -17,3 +17,11 @@ Cursor Objects
 
 .. autoclass:: SSDictCursor
    :members:
+
+.. autoclass:: WriteProgress
+   :members: status, batch, states, pending, pulled, affected_rows, landed_rows,
+             total, transaction_state
+
+.. autoclass:: BatchRecord
+   :members: range, indices, count, state, execution_state, error,
+             affected_rows, sql, sent, landed

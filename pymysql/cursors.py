@@ -17,8 +17,320 @@ RE_INSERT_VALUES = re.compile(
 )
 
 
+_CLIENT_ERROR_CODES = range(2000, 2073)
+
+
 def _backquote_escape(s):
     return s.replace("`", "``")
+
+
+def _is_server_rejection(exc) -> bool:
+    """Return True when *exc* came from an error packet, not the transport.
+
+    Server errors use MySQL server error numbers (normally below 2000 or at
+    least 3000) and may carry a SQLSTATE.  Client-side errors use the
+    ``CR_*`` range (2000-2072) or are raised by the client without a numeric
+    error code at all.  Only an error packet proves that the whole statement
+    was rejected; a broken connection leaves its outcome unknown.
+    """
+    if not isinstance(exc, err.Error):
+        return False
+    if getattr(exc, "sqlstate", None):
+        return True
+    if not exc.args:
+        return False
+    code = exc.args[0]
+    if not isinstance(code, int) or code <= 0:
+        return False
+    return code not in _CLIENT_ERROR_CODES
+
+
+class _ItemRecord:
+    """Progress of one parameter, identified by its original input index."""
+
+    __slots__ = ("index", "state", "batch", "formatted")
+
+    def __init__(self, index):
+        self.index = index
+        #: One of the ``WriteProgress`` states.
+        self.state = WriteProgress.PULLED
+        self.batch = None
+        #: True once the client has bound and encoded the value.
+        self.formatted = False
+
+    def __repr__(self):
+        return (
+            f"<ItemRecord index={self.index} state={self.state!r}"
+            f" formatted={self.formatted}>"
+        )
+
+
+class BatchRecord:
+    """One merged statement built by :meth:`Cursor.executemany`.
+
+    ``start`` and ``stop`` are the original input indices of the parameters in
+    this statement, as a half-open range ``[start, stop)``.  A batch that has
+    been built but not sent (for example the parameter formatted just after a
+    length-driven split) keeps ``state == WriteProgress.NOT_SENT``.
+    """
+
+    def __init__(self, start):
+        self.start = start
+        self.stop = start
+        #: Current lifecycle step; see the ``WriteProgress`` constants.
+        self.state = WriteProgress.NOT_SENT
+        #: Last execution outcome, retained after a rollback changes ``state``.
+        self.execution_state = None
+        #: The server error or transport error for a failed statement.
+        self.error = None
+        #: Rows reported by the server for an acknowledged statement.
+        self.affected_rows = None
+        #: Exact statement bytes written for this batch, when it was sent.
+        self.sql = None
+        self._indices = []
+
+    @property
+    def range(self):
+        """The original input range as ``(start, stop)`` (``stop`` excluded)."""
+        return (self.start, self.stop)
+
+    @property
+    def indices(self):
+        """Original input indices in this statement, in input order."""
+        return tuple(self._indices)
+
+    @property
+    def count(self):
+        """Number of original parameters in this batch."""
+        return len(self._indices)
+
+    @property
+    def sent(self):
+        """True once the statement was written to the connection."""
+        return self.sql is not None
+
+    @property
+    def landed(self):
+        """True only after a confirmed commit, never merely after an OK."""
+        return self.state == WriteProgress.COMMITTED
+
+    def __repr__(self):
+        return (
+            f"<BatchRecord range={self.range} state={self.state!r} count={self.count}>"
+        )
+
+
+class WriteProgress:
+    """Opt-in progress report for :meth:`Cursor.executemany`.
+
+    Pass an instance as ``cursor.executemany(query, args, progress=report)``.
+    The report is updated as parameters are pulled from the one-pass iterator,
+    formatted on the client, sent in merged statements and acknowledged or
+    rejected by the server.  Original input indices are available through
+    :meth:`status` and :meth:`batch`.
+
+    The length of the iterator is never assumed: :attr:`total` is always
+    ``None`` and parameters that were never pulled have ``None`` status.  A
+    parameter that was pulled and formatted but not included in a sent
+    statement is reported as :attr:`NOT_SENT`.
+
+    States
+    ------
+    ``pulled``
+        Taken from the iterator but not yet formatted on the client.
+    ``not_sent``
+        Bound and encoded on the client, but not part of any command written
+        to the connection yet.
+    ``sent``
+        Included in a statement whose write is in progress.
+    ``acknowledged``
+        The server returned an OK packet inside the current transaction.  This
+        does not mean the rows are committed.
+    ``rejected``
+        The server returned an error packet for the whole statement, so the
+        entire original range failed together.
+    ``outcome_unknown``
+        The connection failed after the statement was sent, so the server may
+        or may not have executed it.
+    ``rolled_back``
+        The transaction was confirmed rolled back, so acknowledged rows did
+        not land.
+    ``committed``
+        The transaction was confirmed committed.
+    """
+
+    PULLED = "pulled"
+    NOT_SENT = "not_sent"
+    SENT = "sent"
+    ACKNOWLEDGED = "acknowledged"
+    REJECTED = "rejected"
+    OUTCOME_UNKNOWN = "outcome_unknown"
+    ROLLED_BACK = "rolled_back"
+    COMMITTED = "committed"
+
+    #: Alias kept for readability when inspecting a formatted lookahead item.
+    FORMATTED = NOT_SENT
+
+    def __init__(self):
+        #: Batch records in original input order, including a batch that was
+        #: built but never sent.
+        self.batches = []
+        #: Always ``None``: a one-pass iterator has no known total up front.
+        self.total = None
+        #: Transaction outcome once the connection confirms it.
+        self.transaction_state = "open"
+        self._pulled = 0
+        self._acknowledged_rows = 0
+        self._items = {}
+        self._bound = False
+        self._connection = None
+
+    @property
+    def pulled(self):
+        """How many parameters were actually taken from the iterator."""
+        return self._pulled
+
+    @property
+    def rolled_back(self):
+        """True after a ROLLBACK was confirmed for the bound connection."""
+        return self.transaction_state == "rolled_back"
+
+    @property
+    def affected_rows(self):
+        """Rows acknowledged by the server inside the still-open transaction.
+
+        This is not proof that the rows were committed; use :attr:`landed_rows`
+        or :attr:`BatchRecord.landed` for that.
+        """
+        return self._acknowledged_rows
+
+    @property
+    def landed_rows(self):
+        """Rows belonging to batches whose transaction was confirmed committed."""
+        return sum(
+            batch.affected_rows or 0
+            for batch in self.batches
+            if batch.state == self.COMMITTED
+        )
+
+    @property
+    def pending(self):
+        """Original indices that were pulled but never sent."""
+        return tuple(
+            index
+            for index, item in sorted(self._items.items())
+            if item.state in (self.PULLED, self.NOT_SENT)
+        )
+
+    def status(self, index):
+        """Return the state for an original input index, or ``None``.
+
+        ``None`` means the iterator has not yielded that index (its tail is
+        unknown), not that the parameter was rejected or left unsent.
+        """
+        item = self._items.get(index)
+        return item.state if item is not None else None
+
+    def batch(self, index):
+        """Return the :class:`BatchRecord` containing *index*, if any."""
+        item = self._items.get(index)
+        return item.batch if item is not None else None
+
+    def item(self, index):
+        """Return the internal item record for *index*, if it was pulled."""
+        return self._items.get(index)
+
+    def states(self):
+        """Map every pulled original index to its current state."""
+        return {index: item.state for index, item in self._items.items()}
+
+    def __len__(self):
+        return len(self._items)
+
+    def __contains__(self, index):
+        return index in self._items
+
+    # -- hooks used by Cursor.executemany() -----------------------------
+
+    def _bind(self, connection):
+        if self._bound:
+            raise ValueError("WriteProgress instance was already used")
+        self._bound = True
+        self._connection = connection
+        register = getattr(connection, "_register_batch_progress", None)
+        if register is not None:
+            register(self)
+
+    def _begin_batch(self, start=None):
+        return BatchRecord(start)
+
+    def _pulled_item(self, index):
+        self._pulled = index + 1
+        item = _ItemRecord(index)
+        self._items[index] = item
+        return item
+
+    def _formatted_item(self, index):
+        item = self._items[index]
+        item.formatted = True
+        if item.batch is None:
+            item.state = self.NOT_SENT
+
+    def _add_item(self, batch, index):
+        if batch.start is None:
+            batch.start = index
+        batch._indices.append(index)
+        batch.stop = index + 1
+        batch.state = self.NOT_SENT
+        self._items[index].batch = batch
+        if batch not in self.batches:
+            self.batches.append(batch)
+
+    def _set_batch_state(self, batch, state):
+        if batch is None:
+            return
+        batch.state = state
+        for index in batch._indices:
+            self._items[index].state = state
+
+    def _sent_batch(self, batch, sql):
+        if batch is None:
+            return
+        batch.sql = bytes(sql)
+        batch.execution_state = self.SENT
+        self._set_batch_state(batch, self.SENT)
+
+    def _acknowledge_batch(self, batch, affected_rows):
+        if batch is None:
+            return
+        batch.affected_rows = affected_rows
+        batch.execution_state = self.ACKNOWLEDGED
+        self._acknowledged_rows += affected_rows or 0
+        self._set_batch_state(batch, self.ACKNOWLEDGED)
+
+    def _fail_batch(self, batch, exc):
+        if batch is None:
+            return
+        state = self.REJECTED if _is_server_rejection(exc) else self.OUTCOME_UNKNOWN
+        batch.error = exc
+        batch.execution_state = state
+        self._set_batch_state(batch, state)
+        if state == self.OUTCOME_UNKNOWN:
+            self.transaction_state = "unknown"
+
+    def _mark_rolled_back(self):
+        """Called only after the server confirms a ROLLBACK."""
+        self.transaction_state = "rolled_back"
+        for batch in self.batches:
+            if batch.state == self.ACKNOWLEDGED:
+                self._set_batch_state(batch, self.ROLLED_BACK)
+
+    def _mark_committed(self):
+        """Called only after the server confirms a COMMIT."""
+        self.transaction_state = "committed"
+        for batch in self.batches:
+            if batch.state == self.ACKNOWLEDGED:
+                self._set_batch_state(batch, self.COMMITTED)
 
 
 class Cursor:
@@ -171,7 +483,7 @@ class Cursor:
         self._executed = query
         return result
 
-    def executemany(self, query, args):
+    def executemany(self, query, args, progress=None):
         """Run several data against one query.
 
         :param query: Query to execute.
@@ -179,6 +491,11 @@ class Cursor:
 
         :param args: Sequence of sequences or mappings. It is used as parameter.
         :type args: tuple or list
+
+        :param progress: Optional :class:`WriteProgress` report to update while
+            the merged statements are built, sent and acknowledged.  The input
+            iterator is consumed exactly once, as before.
+        :type progress: WriteProgress or None
 
         :return: Number of rows affected, if any.
         :rtype: int or None
@@ -203,32 +520,113 @@ class Cursor:
                 args,
                 self.max_stmt_length,
                 self._get_db().encoding,
+                progress,
             )
 
-        self.rowcount = sum(self.execute(query, arg) for arg in args)
-        return self.rowcount
+        if progress is None:
+            self.rowcount = sum(self.execute(query, arg) for arg in args)
+            return self.rowcount
+
+        progress._bind(self._get_db())
+        rows = 0
+        for index, arg in enumerate(args):
+            progress._pulled_item(index)
+            statement = self._mogrify(query, arg)
+            progress._formatted_item(index)
+            batch = progress._begin_batch(index)
+            progress._add_item(batch, index)
+            progress._sent_batch(batch, statement.encode(self._get_db().encoding))
+            try:
+                affected = self.execute(statement)
+            except BaseException as exc:
+                progress._fail_batch(batch, exc)
+                raise
+            progress._acknowledge_batch(batch, affected)
+            rows += affected
+        self.rowcount = rows
+        return rows
 
     def _do_execute_many(
-        self, prefix, values, postfix, args, max_stmt_length, encoding
+        self,
+        prefix,
+        values,
+        postfix,
+        args,
+        max_stmt_length,
+        encoding,
+        progress=None,
     ):
         encoding = self._get_db().encoding
+        if progress is not None:
+            progress._bind(self._get_db())
         if isinstance(prefix, str):
             prefix = prefix.encode(encoding)
         if isinstance(postfix, str):
             postfix = postfix.encode(encoding)
         sql = bytearray(prefix)
         args = iter(args)
-        sql += self._mogrify(values, next(args)).encode(encoding)
         rows = 0
-        for arg in args:
-            v = self._mogrify(values, arg).encode(encoding)
-            if len(sql) + len(v) + len(postfix) + 1 > max_stmt_length:
-                rows += self.execute(sql + postfix)
+        index = 0
+
+        def pull():
+            nonlocal index
+            arg = next(args)
+            if progress is not None:
+                progress._pulled_item(index)
+            value = self._mogrify(values, arg).encode(encoding)
+            if progress is not None:
+                progress._formatted_item(index)
+            original_index = index
+            index += 1
+            return original_index, value
+
+        def send(batch):
+            nonlocal rows
+            statement = sql + postfix
+            if progress is not None:
+                progress._sent_batch(batch, statement)
+            try:
+                affected = self.execute(statement)
+            except BaseException as exc:
+                if progress is not None:
+                    progress._fail_batch(batch, exc)
+                raise
+            if progress is not None:
+                progress._acknowledge_batch(batch, affected)
+            rows += affected
+
+        first_index, value = pull()
+        batch = progress._begin_batch(first_index) if progress is not None else None
+        if progress is not None:
+            progress._add_item(batch, first_index)
+        sql += value
+
+        while True:
+            try:
+                original_index, value = pull()
+            except StopIteration:
+                break
+            if len(sql) + len(value) + len(postfix) + 1 > max_stmt_length:
+                # Start the next batch before sending this one, so a
+                # length-driven lookahead is recorded as formatted but not
+                # sent even if this send fails.
+                next_batch = (
+                    progress._begin_batch(original_index)
+                    if progress is not None
+                    else None
+                )
+                if progress is not None:
+                    progress._add_item(next_batch, original_index)
+                send(batch)
                 sql = bytearray(prefix)
+                batch = next_batch
             else:
                 sql += b","
-            sql += v
-        rows += self.execute(sql + postfix)
+                if progress is not None:
+                    progress._add_item(batch, original_index)
+            sql += value
+
+        send(batch)
         self.rowcount = rows
         return rows
 
