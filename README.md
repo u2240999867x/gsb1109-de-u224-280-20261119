@@ -287,6 +287,93 @@ for _ in json_stream.visit_many(open("events.ndjson", "rb"), visitor):
     pass
 ```
 
+### <a id="resumable"></a> Resumable capture files: saved visit credentials
+
+A capture device may append several JSON snapshots to one binary file with no
+framing marker at all. A reader that stops part-way through the file needs to
+know which roots are completely verified and exactly where to start again.
+
+`visit_many` accepts a document-level credential for this case. A credential is
+only handed out after a whole root has passed syntax validation, so a root that
+was merely peeked at (even though the tokenizer may already have fetched a
+later block) is never marked as ingested.
+
+```python
+import json_stream
+from json_stream import Checkpoint
+
+# 1. Read until the source runs out.  Only complete roots are confirmed.
+visit = json_stream.visit_many("capture.json", handle_value)
+for event in visit:
+    if event.kind == json_stream.EventKind.ROOT:
+        print(event.root_ordinal, "confirmed at byte", event.position)
+    elif event.kind == json_stream.EventKind.INCOMPLETE:
+        # A partial eighth root stopped at EOF.  Its values were reported
+        # with confirmed=False / pending=True, but they are not in the
+        # credential.
+        break
+
+credential = visit.checkpoint           # Checkpoint(confirmed_roots=7, position=..., digest=...)
+credential.save("capture.credential")   # atomic UTF-8 JSON
+
+# 2. After the device appends the rest of root 8 and a new document, resume.
+#    Confirmed roots are not visited again, and numbering continues at 8.
+with open("capture.json", "rb") as source:
+    for event in json_stream.visit_many(
+        source, handle_value, checkpoint=Checkpoint.load("capture.credential")
+    ):
+        ...
+```
+
+A checkpoint records:
+
+- `confirmed_roots` - how many roots at the start of the file are verified.
+- `position` - the exclusive byte offset of the last verified root. This is a
+  logical resume point, distinct from however many bytes the previous reader
+  happened to fetch.
+- `digest` - SHA-256 of exactly `source_bytes[0:position]`.
+
+Before continuing, the confirmed prefix is checked. If the file at the same
+path was replaced by a different file - even one of identical length whose
+prefix changed - resuming raises `SourceChangedError` with
+`requires_reconfirmation = True`. The old credential cannot be reused;
+re-confirm the origin explicitly with `reconfirm=True` to start a fresh visit
+from byte 0.
+
+```python
+try:
+    list(json_stream.visit_many(source, handle_value, checkpoint=credential))
+except json_stream.SourceChangedError:
+    # the source changed: obtain and re-confirm it before ingesting again
+    list(json_stream.visit_many(source, handle_value, checkpoint=credential,
+                                reconfirm=True))
+```
+
+Byte changes are reported with their source offset and are never skipped in
+the hope of finding a later root. `InvalidRootError` is raised for bytes that
+cannot begin a JSON root (and an `InvalidRootEvent` is delivered to a
+`reporter` callback first).
+
+The visitor may be a callable taking `(value, path)` as before, or
+`(value, path, event)` to also receive a `FieldEvent` carrying `root_index`,
+`path`, `confirmed` and `pending`. A `reporter` callback receives every
+`FieldEvent`, `RootEvent`, `IncompleteRootEvent` and `InvalidRootEvent`.
+
+This resumable reading mode requires a re-openable raw binary archive: a path,
+or a seekable binary file object. One-shot iterables and text streams are
+rejected with `UnsupportedSourceError`, because they cannot supply exact raw
+byte positions. Passing a path selects this mode automatically; pass
+`resumable=True` to opt in when using an already-open binary file. Ordinary
+`visit_many(stream, visitor)` is unchanged and still accepts any iterable.
+
+Credentials can also be bound to the origin rather than (or in addition to) the
+raw bytes:
+
+```python
+json_stream.visit_many(source, handle_value, checkpoint=credential,
+                       verify="both")  # digest + source identity
+```
+
 ### <a id="urls"></a> Stream a URL
 
 `json_stream` knows how to stream directly from a URL using a variety of packages.
