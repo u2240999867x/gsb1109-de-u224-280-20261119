@@ -287,6 +287,44 @@ for _ in json_stream.visit_many(open("events.ndjson", "rb"), visitor):
     pass
 ```
 
+### <a id="envelope"></a> Routing envelopes: `EnvelopeStream`
+
+`json_stream.EnvelopeStream` wraps a one-shot iterable of UTF-8 byte chunks
+(e.g. a response body) and lets you peek at a bounded prefix to identify the
+kind of the first JSON root before committing to exactly one of two paths:
+
+* replay the whole response, losslessly, through `json_stream.load_many()`
+* parse the first root as a routing envelope, then hand the raw bytes that
+  follow it to a downstream processor that only accepts business data
+
+```python
+import json_stream
+
+stream = json_stream.EnvelopeStream(response_chunks)  # iterable of bytes
+
+# probe with a read budget; returns None while the budget only covers
+# whitespace, so you can extend it and ask again
+kind = stream.peek_root_type(1024)  # 'object', 'array', 'string', ...
+
+if kind != 'object':
+    # path 1: the original response is replayed byte-for-byte, including
+    # everything already read while probing
+    for item in stream.load_many():
+        ...
+else:
+    # path 2: read the first root as a routing envelope (streamed, so it
+    # may be arbitrarily large), then hand off the rest
+    envelope = stream.load_envelope()
+    route = envelope['route']
+    business_bytes = stream.remaining_bytes()  # iterator of raw byte chunks
+```
+
+`remaining_bytes()` starts at the first byte after the first root and
+preserves all original whitespace and already-buffered downstream bytes
+exactly as received, regardless of chunking. The envelope must be
+syntactically complete: a corrupt envelope raises `ValueError` and no
+handoff happens. Choosing one path makes the other unavailable.
+
 ### <a id="urls"></a> Stream a URL
 
 `json_stream` knows how to stream directly from a URL using a variety of packages.
