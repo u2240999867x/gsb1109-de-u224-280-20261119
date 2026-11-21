@@ -63,6 +63,9 @@ struct module_state {
     PyObject* _encoder_map_str;
     PyObject* _decoder_map_str;
     PyObject* _fallback_encoder_str;
+    PyObject* _integer_decode_paths_str;
+    PyObject* _int_str;
+    PyObject* _int64_str;
     PyObject* _raw_str;
     PyObject* _subtype_str;
     PyObject* _binary_str;
@@ -237,7 +240,8 @@ _downcast_and_check(Py_ssize_t size, uint8_t extra) {
 
 static PyObject* elements_to_dict(PyObject* self, const char* string,
                                   unsigned max,
-                                  const codec_options_t* options);
+                                  const codec_options_t* options,
+                                  PyObject* parent_path);
 
 static int _write_element_to_buffer(PyObject* self, buffer_t buffer,
                                     int type_byte, PyObject* value,
@@ -710,6 +714,10 @@ static int _load_python_objects(PyObject* module) {
         (state->_encoder_map_str = PyUnicode_FromString("_encoder_map")) &&
         (state->_decoder_map_str = PyUnicode_FromString("_decoder_map")) &&
         (state->_fallback_encoder_str = PyUnicode_FromString("_fallback_encoder")) &&
+        (state->_integer_decode_paths_str =
+            PyUnicode_FromString("integer_decode_paths")) &&
+        (state->_int_str = PyUnicode_FromString("int")) &&
+        (state->_int64_str = PyUnicode_FromString("int64")) &&
         (state->_raw_str = PyUnicode_FromString("raw")) &&
         (state->_subtype_str = PyUnicode_FromString("subtype")) &&
         (state->_binary_str = PyUnicode_FromString("binary")) &&
@@ -893,6 +901,7 @@ fail:
  */
 int convert_codec_options(PyObject* self, PyObject* options_obj, codec_options_t* options) {
     PyObject* type_registry_obj = NULL;
+    PyObject* integer_decode_paths_obj = NULL;
     struct module_state *state = GETSTATE(self);
     long type_marker;
     if (!state) {
@@ -901,14 +910,15 @@ int convert_codec_options(PyObject* self, PyObject* options_obj, codec_options_t
 
     options->unicode_decode_error_handler = NULL;
 
-    if (!PyArg_ParseTuple(options_obj, "ObbzOOb",
+    if (!PyArg_ParseTuple(options_obj, "ObbzOObO",
                           &options->document_class,
                           &options->tz_aware,
                           &options->uuid_rep,
                           &options->unicode_decode_error_handler,
                           &options->tzinfo,
                           &type_registry_obj,
-                          &options->datetime_conversion)) {
+                          &options->datetime_conversion,
+                          &integer_decode_paths_obj)) {
         return 0;
     }
 
@@ -922,6 +932,16 @@ int convert_codec_options(PyObject* self, PyObject* options_obj, codec_options_t
                                &options->type_registry, state->_encoder_map_str, state->_decoder_map_str, state->_fallback_encoder_str)) {
         return 0;
     }
+
+    if (!PyDict_Check(integer_decode_paths_obj)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "integer_decode_paths must be a dict");
+        return 0;
+    }
+    options->integer_decode_paths = integer_decode_paths_obj;
+    Py_INCREF(options->integer_decode_paths);
+    options->is_integer_paths_empty =
+        (PyDict_Size(options->integer_decode_paths) == 0);
 
     options->is_raw_bson = (101 == type_marker);
     options->is_dict_class = (options->document_class == (PyObject*)&PyDict_Type);
@@ -943,6 +963,7 @@ void destroy_codec_options(codec_options_t* options) {
     Py_CLEAR(options->type_registry.encoder_map);
     Py_CLEAR(options->type_registry.decoder_map);
     Py_CLEAR(options->type_registry.fallback_encoder);
+    Py_CLEAR(options->integer_decode_paths);
 }
 
 static int write_element_to_buffer(PyObject* self, buffer_t buffer,
@@ -2155,9 +2176,63 @@ invalid:
     return ret;
 }
 
+/* Build a field path by appending `name` to `parent_path`.
+ *
+ * Returns a new reference to a tuple, or NULL on failure. */
+static PyObject* _field_path(PyObject* parent_path, PyObject* name) {
+    PyObject* segment = PyTuple_Pack(1, name);
+    if (segment == NULL) {
+        return NULL;
+    }
+    PyObject* path = PySequence_Concat(parent_path, segment);
+    Py_DECREF(segment);
+    return path;
+}
+
+/* Apply the IntegerDecoding option declared for `path` to a BSON integer.
+ *
+ * A NULL `path` means the integer is not reachable by a document path (for
+ * example the scope of a Code with scope), so default decoding is kept.
+ * Always returns a new reference, or NULL on failure. */
+static PyObject* _convert_integer(PyObject* self, PyObject* value,
+                                  PyObject* path,
+                                  const codec_options_t* options) {
+    if (path == NULL || options->is_integer_paths_empty) {
+        Py_INCREF(value);
+        return value;
+    }
+    PyObject* decoding = PyDict_GetItem(options->integer_decode_paths, path);
+    if (decoding == NULL) {
+        if (PyErr_Occurred()) {
+            return NULL;
+        }
+        Py_INCREF(value);
+        return value;
+    }
+    struct module_state* state = GETSTATE(self);
+    if (state == NULL) {
+        return NULL;
+    }
+    if (PyObject_RichCompareBool(decoding, state->_int64_str, Py_EQ) == 1) {
+        return PyObject_CallFunctionObjArgs(state->BSONInt64, value, NULL);
+    }
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (PyObject_RichCompareBool(decoding, state->_int_str, Py_EQ) == 1) {
+        return PyObject_CallFunctionObjArgs((PyObject*)&PyLong_Type, value, NULL);
+    }
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    Py_INCREF(value);
+    return value;
+}
+
 static PyObject* get_value(PyObject* self, PyObject* name, const char* buffer,
                            unsigned* position, unsigned char type,
-                           unsigned max, const codec_options_t* options, int raw_array) {
+                           unsigned max, const codec_options_t* options,
+                           int raw_array, PyObject* path) {
     struct module_state *state = GETSTATE(self);
     PyObject* value = NULL;
     if (!state) {
@@ -2220,7 +2295,7 @@ static PyObject* get_value(PyObject* self, PyObject* name, const char* buffer,
             }
 
             value = elements_to_dict(self, buffer + *position,
-                                     size, options);
+                                     size, options, path);
             if (!value) {
                 goto invalid;
             }
@@ -2287,8 +2362,11 @@ static PyObject* get_value(PyObject* self, PyObject* name, const char* buffer,
                     Py_DECREF(value);
                     goto invalid;
                 }
+                /* Array indexes are not path segments: every element shares
+                 * the array's own path. */
                 to_append = get_value(self, name, buffer, position, bson_type,
-                                      max - (unsigned)key_size, options, raw_array);
+                                      max - (unsigned)key_size, options,
+                                      raw_array, path);
                 Py_LeaveRecursiveCall();
                 if (!to_append) {
                     Py_DECREF(value);
@@ -2669,8 +2747,10 @@ static PyObject* get_value(PyObject* self, PyObject* name, const char* buffer,
             if (buffer[*position + scope_size - 1]) {
                 goto invalid;
             }
+            /* The scope document is not reachable by a declared document
+             * path. */
             scope = elements_to_dict(self, buffer + *position,
-                                 scope_size, options);
+                                 scope_size, options, NULL);
             if (!scope) {
                 Py_DECREF(code);
                 goto invalid;
@@ -2686,12 +2766,18 @@ static PyObject* get_value(PyObject* self, PyObject* name, const char* buffer,
     case 16:
         {
             int32_t i;
+            PyObject* raw_value;
             if (max < 4) {
                 goto invalid;
             }
             memcpy(&i, buffer + *position, 4);
             i = (int32_t)BSON_UINT32_FROM_LE(i);
-            value = PyLong_FromLong(i);
+            raw_value = PyLong_FromLong(i);
+            if (!raw_value) {
+                goto invalid;
+            }
+            value = _convert_integer(self, raw_value, path, options);
+            Py_DECREF(raw_value);
             if (!value) {
                 goto invalid;
             }
@@ -2727,6 +2813,7 @@ static PyObject* get_value(PyObject* self, PyObject* name, const char* buffer,
     case 18:
         {
             int64_t ll;
+            PyObject* raw_value;
             if (max < 8) {
                 goto invalid;
             }
@@ -2737,8 +2824,16 @@ static PyObject* get_value(PyObject* self, PyObject* name, const char* buffer,
                 goto invalid;
             }
             PyObject* int64_args[1] = {ll_obj};
-            value = PyObject_Vectorcall(state->BSONInt64, int64_args, 1, NULL);
+            raw_value = PyObject_Vectorcall(state->BSONInt64, int64_args, 1, NULL);
             Py_DECREF(ll_obj);
+            if (!raw_value) {
+                goto invalid;
+            }
+            value = _convert_integer(self, raw_value, path, options);
+            Py_DECREF(raw_value);
+            if (!value) {
+                goto invalid;
+            }
             *position += 8;
             break;
         }
@@ -2856,7 +2951,7 @@ static PyObject* get_value(PyObject* self, PyObject* name, const char* buffer,
 static int _element_to_dict(PyObject* self, const char* string,
                             unsigned position, unsigned max,
                             const codec_options_t* options,
-                            int raw_array,
+                            int raw_array, PyObject* parent_path,
                             PyObject** name, PyObject** value) {
     unsigned char type = (unsigned char)string[position++];
     size_t name_length = strlen(string + position);
@@ -2878,8 +2973,21 @@ static int _element_to_dict(PyObject* self, const char* string,
         return -1;
     }
     position += (unsigned)name_length + 1;
+    /* A NULL parent path marks a region not reachable by a declared document
+     * path (e.g. a Code scope); it stays NULL through nested decoding so that
+     * integers inside are never converted. When no paths are declared at all,
+     * skip building path tuples entirely to keep the common decode path fast. */
+    PyObject* field_path = NULL;
+    if (parent_path != NULL && !options->is_integer_paths_empty) {
+        field_path = _field_path(parent_path, *name);
+        if (field_path == NULL) {
+            Py_DECREF(*name);
+            return -1;
+        }
+    }
     *value = get_value(self, *name, string, &position, type,
-                       max - position, options, raw_array);
+                       max - position, options, raw_array, field_path);
+    Py_XDECREF(field_path);
     if (!*value) {
         Py_DECREF(*name);
         return -1;
@@ -2899,6 +3007,7 @@ static PyObject* _cbson_element_to_dict(PyObject* self, PyObject* args) {
     PyObject* name;
     PyObject* value;
     PyObject* result_tuple = NULL;
+    PyObject* parent_path;
 
     if (!(PyArg_ParseTuple(args, "OIIOp", &bson, &position, &max,
                           &options_obj, &raw_array) &&
@@ -2913,7 +3022,14 @@ static PyObject* _cbson_element_to_dict(PyObject* self, PyObject* args) {
     string = PyBytes_AS_STRING(bson);
     options.buffer_owner = bson;
 
-    new_position = _element_to_dict(self, string, position, max, &options, raw_array, &name, &value);
+    /* A standalone element is decoded from the document root. */
+    parent_path = PyTuple_New(0);
+    if (parent_path == NULL) {
+        goto done;
+    }
+    new_position = _element_to_dict(self, string, position, max, &options,
+                                    raw_array, parent_path, &name, &value);
+    Py_DECREF(parent_path);
     if (new_position < 0) {
         goto done;
     }
@@ -2931,7 +3047,8 @@ done:
 
 static PyObject* _elements_to_dict(PyObject* self, const char* string,
                                    unsigned max,
-                                   const codec_options_t* options) {
+                                   const codec_options_t* options,
+                                   PyObject* parent_path) {
     unsigned position = 0;
     PyObject* dict;
     int raw_array = 0;
@@ -2953,7 +3070,8 @@ static PyObject* _elements_to_dict(PyObject* self, const char* string,
         int new_position;
 
         new_position = _element_to_dict(
-            self, string, position, max, options, raw_array, &name, &value);
+            self, string, position, max, options, raw_array,
+            parent_path, &name, &value);
         if (new_position < 0) {
             Py_DECREF(dict);
             return NULL;
@@ -2987,7 +3105,8 @@ static PyObject* _elements_to_dict(PyObject* self, const char* string,
 
 static PyObject* elements_to_dict(PyObject* self, const char* string,
                                   unsigned max,
-                                  const codec_options_t* options) {
+                                  const codec_options_t* options,
+                                  PyObject* parent_path) {
     PyObject* result;
     if (options->is_raw_bson) {
         PyObject* bson_bytes;
@@ -3038,7 +3157,8 @@ static PyObject* elements_to_dict(PyObject* self, const char* string,
     }
     if (Py_EnterRecursiveCall(" while decoding a BSON document"))
         return NULL;
-    result = _elements_to_dict(self, string + 4, max - 5, options);
+    result = _elements_to_dict(self, string + 4, max - 5, options,
+                               parent_path);
     Py_LeaveRecursiveCall();
     return result;
 }
@@ -3124,6 +3244,7 @@ static PyObject* _cbson_raw_to_dict(PyObject* self, PyObject* args) {
     PyObject* bson = NULL;
     Py_buffer view = {0};
     PyObject* ret = NULL;
+    PyObject* parent_path = NULL;
     const char* string;
     unsigned end;
 
@@ -3133,14 +3254,22 @@ static PyObject* _cbson_raw_to_dict(PyObject* self, PyObject* args) {
         return NULL;
     }
 
+    parent_path = PyTuple_New(0);
+    if (parent_path == NULL) {
+        destroy_codec_options(&options);
+        return NULL;
+    }
+
     bson = _prepare_input_buffer(self, data, &options);
     if (!bson) {
+        Py_DECREF(parent_path);
         destroy_codec_options(&options);
         return NULL;
     }
 
     if (!_get_buffer(bson, &view)) {
         Py_DECREF(bson);
+        Py_DECREF(parent_path);
         destroy_codec_options(&options);
         return NULL;
     }
@@ -3165,7 +3294,8 @@ static PyObject* _cbson_raw_to_dict(PyObject* self, PyObject* args) {
         PyObject* name = NULL;
         PyObject* value = NULL;
         int new_position = _element_to_dict(
-            self, string, position, obj_end, &options, raw_array, &name, &value);
+            self, string, position, obj_end, &options, raw_array,
+            parent_path, &name, &value);
         if (new_position < 0) {
             goto done;
         }
@@ -3200,6 +3330,7 @@ static PyObject* _cbson_raw_to_dict(PyObject* self, PyObject* args) {
 done:
     PyBuffer_Release(&view);
     Py_DECREF(bson);
+    Py_XDECREF(parent_path);
     destroy_codec_options(&options);
     return ret;
 }
@@ -3209,6 +3340,7 @@ static PyObject* _cbson_bson_to_dict(PyObject* self, PyObject* args) {
     Py_ssize_t total_size;
     const char* string;
     PyObject* bson = NULL;
+    PyObject* root_path = NULL;
     codec_options_t options;
     PyObject* result = NULL;
     PyObject* options_obj;
@@ -3217,6 +3349,12 @@ static PyObject* _cbson_bson_to_dict(PyObject* self, PyObject* args) {
     if (! (PyArg_ParseTuple(args, "OO", &bson, &options_obj) &&
             convert_codec_options(self, options_obj, &options))) {
         return result;
+    }
+
+    root_path = PyTuple_New(0);
+    if (root_path == NULL) {
+        destroy_codec_options(&options);
+        return NULL;
     }
 
     bson = _prepare_input_buffer(self, bson, &options);
@@ -3274,10 +3412,12 @@ static PyObject* _cbson_bson_to_dict(PyObject* self, PyObject* args) {
         goto done;
     }
 
-    result = elements_to_dict(self, string, (unsigned)size, &options);
+    result = elements_to_dict(self, string, (unsigned)size, &options,
+                              root_path);
 done:
     PyBuffer_Release(&view);
     Py_DECREF(bson);
+    Py_XDECREF(root_path);
     destroy_codec_options(&options);
     return result;
 }
@@ -3288,6 +3428,7 @@ static PyObject* _cbson_decode_all(PyObject* self, PyObject* args) {
     const char* string;
     PyObject* bson;
     PyObject* dict;
+    PyObject* root_path = NULL;
     PyObject* result = NULL;
     codec_options_t options;
     PyObject* options_obj = NULL;
@@ -3298,14 +3439,22 @@ static PyObject* _cbson_decode_all(PyObject* self, PyObject* args) {
         return NULL;
     }
 
+    root_path = PyTuple_New(0);
+    if (root_path == NULL) {
+        destroy_codec_options(&options);
+        return NULL;
+    }
+
     bson = _prepare_input_buffer(self, bson, &options);
     if (!bson) {
+        Py_DECREF(root_path);
         destroy_codec_options(&options);
         return NULL;
     }
 
     if (!_get_buffer(bson, &view)) {
         Py_DECREF(bson);
+        Py_DECREF(root_path);
         destroy_codec_options(&options);
         return NULL;
     }
@@ -3361,7 +3510,8 @@ static PyObject* _cbson_decode_all(PyObject* self, PyObject* args) {
             goto fail;
         }
 
-        dict = elements_to_dict(self, string, (unsigned)size, &options);
+        dict = elements_to_dict(self, string, (unsigned)size, &options,
+                                root_path);
         if (!dict) {
             Py_DECREF(result);
             goto fail;
@@ -3381,6 +3531,7 @@ fail:
 done:
     PyBuffer_Release(&view);
     Py_DECREF(bson);
+    Py_DECREF(root_path);
     destroy_codec_options(&options);
     return result;
 }
@@ -3563,6 +3714,9 @@ static int _cbson_traverse(PyObject *m, visitproc visit, void *arg) {
     Py_VISIT(state->_encoder_map_str);
     Py_VISIT(state->_decoder_map_str);
     Py_VISIT(state->_fallback_encoder_str);
+    Py_VISIT(state->_integer_decode_paths_str);
+    Py_VISIT(state->_int_str);
+    Py_VISIT(state->_int64_str);
     Py_VISIT(state->_raw_str);
     Py_VISIT(state->_subtype_str);
     Py_VISIT(state->_binary_str);
@@ -3611,6 +3765,9 @@ static int _cbson_clear(PyObject *m) {
     Py_CLEAR(state->_encoder_map_str);
     Py_CLEAR(state->_decoder_map_str);
     Py_CLEAR(state->_fallback_encoder_str);
+    Py_CLEAR(state->_integer_decode_paths_str);
+    Py_CLEAR(state->_int_str);
+    Py_CLEAR(state->_int64_str);
     Py_CLEAR(state->_raw_str);
     Py_CLEAR(state->_subtype_str);
     Py_CLEAR(state->_binary_str);

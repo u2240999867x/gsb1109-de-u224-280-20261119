@@ -248,6 +248,95 @@ class DatetimeConversion(int, enum.Enum):
     """
 
 
+class IntegerDecoding(str, enum.Enum):
+    """Options for decoding the BSON integer types (int32 and int64).
+
+    These only affect BSON integers reached through a path declared with the
+    ``integer_decode_paths`` :class:`CodecOptions` parameter. Integers at any
+    other path, including integers nested inside values of another BSON type
+    such as a BSON binary, keep their default decoding: int32 to a Python
+    :class:`int` and int64 to an :class:`~bson.int64.Int64`.
+
+    .. versionadded 4.21
+    """
+
+    INT = "int"
+    """Decode the BSON integer as a Python :class:`int`.
+
+    Both BSON int32 and int64 values at a declared path decode to plain
+    Python ints.
+
+    .. versionadded 4.21
+    """
+
+    INT64 = "int64"
+    """Decode the BSON integer as an :class:`~bson.int64.Int64`.
+
+    Both BSON int32 and int64 values at a declared path decode to
+    :class:`~bson.int64.Int64` instances.
+
+    .. versionadded 4.21
+    """
+
+
+_IntegerDecodePathsInput = (
+    Mapping[str | tuple[str, ...], IntegerDecoding | str] | None
+)
+"""Accepted shape of the ``integer_decode_paths`` constructor argument.
+
+Dotted string keys come from callers; tuple keys are the already normalized
+form re-passed by :meth:`CodecOptions.with_options`.
+"""
+
+
+def _parse_integer_decode_paths(
+    integer_decode_paths: _IntegerDecodePathsInput,
+) -> dict[tuple[str, ...], IntegerDecoding]:
+    """Validate and normalize the ``integer_decode_paths`` option.
+
+    Paths are given as dotted field names, e.g. ``"rows.amount"``, and
+    normalized into tuples of field name segments. Array indexes are not
+    used: a segment matches the same field in every array element.
+
+    Tuple keys are accepted so re-passing an already normalized option (for
+    example through :meth:`CodecOptions.with_options`) is idempotent.
+    """
+    if integer_decode_paths is None:
+        return {}
+    if not isinstance(integer_decode_paths, Mapping):
+        raise TypeError(
+            "integer_decode_paths must be a mapping of dotted paths to IntegerDecoding"
+        )
+
+    normalized: dict[tuple[str, ...], IntegerDecoding] = {}
+    for path, decoding in integer_decode_paths.items():
+        if isinstance(path, str):
+            if not path:
+                raise TypeError("integer_decode_paths keys must be non-empty dotted path strings")
+            segments = tuple(path.split("."))
+        elif isinstance(path, tuple) and path and all(
+            isinstance(seg, str) and seg for seg in path
+        ):
+            segments = path
+        else:
+            raise TypeError(
+                "integer_decode_paths keys must be non-empty dotted path strings or tuples "
+                f"of field name strings, got {path!r}"
+            )
+        if not all(segments):
+            raise ValueError(
+                f"integer_decode_paths path {path!r} must be dot-separated, non-empty field names"
+            )
+        try:
+            normalized[segments] = IntegerDecoding(decoding)
+        except ValueError:
+            raise ValueError(
+                "integer_decode_paths values must be IntegerDecoding members, got "
+                f"{decoding!r} for path {path!r}"
+            ) from None
+    return normalized
+
+
 class _BaseCodecOptions(NamedTuple):
     document_class: type[Mapping[str, Any]]
     tz_aware: bool
@@ -256,6 +345,7 @@ class _BaseCodecOptions(NamedTuple):
     tzinfo: datetime.tzinfo | None
     type_registry: TypeRegistry
     datetime_conversion: DatetimeConversion | None
+    integer_decode_paths: dict[tuple[str, ...], IntegerDecoding]
 
 
 if TYPE_CHECKING:
@@ -269,6 +359,7 @@ if TYPE_CHECKING:
         tzinfo: datetime.tzinfo | None
         type_registry: TypeRegistry
         datetime_conversion: int | None
+        integer_decode_paths: dict[tuple[str, ...], IntegerDecoding]
 
         def __new__(
             cls: type[CodecOptions[_DocumentType]],
@@ -279,6 +370,7 @@ if TYPE_CHECKING:
             tzinfo: datetime.tzinfo | None = ...,
             type_registry: TypeRegistry | None = ...,
             datetime_conversion: int | None = ...,
+            integer_decode_paths: _IntegerDecodePathsInput = ...,
         ) -> CodecOptions[_DocumentType]: ...
 
         # CodecOptions API
@@ -373,6 +465,14 @@ else:
                 return DatetimeMS objects when the underlying datetime is
                 out-of-range and 'datetime_clamp' to clamp to the minimum and
                 maximum possible datetimes. Defaults to 'datetime'.
+            :param integer_decode_paths: A mapping from dotted document paths to
+                :class:`IntegerDecoding` options. BSON int32 and int64 values at
+                the declared paths are decoded with the requested integer type;
+                every other integer (including integers nested inside other
+                BSON values such as BSON binaries) keeps its default decoding.
+                A path segment inside an array applies to every element of the
+                array. Defaults to ``None``, which leaves integer decoding
+                unchanged.
 
             .. versionchanged:: 4.0
                The default for `uuid_representation` was changed from
@@ -399,6 +499,7 @@ else:
             tzinfo: datetime.tzinfo | None = None,
             type_registry: TypeRegistry | None = None,
             datetime_conversion: DatetimeConversion | None = DatetimeConversion.DATETIME,
+            integer_decode_paths: _IntegerDecodePathsInput = None,
         ) -> Self:
             doc_class = document_class or dict
             # Generic aliases like SON[str, Any] or dict[str, Any] aren't classes, so
@@ -442,6 +543,8 @@ else:
                     f"type_registry must be an instance of TypeRegistry, not {type(type_registry)}"
                 )
 
+            normalized_integer_paths = _parse_integer_decode_paths(integer_decode_paths)
+
             return tuple.__new__(
                 cls,
                 (
@@ -452,6 +555,7 @@ else:
                     tzinfo,
                     type_registry,
                     datetime_conversion,
+                    normalized_integer_paths,
                 ),
             )
 
@@ -470,7 +574,8 @@ else:
                 f"uuid_representation={uuid_rep_repr}, "
                 f"unicode_decode_error_handler={self.unicode_decode_error_handler!r}, "
                 f"tzinfo={self.tzinfo!r}, type_registry={self.type_registry!r}, "
-                f"datetime_conversion={self.datetime_conversion!s}"
+                f"datetime_conversion={self.datetime_conversion!s}, "
+                f"integer_decode_paths={self.integer_decode_paths!r}"
             )
 
         def __repr__(self) -> str:
@@ -509,6 +614,7 @@ def _parse_codec_options(options: Any) -> CodecOptions[Any]:
         "tzinfo",
         "type_registry",
         "datetime_conversion",
+        "integer_decode_paths",
     }:
         if k == "uuidrepresentation":
             kwargs["uuid_representation"] = options[k]

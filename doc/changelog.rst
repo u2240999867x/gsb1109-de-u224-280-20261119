@@ -4,6 +4,19 @@ Changelog
 Changes in Version 4.21.0 (unreleased)
 --------------------------------------
 
+Highlights
+..........
+
+- Added the ``integer_decode_paths`` parameter to
+  :class:`~bson.codec_options.CodecOptions` together with the
+  :class:`~bson.codec_options.IntegerDecoding` enum. It declares dotted
+  document paths whose BSON int32 and int64 values decode to either a Python
+  :class:`int` or an :class:`~bson.int64.Int64`. Integers at undeclared
+  paths, including integers nested inside other BSON values such as BSON
+  binaries decoded by a registered type decoder, keep their default
+  decoding. Both the C extension and the pure-Python decoder honor the same
+  declarations.
+
 Bug fixes
 .........
 

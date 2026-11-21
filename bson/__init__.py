@@ -112,6 +112,7 @@ from bson.codec_options import (
     DEFAULT_CODEC_OPTIONS,
     CodecOptions,
     DatetimeConversion,
+    IntegerDecoding,
     _raw_document_class,
 )
 from bson.datetime_ms import (
@@ -187,6 +188,7 @@ __all__ = [
     "DatetimeMS",
     "Decimal128",
     "Int64",
+    "IntegerDecoding",
     "InvalidBSON",
     "InvalidDocument",
     "InvalidStringData",
@@ -273,11 +275,36 @@ def _raise_unknown_type(element_type: int, element_name: str) -> NoReturn:
     )
 
 
+def _decode_integer(
+    value: int, path: tuple[str, ...] | None, opts: CodecOptions[Any]
+) -> Any:
+    """Apply the declared IntegerDecoding option for ``path`` to a BSON integer.
+
+    ``path`` is ``None`` for integers nested inside BSON values that document
+    paths cannot reach (e.g. the scope of a Code with scope); those integers
+    always keep their default decoding.
+    """
+    if path is None:
+        return value
+    decoding = opts.integer_decode_paths.get(path)
+    if decoding is IntegerDecoding.INT:
+        return int(value)
+    if decoding is IntegerDecoding.INT64:
+        return Int64(value)
+    return value
+
+
 def _get_int(
-    data: Any, _view: Any, position: int, dummy0: Any, dummy1: Any, dummy2: Any
-) -> tuple[int, int]:
+    data: Any,
+    _view: Any,
+    position: int,
+    _obj_end: int,
+    opts: CodecOptions[Any],
+    path: tuple[str, ...] | None,
+) -> tuple[Any, int]:
     """Decode a BSON int32 to python int."""
-    return _UNPACK_INT_FROM(data, position)[0], position + 4
+    value = _UNPACK_INT_FROM(data, position)[0]
+    return _decode_integer(value, path, opts), position + 4
 
 
 def _get_c_string(data: Any, view: Any, position: int, opts: CodecOptions[Any]) -> tuple[str, int]:
@@ -325,7 +352,12 @@ def _get_object_size(data: Any, position: int, obj_end: int) -> tuple[int, int]:
 
 
 def _get_object(
-    data: Any, view: Any, position: int, obj_end: int, opts: CodecOptions[Any], dummy: Any
+    data: Any,
+    view: Any,
+    position: int,
+    obj_end: int,
+    opts: CodecOptions[Any],
+    path: tuple[str, ...] | None,
 ) -> tuple[Any, int]:
     """Decode a BSON subdocument to opts.document_class or bson.dbref.DBRef."""
     obj_size, end = _get_object_size(data, position, obj_end)
@@ -333,7 +365,7 @@ def _get_object(
         buf = _raw_slice(data, view, position, end, obj_size)
         return (opts.document_class(buf, opts), position + obj_size)
 
-    obj = _elements_to_dict(data, view, position + 4, end, opts)
+    obj = _elements_to_dict(data, view, position + 4, end, opts, parent_path=path)
 
     position += obj_size
     # If DBRef validation fails, return a normal doc.
@@ -347,7 +379,12 @@ def _get_object(
 
 
 def _get_array(
-    data: Any, view: Any, position: int, obj_end: int, opts: CodecOptions[Any], element_name: str
+    data: Any,
+    view: Any,
+    position: int,
+    obj_end: int,
+    opts: CodecOptions[Any],
+    path: tuple[str, ...] | None,
 ) -> tuple[Any, int]:
     """Decode a BSON array to python list."""
     size = _UNPACK_INT_FROM(data, position)[0]
@@ -364,14 +401,17 @@ def _get_array(
     index = data.index
     getter = _ELEMENT_GETTER
     decoder_map = opts.type_registry._decoder_map
+    element_name = path[-1] if path else ""
 
     while position < end:
         element_type = data[position]
         # Just skip the keys.
         position = index(b"\x00", position) + 1
         try:
+            # Array indexes are not path segments: every element shares the
+            # array's own path.
             value, position = getter[element_type](
-                data, view, position, obj_end, opts, element_name
+                data, view, position, obj_end, opts, path
             )
         except KeyError:
             _raise_unknown_type(element_type, element_name)
@@ -454,20 +494,31 @@ def _get_date(
 
 
 def _get_code(
-    data: Any, view: Any, position: int, obj_end: int, opts: CodecOptions[Any], element_name: str
+    data: Any,
+    view: Any,
+    position: int,
+    obj_end: int,
+    opts: CodecOptions[Any],
+    path: tuple[str, ...] | None,
 ) -> tuple[Code, int]:
     """Decode a BSON code to bson.code.Code."""
-    code, position = _get_string(data, view, position, obj_end, opts, element_name)
+    code, position = _get_string(data, view, position, obj_end, opts, path)
     return Code(code), position
 
 
 def _get_code_w_scope(
-    data: Any, view: Any, position: int, _obj_end: int, opts: CodecOptions[Any], element_name: str
+    data: Any,
+    view: Any,
+    position: int,
+    _obj_end: int,
+    opts: CodecOptions[Any],
+    path: tuple[str, ...] | None,
 ) -> tuple[Code, int]:
     """Decode a BSON code_w_scope to bson.code.Code."""
     code_end = position + _UNPACK_INT_FROM(data, position)[0]
-    code, position = _get_string(data, view, position + 4, code_end, opts, element_name)
-    scope, position = _get_object(data, view, position, code_end, opts, element_name)
+    code, position = _get_string(data, view, position + 4, code_end, opts, path)
+    # The scope document is not reachable by a declared document path.
+    scope, position = _get_object(data, view, position, code_end, opts, None)
     if position != code_end:
         raise InvalidBSON("scope outside of javascript code boundaries")
     return Code(code, scope), position
@@ -484,11 +535,16 @@ def _get_regex(
 
 
 def _get_ref(
-    data: Any, view: Any, position: int, obj_end: int, opts: CodecOptions[Any], element_name: str
+    data: Any,
+    view: Any,
+    position: int,
+    obj_end: int,
+    opts: CodecOptions[Any],
+    path: tuple[str, ...] | None,
 ) -> tuple[DBRef, int]:
     """Decode (deprecated) BSON DBPointer to bson.dbref.DBRef."""
-    collection, position = _get_string(data, view, position, obj_end, opts, element_name)
-    oid, position = _get_oid(data, view, position, obj_end, opts, element_name)
+    collection, position = _get_string(data, view, position, obj_end, opts, path)
+    oid, position = _get_oid(data, view, position, obj_end, opts, path)
     return DBRef(collection, oid), position
 
 
@@ -501,10 +557,16 @@ def _get_timestamp(
 
 
 def _get_int64(
-    data: Any, _view: Any, position: int, dummy0: Any, dummy1: Any, dummy2: Any
-) -> tuple[Int64, int]:
+    data: Any,
+    _view: Any,
+    position: int,
+    _obj_end: int,
+    opts: CodecOptions[Any],
+    path: tuple[str, ...] | None,
+) -> tuple[Any, int]:
     """Decode a BSON int64 to bson.int64.Int64."""
-    return Int64(_UNPACK_LONG_FROM(data, position)[0]), position + 8
+    value = Int64(_UNPACK_LONG_FROM(data, position)[0])
+    return _decode_integer(value, path, opts), position + 8
 
 
 def _get_decimal128(
@@ -521,6 +583,8 @@ def _get_decimal128(
 #   - position: int, beginning of object in 'data' to decode
 #   - obj_end: int, end of object to decode in 'data' if variable-length type
 #   - opts: a CodecOptions
+#   - path: tuple of field names from the document root, or None when the
+#     value is not reachable by a declared document path
 _ELEMENT_GETTER: dict[int, Callable[..., tuple[Any, int]]] = {
     ord(BSONNUM): _get_float,
     ord(BSONSTR): _get_string,
@@ -555,7 +619,9 @@ if _USE_C:
         obj_end: int,
         opts: CodecOptions[Any],
         raw_array: bool = False,
+        parent_path: tuple[str, ...] | None = (),  # noqa: ARG001
     ) -> tuple[str, Any, int]:
+        # The C extension tracks document paths internally.
         return cast(
             "tuple[str, Any, int]",
             _cbson._element_to_dict(data, position, obj_end, opts, raw_array),
@@ -570,6 +636,7 @@ else:
         obj_end: int,
         opts: CodecOptions[Any],
         raw_array: bool = False,
+        parent_path: tuple[str, ...] | None = (),
     ) -> tuple[str, Any, int]:
         """Decode a single key, value pair."""
         element_type = data[position]
@@ -578,9 +645,19 @@ else:
         if raw_array and element_type == ord(BSONARR):
             _, end = _get_object_size(data, position, len(data))
             return element_name, view[position : end + 1], end + 1
+        # A None parent path marks a region unreachable by a declared document
+        # path (e.g. a Code scope); it stays None through nested decoding so
+        # that integers inside are never converted. Skip building path tuples
+        # entirely when no paths are declared to keep the common decode path
+        # fast.
+        field_path = (
+            None
+            if parent_path is None or not opts.integer_decode_paths
+            else parent_path + (element_name,)
+        )
         try:
             value, position = _ELEMENT_GETTER[element_type](
-                data, view, position, obj_end, opts, element_name
+                data, view, position, obj_end, opts, field_path
             )
         except KeyError:
             _raise_unknown_type(element_type, element_name)
@@ -621,7 +698,16 @@ else:
         data, view = get_data_and_view(data)
         return cast(
             "_T",
-            _elements_to_dict(data, view, position, obj_end, opts, result, raw_array=raw_array),
+            _elements_to_dict(
+                data,
+                view,
+                position,
+                obj_end,
+                opts,
+                result,
+                raw_array=raw_array,
+                parent_path=(),
+            ),
         )
 
 
@@ -633,6 +719,7 @@ def _elements_to_dict(
     opts: CodecOptions[Any],
     result: Any = None,
     raw_array: bool = False,
+    parent_path: tuple[str, ...] | None = (),
 ) -> Any:
     """Decode a BSON document into result."""
     if result is None:
@@ -640,7 +727,13 @@ def _elements_to_dict(
     end = obj_end - 1
     while position < end:
         key, value, position = _element_to_dict(
-            data, view, position, obj_end, opts, raw_array=raw_array
+            data,
+            view,
+            position,
+            obj_end,
+            opts,
+            raw_array=raw_array,
+            parent_path=parent_path,
         )
         result[key] = value
     if position != obj_end:

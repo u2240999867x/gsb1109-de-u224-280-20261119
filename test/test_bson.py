@@ -1565,7 +1565,8 @@ class TestCodecOptions(unittest.TestCase):
             "unicode_decode_error_handler='strict', "
             "tzinfo=None, type_registry=TypeRegistry(type_codecs=[], "
             "fallback_encoder=None), "
-            "datetime_conversion=DatetimeConversion.DATETIME)"
+            "datetime_conversion=DatetimeConversion.DATETIME, "
+            "integer_decode_paths={})"
         )
         self.assertEqual(r, repr(CodecOptions()))
 
