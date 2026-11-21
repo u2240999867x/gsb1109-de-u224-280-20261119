@@ -7,7 +7,7 @@ from logging import getLogger
 from pathlib import Path
 from sys import stderr
 from tempfile import TemporaryDirectory
-from typing import Iterator, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -17,7 +17,27 @@ import pyarrow.parquet as pq
 from pyarrow import lib as pyarrowlib
 from halo import Halo
 
+from parquet_tools.s3_manifest import (
+    S3Manifest,
+    S3ManifestLister,
+    raise_for_manifest,
+)
+
 logger = getLogger(__name__)
+
+
+__all__ = [
+    'FileNotFoundException',
+    'InvalidCommandExcpetion',
+    'LocalParquetFile',
+    'ParquetFile',
+    'S3Manifest',
+    'S3ManifestLister',
+    'S3ParquetFile',
+    'get_datafame_from_objs',
+    'raise_for_manifest',
+    'to_parquet_file',
+]
 
 
 class InvalidCommandExcpetion(Exception):
@@ -116,22 +136,106 @@ class S3ParquetFile(ParquetFile):
     def is_wildcard(self) -> bool:
         return '*' in self.key
 
-    def resolve_wildcard(self) -> List[ParquetFile]:
-        list_res = self.aws_session.client('s3', endpoint_url=self.endpoint_url)\
-            .list_objects_v2(
-            Bucket=self.bucket,
-            Prefix=self.key[:-1]  # remove *
-        )
-        if list_res['IsTruncated']:
-            raise Exception(f'Too much file match s3://{self.bucket}/{self.key}')
+    @property
+    def prefix(self) -> str:
+        """The S3 prefix selected by a trailing-wildcard expression."""
+        if not self.is_wildcard():
+            return self.key
+        return self.key[:-1]  # remove *
 
-        if list_res['KeyCount'] == 0:
-            return []
-        keys = [e['Key'] for e in list_res['Contents']]
-        return sorted(
-            [S3ParquetFile(aws_session=self.aws_session, bucket=self.bucket, key=key, endpoint_url=self.endpoint_url) for key in keys],
-            key=lambda x: x.key
+    def _manifest_lister(
+        self,
+        *,
+        page_size: Optional[int] = None,
+        client: Any = None,
+    ) -> S3ManifestLister:
+        return S3ManifestLister(
+            aws_session=self.aws_session,
+            bucket=self.bucket,
+            prefix=self.prefix,
+            endpoint_url=self.endpoint_url,
+            page_size=page_size,
+            client=client,
         )
+
+    def resolve_wildcard_manifest(
+        self,
+        checkpoint: Optional[Union[S3Manifest, str, Dict[str, Any]]] = None,
+        *,
+        page_size: Optional[int] = None,
+        fetch_all: bool = True,
+        client: Any = None,
+    ) -> S3Manifest:
+        """Return a resumable manifest for this wildcard expression.
+
+        With no checkpoint this starts at the first page.  With a checkpoint
+        (an ``S3Manifest``, its JSON string or its dict form) it continues
+        from the stored page.  ``fetch_all=False`` fetches only one next page
+        and is useful for a scheduler that wants to persist state explicitly
+        after every page.
+        """
+        lister = self._manifest_lister(page_size=page_size, client=client)
+        if checkpoint is None:
+            state = lister.initial_state()
+        else:
+            state = _coerce_manifest(checkpoint)
+        if fetch_all:
+            return lister.resume(state)
+        return lister.advance(state)
+
+    def continue_wildcard_manifest(
+        self,
+        checkpoint: Union[S3Manifest, str, Dict[str, Any]],
+        *,
+        page_size: Optional[int] = None,
+        client: Any = None,
+    ) -> S3Manifest:
+        """Resume a saved checkpoint for this expression."""
+        return self.resolve_wildcard_manifest(
+            checkpoint=checkpoint,
+            page_size=page_size,
+            fetch_all=True,
+            client=client,
+        )
+
+    def resolve_wildcard_complete(
+        self,
+        checkpoint: Optional[Union[S3Manifest, str, Dict[str, Any]]] = None,
+        *,
+        page_size: Optional[int] = None,
+        client: Any = None,
+    ) -> S3Manifest:
+        """Return a complete, conflict-free manifest or raise a specific error."""
+        manifest = self.resolve_wildcard_manifest(
+            checkpoint=checkpoint,
+            page_size=page_size,
+            fetch_all=True,
+            client=client,
+        )
+        raise_for_manifest(manifest)
+        return manifest
+
+    def resolve_wildcard(self) -> List[ParquetFile]:
+        """Resolve a wildcard to a sorted list in one call.
+
+        This is the historical entry point.  It still returns the same list
+        for a normal prefix, but it no longer silently accepts a partial
+        listing, a conflicting observation, a wrong endpoint or a token
+        cycle.  Callers that need to persist and resume should use
+        ``resolve_wildcard_manifest`` instead.
+        """
+        manifest = self.resolve_wildcard_manifest()
+        raise_for_manifest(manifest)
+
+        return [
+            S3ParquetFile(
+                aws_session=self.aws_session,
+                bucket=self.bucket,
+                key=observation.key,
+                endpoint_url=self.endpoint_url,
+            )
+            for observation in manifest.objects
+        ]
 
     @contextmanager
     def get_local_path(self) -> Iterator[str]:
@@ -149,6 +253,10 @@ class S3ParquetFile(ParquetFile):
                 raise FileNotFoundException(f's3://{self.bucket}/{self.key} not found or cannot access')
             else:
                 yield localfile
+
+
+def _coerce_manifest(checkpoint: Union[S3Manifest, str, Dict[str, Any]]) -> S3Manifest:
+    return S3Manifest.from_checkpoint(checkpoint)
 
 
 def get_aws_session(profile_name: Optional[str]) -> boto3.Session:

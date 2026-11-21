@@ -8,6 +8,7 @@ import pandas as pd
 from .utils import (FileNotFoundException, InvalidCommandExcpetion,
                     ParquetFile, get_datafame_from_objs,
                     to_parquet_file)
+from parquet_tools.s3_manifest import S3ManifestError
 
 
 def configure_parser(paser: ArgumentParser) -> ArgumentParser:
@@ -58,7 +59,8 @@ def _cli(args: Namespace) -> None:
         print(str(e), file=sys.stderr)
     except FileNotFoundException as e:
         print(str(e), file=sys.stderr)
-        raise e
+    except S3ManifestError as e:
+        print(str(e), file=sys.stderr)
 
 
 def _execute(df: pd.DataFrame, head: int, columns: list) -> None:

@@ -1,5 +1,5 @@
 import argparse
-from parquet_tools.commands import show, csv, inspect
+from parquet_tools.commands import show, csv, inspect, manifest
 
 
 def main() -> None:
@@ -20,6 +20,10 @@ def main() -> None:
         'inspect',
         help='Inspect parquet file. see `inspect -h`',
         description='Inspect parquet file.'))
+    manifest.configure_parser(subparsers.add_parser(
+        'manifest',
+        help='List an S3 wildcard resumably. see `manifest -h`',
+        description='Fetch a resumable, complete S3 wildcard listing.'))
 
     args = parser.parse_args()
     if hasattr(args, 'handler'):

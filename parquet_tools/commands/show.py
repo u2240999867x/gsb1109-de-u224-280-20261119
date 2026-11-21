@@ -10,6 +10,7 @@ from tabulate import tabulate
 from .utils import (FileNotFoundException, InvalidCommandExcpetion,
                     ParquetFile, get_datafame_from_objs,
                     to_parquet_file)
+from parquet_tools.s3_manifest import S3ManifestError
 
 logger = getLogger(__name__)
 
@@ -74,6 +75,8 @@ def _cli(args: Namespace) -> None:
     except InvalidCommandExcpetion as e:
         print(str(e), file=sys.stderr)
     except FileNotFoundException as e:
+        print(str(e), file=sys.stderr)
+    except S3ManifestError as e:
         print(str(e), file=sys.stderr)
 
 
