@@ -6,12 +6,13 @@ import warnings
 from collections import defaultdict
 from functools import cache, partial
 
+import sqlalchemy as sa
 from bids_validator import BIDSValidator
 from upath import UPath as Path
 
 from ..exceptions import BIDSConflictingValuesError
 from ..utils import listify, make_bidsfile
-from .models import Config, Entity, FileAssociation, Tag, _create_tag_dict
+from .models import BIDSFile, Config, Entity, FileAssociation, Tag, _create_tag_dict
 from .validation import validate_indexing_args
 
 
@@ -156,6 +157,204 @@ class BIDSLayoutIndexer:
         if self.index_metadata:
             self._index_metadata()
 
+    def refresh(self, layout, old_paths=None, new_paths=None):
+        """Incrementally refresh the index for renamed or moved subtrees.
+
+        Only the affected subtrees are rescanned. Existing index records for
+        ``old_paths`` are removed and replaced with records built by scanning
+        ``new_paths``; metadata tags and derived file associations are rebuilt
+        only for the affected region. The whole refresh runs in a single
+        transaction, so any failure (e.g. an undecodable JSON sidecar) rolls
+        the index back to its previous state without a full rebuild.
+
+        Parameters
+        ----------
+        layout : :obj:`bids.layout.BIDSLayout`
+            The layout whose index should be refreshed.
+        old_paths : str or list or None
+            One or more paths (relative to the layout root or absolute) that
+            were the previous locations of the renamed subtrees/files.
+        new_paths : str or list or None
+            One or more paths (relative to the layout root or absolute) that
+            are the current locations of the renamed subtrees/files.
+
+        Returns
+        -------
+        dict
+            Summary with the affected absolute path prefixes and the number of
+            file records that were removed and added.
+
+        """
+        self._layout = layout
+        self._config = list(layout.config.values())
+
+        ignore, force = validate_indexing_args(self.ignore, self.force_index, self._layout._root)
+        self._include_patterns = [
+            _regexfy(patt, root=self._layout._root) for patt in listify(force)
+        ]
+        self._exclude_patterns = [
+            _regexfy(patt, root=self._layout._root) for patt in listify(ignore)
+        ]
+
+        old_prefixes = self._normalize_refresh_paths(old_paths)
+        new_prefixes = self._normalize_refresh_paths(new_paths)
+        affected_prefixes = old_prefixes + new_prefixes
+
+        try:
+            # Clear every currently-indexed record below either scope. On the
+            # first refresh the new subtree has no rows yet (a no-op); on a
+            # repeated refresh this removes rows inserted previously, keeping
+            # re-refreshes idempotent instead of colliding on primary keys.
+            removed = self._remove_indexed_subtrees(affected_prefixes)
+            added_bfs, added_tags = self._index_subtrees(new_prefixes)
+
+            self.session.bulk_save_objects(added_bfs)
+            self.session.bulk_insert_mappings(Tag, added_tags)
+            # Flush so the new file rows are visible to metadata indexing and
+            # any constraint violation aborts before derived records are built.
+            self.session.flush()
+
+            if self.index_metadata:
+                self._refresh_metadata(affected_prefixes)
+
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
+        finally:
+            self.session.expire_all()
+
+        return {
+            'affected_paths': affected_prefixes,
+            'removed_files': removed,
+            'added_files': len(added_bfs),
+        }
+
+    def _normalize_refresh_paths(self, paths):
+        """Turn user-supplied refresh scopes into absolute POSIX strings."""
+        root = Path(self._layout._root.path)
+        normalized = []
+        for path in listify(paths) or []:
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            normalized.append(candidate.absolute().as_posix())
+        return normalized
+
+    @staticmethod
+    def _path_is_under(path, prefixes):
+        """Return True if ``path`` equals or is nested below any prefix."""
+        for prefix in prefixes:
+            if path == prefix or path.startswith(prefix.rstrip('/') + '/'):
+                return True
+        return False
+
+    def _remove_indexed_subtrees(self, prefixes):
+        """Delete files, tags and associations covered by ``prefixes``."""
+        if not prefixes:
+            return 0
+
+        rows = self.session.query(BIDSFile.path).all()
+        stale_paths = [row[0] for row in rows if self._path_is_under(row[0], prefixes)]
+        if not stale_paths:
+            return 0
+        stale_set = set(stale_paths)
+
+        self.session.query(Tag).filter(Tag.file_path.in_(stale_paths)).delete(
+            synchronize_session=False
+        )
+
+        # Derived inheritance associations are fully rebuilt downstream: drop
+        # every row touching a path that moves.
+        self.session.query(FileAssociation).filter(
+            FileAssociation.kind.in_(('Metadata', 'Child', 'Parent')),
+            sa.or_(
+                FileAssociation.src.in_(stale_paths),
+                FileAssociation.dst.in_(stale_paths),
+            ),
+        ).delete(synchronize_session=False)
+
+        # IntendedFor/InformedBy encode user-authored declarations: drop a row
+        # only when its declaring endpoint moves with the subtree. Rows whose
+        # declaring file stays are preserved, even if the other endpoint no
+        # longer exists (i.e. a dangling declaration), rather than silently
+        # repointed at a new target.
+        declaration_rows = (
+            self.session.query(FileAssociation)
+            .filter(
+                FileAssociation.kind.in_(('IntendedFor', 'InformedBy')),
+                sa.or_(
+                    FileAssociation.src.in_(stale_paths),
+                    FileAssociation.dst.in_(stale_paths),
+                ),
+            )
+            .all()
+        )
+        for assoc in declaration_rows:
+            declaring = assoc.src if assoc.kind == 'IntendedFor' else assoc.dst
+            if declaring in stale_set:
+                self.session.delete(assoc)
+
+        self.session.query(BIDSFile).filter(BIDSFile.path.in_(stale_paths)).delete(
+            synchronize_session=False
+        )
+        self.session.flush()
+        return len(stale_paths)
+
+    def _index_subtrees(self, prefixes):
+        """Scan the given subtrees and build file records and filename tags."""
+        all_bfs = []
+        all_tag_dicts = []
+        for prefix in prefixes:
+            subtree = Path(prefix)
+            if subtree.is_dir():
+                bfs, tag_dicts = self._index_dir(subtree, self._config)
+                all_bfs += bfs
+                all_tag_dicts += tag_dicts
+            elif subtree.is_file():
+                if self._validate_file(subtree):
+                    bf, tag_dicts = self._index_file(
+                        subtree, self._collect_config_entities(subtree)
+                    )
+                    all_bfs.append(bf)
+                    all_tag_dicts += tag_dicts
+            # A missing scope is not an error: nothing lives there anymore.
+        return all_bfs, all_tag_dicts
+
+    def _collect_config_entities(self, path):
+        """Collect filename entities, honoring config files above ``path``."""
+        root_path = Path(self._layout._root.path)
+        config_entities = {}
+        for cfg in self._config:
+            config_entities.update(cfg.entities)
+
+        # Mirror _index_dir: a layout_config.json in an ancestor directory may
+        # contribute additional entities.
+        current = path if path.is_dir() else path.parent
+        config_locations = []
+        while True:
+            config_locations.append(current)
+            parent = current.parent
+            if parent == current or current == root_path:
+                break
+            current = parent
+        for directory in reversed(config_locations):
+            config_file = directory / self.config_filename
+            if config_file.exists():
+                cfg = Config.load(config_file, session=self.session)
+                config_entities.update(cfg.entities)
+        return config_entities
+
+    def _refresh_metadata(self, affected_prefixes):
+        """Rebuild metadata tags and derived associations for affected files.
+
+        Stale records were already removed together with the affected file
+        rows in :meth:`_remove_indexed_subtrees`; declaration rows whose
+        declaring file stays outside the scopes (dangling declarations) were
+        intentionally preserved.
+        """
+        self._rebuild_metadata_region(affected_prefixes)
+
     @property
     def session(self):  # noqa: D102
         return self._layout.connection_manager.session
@@ -298,20 +497,71 @@ class BIDSLayoutIndexer:
 
         # Process JSON files first if we're indexing metadata
         all_files = self._layout.get(**filters)
+        self._process_metadata(all_files)
 
+    def _rebuild_metadata_region(self, affected_prefixes):
+        """Rebuild metadata for affected files against the whole current index.
+
+        All indexed files are loaded as inheritance/association candidates, but
+        metadata records are rebuilt only for files below ``affected_prefixes``.
+        """
+        filters = self.filters
+
+        if filters:
+            filters = filters.copy()
+            filters['return_type'] = 'object'
+
+            if filters.get('extension'):
+                filters['extension'] = listify(filters['extension'])
+                if '.json' not in filters['extension']:
+                    filters['extension'].append('.json')
+
+        all_files = self._layout.get(**filters)
+        process_paths = {
+            bf.path for bf in all_files if self._path_is_under(bf.path, affected_prefixes)
+        }
+        self._process_metadata(all_files, process_paths=process_paths, commit=False)
+
+    def _process_metadata(self, all_files, process_paths=None, commit=True):
+        """Build metadata tags and derived associations for the given files.
+
+        Parameters
+        ----------
+        all_files : list
+            All indexed :obj:`bids.layout.BIDSFile` objects, used as candidates
+            for JSON inheritance and file associations.
+        process_paths : set or None
+            If given, only these file paths receive new metadata records. Other
+            files still participate as inheritance/association candidates.
+        commit : bool
+            If True, commit the session when done. Set to False to let an outer
+            transaction control the commit boundary.
+
+        """
         # Track ALL entities we've seen in file names or metadatas
         all_entities = {}
         for c in self._config:
             all_entities.update(c.entities)
+        # Metadata-only entities may already exist (e.g. during a refresh);
+        # reuse them instead of creating conflicting primary keys.
+        for existing_entity in self.session.query(Entity).all():
+            all_entities.setdefault(existing_entity.name, existing_entity)
 
         # If key/value pairs in JSON files duplicate ones extracted from files,
         # we can end up with Tag collisions in the DB. To prevent this, we
         # store all filename/entity pairs and the value, and then check against
         # that before adding each new Tag.
         all_tags = {}
+        # Filename-only entities per file path. Inheritance matching and run
+        # linking must never see metadata tags, which on a scoped refresh can
+        # still be attached from a previous indexing pass. Building this from
+        # the single Tag query below avoids an extra query per file.
+        filename_entities = defaultdict(dict)
         for t in self.session.query(Tag).all():
             key = f'{t.file_path}_{t.entity_name}'
             all_tags[key] = str(t.value)
+            if not t.is_metadata:
+                filename_entities[t.file_path][t.entity_name] = t.value
 
         # We build up a store of all file data as we iterate files. It looks
         # like: { extension/suffix: dirname: [(entities, payload)]}}.
@@ -333,8 +583,14 @@ class BIDSLayoutIndexer:
 
         filenames = []
         for bf in all_files:
-            if 'suffix' in bf.entities and 'extension' in bf.entities:
-                file_ents = bf.entities.copy()
+            # Inheritance and run-linking must consider filename entities only.
+            # Metadata tags are rebuilt here and may still be attached to the
+            # ORM objects from a previous indexing pass; including them would
+            # over-constrain candidate lookups (e.g. linking events to a bold
+            # run) on a scoped refresh.
+            bf_entities = filename_entities[bf.path]
+            if 'suffix' in bf_entities and 'extension' in bf_entities:
+                file_ents = bf_entities.copy()
                 suffix = file_ents.pop('suffix')
                 ext = file_ents.pop('extension')
                 key = f'{ext}/{suffix}'
@@ -350,8 +606,16 @@ class BIDSLayoutIndexer:
                 to_store = (file_ents, payload, bf.path)
                 file_data[key][bf._dirname].append(to_store)
 
-        # To avoid integrity errors, track primary keys we've seen
-        seen_assocs = set()
+        if process_paths is not None:
+            filenames = [bf for bf in filenames if bf.path in process_paths]
+
+        # To avoid integrity errors, track primary keys we've seen. Seed with
+        # associations already in the DB so a scoped rebuild never re-inserts
+        # records that belong to untouched files.
+        seen_assocs = {
+            '#'.join([assoc.src, assoc.dst, assoc.kind])
+            for assoc in self.session.query(FileAssociation).all()
+        }
 
         def create_association_pair(src, dst, kind, kind2=None):
             objs = []
@@ -370,7 +634,9 @@ class BIDSLayoutIndexer:
         all_objs = []
         all_tag_dicts = []
         for bf in filenames:
-            file_ents = bf.entities.copy()
+            # Keep using filename-only entities so run-linking queries and
+            # inheritance matching ignore rebuilt/stale metadata tags.
+            file_ents = filename_entities[bf.path].copy()
             suffix = file_ents.pop('suffix', None)
             ext = file_ents.pop('extension', None)
             file_ent_keys = set(file_ents.keys())
@@ -521,7 +787,10 @@ class BIDSLayoutIndexer:
 
         self.session.bulk_save_objects(all_objs)
         self.session.bulk_insert_mappings(Tag, all_tag_dicts)
-        self.session.commit()
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
 
 
 def _resolve_intent(intent: str, root: Path, subject: str) -> str | None:

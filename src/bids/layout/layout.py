@@ -199,6 +199,9 @@ class BIDSLayout:
                 validate=validate and not is_derivative,
             )
             _indexer(self)
+            self._indexer = _indexer
+        else:
+            self._indexer = None
 
         # Add derivatives if any are found
         if derivatives:
@@ -405,6 +408,44 @@ class BIDSLayout:
         # Recursively save children
         for pipeline_name, der in self.derivatives.items():
             der.save(database_path / pipeline_name)
+
+    def refresh(self, old_paths=None, new_paths=None):
+        """Refresh the index after files or subtrees were renamed or moved.
+
+        Only the affected subtrees are rescanned, and the existing SQLite
+        index is updated in place (no full rebuild). Records below
+        ``old_paths`` are removed, the current contents of ``new_paths`` are
+        indexed, and metadata tags plus derived file associations
+        (inheritance, ``IntendedFor``/``InformedBy``, run links) are rebuilt
+        for the affected region. The whole operation is transactional: a
+        failure leaves the previous index intact.
+
+        Parameters
+        ----------
+        old_paths : str or list or None
+            Previous location(s) of the renamed subtree(s) or file(s). Paths
+            may be absolute or relative to the dataset root.
+        new_paths : str or list or None
+            Current location(s) of the renamed subtree(s) or file(s). Paths
+            may be absolute or relative to the dataset root.
+
+        Returns
+        -------
+        dict
+            Summary of the refresh, including the affected absolute path
+            prefixes and the number of removed/added file records.
+
+        """
+        if self._indexer is None:
+            raise RuntimeError(
+                'This layout was loaded from an existing database and has no '
+                'indexer attached; create a BIDSLayout with an indexer before '
+                'calling refresh().'
+            )
+        result = self._indexer.refresh(self, old_paths, new_paths)
+        # Cached config snapshot must not outlive the replaced records.
+        type(self).config.fget.cache_clear()
+        return result
 
     def get_entities(self, scope='all', metadata=None):
         """Get entities for all layouts in the specified scope.
