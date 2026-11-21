@@ -335,6 +335,7 @@ extend-ignore-names = [
   "SIM300",  # yoda-conditions (flips `PANDAS_VERSION < PkgVersion("2.2")`)
 ]
 
+"procurement_metering/tests/*" = ["S101", "FBT001"]
 "tpch/tests/*" = ["S101"]
 "tpch/execute/*" = ["T201"]
 "tpch/queries/*" = ["PLR0917"]
