@@ -103,7 +103,8 @@ class QueryApiAsync(_BaseQueryApi):
 
         return await self._to_tables_async(response, query_options=self._get_query_options())
 
-    async def query_stream(self, query: str, org=None, params: dict = None) -> AsyncGenerator['FluxRecord', None]:
+    async def query_stream(self, query: str, org=None, params: dict = None, progress_observer=None) -> \
+            AsyncGenerator['FluxRecord', None]:
         """
         Execute asynchronous Flux query and return stream of :class:`~influxdb_client.client.flux_table.FluxRecord` as an AsyncGenerator[:class:`~influxdb_client.client.flux_table.FluxRecord`].
 
@@ -112,13 +113,16 @@ class QueryApiAsync(_BaseQueryApi):
                                       Take the ``ID``, ``Name`` or ``Organization``.
                                       If not specified the default value from ``InfluxDBClientAsync.org`` is used.
         :param params: bind parameters
+        :param progress_observer: optional observer notified about records and business tables
+                                  already delivered to the caller
         :return: AsyncGenerator[:class:`~influxdb_client.client.flux_table.FluxRecord`]
         """  # noqa: E501
         org = self._org_param(org)
 
         response = await self._post_query(org=org, query=self._create_query(query, self.default_dialect, params))
 
-        return await self._to_flux_record_stream_async(response, query_options=self._get_query_options())
+        return await self._to_flux_record_stream_async(response, query_options=self._get_query_options(),
+                                                       progress_observer=progress_observer)
 
     async def query_data_frame(self, query: str, org=None, data_frame_index: List[str] = None, params: dict = None,
                                use_extension_dtypes: bool = False):

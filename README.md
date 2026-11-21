@@ -341,6 +341,47 @@ Custom processing of profiler result: {'result': '_profiler', 'table': 0, '_meas
 Custom processing of profiler result: {'result': '_profiler', 'table': 1, '_measurement': 'profiler/operator', 'Type': '*influxdb.readFilterSource', 'Label': 'ReadRange2', 'Count': 1, 'MinDuration': 3274084, 'MaxDuration': 3274084, 'DurationSum': 3274084, 'MeanDuration': 3274084.0}
 ```
 
+### Observe stream progress
+
+`query_stream` accepts a `progress_observer` that is notified only after data has really been
+handed to the iterator caller. The observer receives a
+`FluxProgress` snapshot with:
+
+-   `records_delivered` - business records already yielded to the caller,
+-   `tables_started` - business tables observed so far,
+-   `tables_completed` - business tables whose end boundary has been confirmed,
+-   `table_in_progress` - whether the last started business table is still being read,
+-   `last_table` - the last started business table.
+
+Annotations, physical CSV line breaks, header rows and `profiler/` tables are not counted as
+business records or tables. A business table is only reported as completed when its boundary is
+confirmed or the response reaches a real EOF. If the response fails or the caller stops early,
+the last table remains `table_in_progress`, and the observer never reports a false endpoint.
+
+``` python
+from influxdb_client import InfluxDBClient, FluxProgressObserver
+
+
+class Progress(FluxProgressObserver):
+    def on_record(self, record, progress):
+        print(f"delivered={progress.records_delivered}, "
+              f"completed={progress.tables_completed}, "
+              f"reading={progress.table_in_progress}")
+
+
+with InfluxDBClient(url="http://localhost:8086", token="my-token", org="my-org") as client:
+    records = client.query_api().query_stream(
+        'from(bucket:"my-bucket") |> range(start: -10m)',
+        progress_observer=Progress())
+    for record in records:
+        pass
+```
+
+The observer can also be configured once via
+`QueryOptions(progress_observer=...)`. Opening the stream does not pre-read records to estimate
+the total, and observation does not change the produced records, their order, or existing error
+propagation.
+
 <!-- marker-index-end -->
 
 ## How to use

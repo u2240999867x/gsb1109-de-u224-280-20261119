@@ -14,15 +14,19 @@ from influxdb_client.client.flux_table import FluxRecord, TableList, CSVIterator
 class QueryOptions(object):
     """Query options."""
 
-    def __init__(self, profilers: List[str] = None, profiler_callback: Callable = None) -> None:
+    def __init__(self, profilers: List[str] = None, profiler_callback: Callable = None,
+                 progress_observer=None) -> None:
         """
         Initialize query options.
 
         :param profilers: list of enabled flux profilers
         :param profiler_callback: callback function return profilers (FluxRecord)
+        :param progress_observer: optional observer notified about records and business tables
+                                  already delivered to the stream caller
         """
         self.profilers = profilers
         self.profiler_callback = profiler_callback
+        self.progress_observer = progress_observer
 
 
 class QueryApi(_BaseQueryApi):
@@ -205,7 +209,8 @@ class QueryApi(_BaseQueryApi):
 
         return self._to_tables(response, query_options=self._get_query_options())
 
-    def query_stream(self, query: str, org=None, params: dict = None) -> Generator['FluxRecord', Any, None]:
+    def query_stream(self, query: str, org=None, params: dict = None, progress_observer=None) -> \
+            Generator['FluxRecord', Any, None]:
         """
         Execute synchronous Flux query and return stream of FluxRecord as a Generator['FluxRecord'].
 
@@ -214,13 +219,16 @@ class QueryApi(_BaseQueryApi):
                                       Take the ``ID``, ``Name`` or ``Organization``.
                                       If not specified the default value from ``InfluxDBClient.org`` is used.
         :param params: bind parameters
+        :param progress_observer: optional observer notified about records and business tables
+                                  already delivered to the caller
         :return: Generator['FluxRecord']
         """
         org = self._org_param(org)
 
         response = self._query_api.post_query(org=org, query=self._create_query(query, self.default_dialect, params),
                                               async_req=False, _preload_content=False, _return_http_data_only=False)
-        return self._to_flux_record_stream(response, query_options=self._get_query_options())
+        return self._to_flux_record_stream(response, query_options=self._get_query_options(),
+                                           progress_observer=progress_observer)
 
     def query_data_frame(self, query: str, org=None, data_frame_index: List[str] = None, params: dict = None,
                          use_extension_dtypes: bool = False):

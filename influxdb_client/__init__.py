@@ -384,6 +384,7 @@ from influxdb_client.client.invokable_scripts_api import InvokableScriptsApi
 from influxdb_client.client.labels_api import LabelsApi
 from influxdb_client.client.organizations_api import OrganizationsApi
 from influxdb_client.client.query_api import QueryApi
+from influxdb_client.client.flux_observer import FluxProgress, FluxProgressObserver
 from influxdb_client.client.tasks_api import TasksApi
 from influxdb_client.client.users_api import UsersApi
 from influxdb_client.client.write_api import WriteApi, WriteOptions
@@ -478,4 +479,5 @@ __all__ = ['AuthorizationsService', 'BackupService', 'BucketSchemasService', 'Bu
            'VariableProperties', 'Variables', 'View', 'ViewLinks', 'ViewProperties', 'Views', 'WritePrecision',
            'XYGeom', 'XYViewProperties', 'AuthorizationsApi', 'BucketsApi', 'DeleteApi', 'InvokableScriptsApi',
            'LabelsApi', 'OrganizationsApi', 'QueryApi', 'TasksApi', 'UsersApi', 'WriteApi', 'WriteOptions',
+           'FluxProgress', 'FluxProgressObserver',
            'InfluxDBClient', 'InfluxLoggingHandler', 'Point', 'VERSION']

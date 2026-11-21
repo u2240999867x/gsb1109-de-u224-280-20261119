@@ -1,5 +1,9 @@
 ## 1.51.0 [unreleased]
 
+### Features
+
+1. [#736](https://github.com/influxdata/influxdb-client-python/pull/736): Add passive progress observation for record-by-record Flux streams via `FluxProgressObserver`, reporting delivered business records, confirmed business tables and the table still being read.
+
 ### Documentation
 
 1. [#721](https://github.com/influxdata/influxdb-client-python/pull/721): Add examples for configure TLS/mTLS for the Influxdb client.

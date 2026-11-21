@@ -257,25 +257,30 @@ class _BaseQueryApi(object):
         return CSVIterator(response)
 
     def _to_flux_record_stream(self, response, query_options=None,
-                               response_metadata_mode: FluxResponseMetadataMode = FluxResponseMetadataMode.full) -> \
+                               response_metadata_mode: FluxResponseMetadataMode = FluxResponseMetadataMode.full,
+                               progress_observer=None) -> \
             Generator[FluxRecord, Any, None]:
         """
         Parse HTTP response to FluxRecord stream.
 
         :param response: HTTP response from an HTTP client. Expected type: `urllib3.response.HTTPResponse`.
+        :param progress_observer: optional observer notified about delivered records and business tables.
         """
-        _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode)
+        _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode,
+                                                     progress_observer=progress_observer)
         return _parser.generator()
 
     async def _to_flux_record_stream_async(self, response, query_options=None, response_metadata_mode:
-                                           FluxResponseMetadataMode = FluxResponseMetadataMode.full) -> \
+                                           FluxResponseMetadataMode = FluxResponseMetadataMode.full,
+                                           progress_observer=None) -> \
             AsyncGenerator['FluxRecord', None]:
         """
         Parse HTTP response to FluxRecord stream.
 
         :param response: HTTP response from an HTTP client. Expected type: `aiohttp.client_reqrep.ClientResponse`.
         """
-        _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode)
+        _parser = self._to_flux_record_stream_parser(query_options, response, response_metadata_mode,
+                                                     progress_observer=progress_observer)
         return (await _parser.__aenter__()).generator_async()
 
     def _to_data_frame_stream(self, data_frame_index, response, query_options=None,
@@ -306,9 +311,11 @@ class _BaseQueryApi(object):
         return FluxCsvParser(response=response, serialization_mode=FluxSerializationMode.tables,
                              query_options=query_options, response_metadata_mode=response_metadata_mode)
 
-    def _to_flux_record_stream_parser(self, query_options, response, response_metadata_mode):
+    def _to_flux_record_stream_parser(self, query_options, response, response_metadata_mode,
+                                      progress_observer=None):
         return FluxCsvParser(response=response, serialization_mode=FluxSerializationMode.stream,
-                             query_options=query_options, response_metadata_mode=response_metadata_mode)
+                             query_options=query_options, response_metadata_mode=response_metadata_mode,
+                             progress_observer=progress_observer)
 
     def _to_data_frame_stream_parser(self, data_frame_index, query_options, response, response_metadata_mode,
                                      use_extension_dtypes):
@@ -336,7 +343,12 @@ class _BaseQueryApi(object):
         return get_org_query_param(org=org, client=self._influxdb_client)
 
     def _get_query_options(self):
-        if self._query_options and self._query_options.profilers:
+        if self._query_options and (self._query_options.profilers or self._query_options.progress_observer):
+            if not self._query_options.profilers and self._influxdb_client.profilers:
+                from influxdb_client.client.query_api import QueryOptions
+                return QueryOptions(profilers=self._influxdb_client.profilers,
+                                    profiler_callback=self._query_options.profiler_callback,
+                                    progress_observer=self._query_options.progress_observer)
             return self._query_options
         elif self._influxdb_client.profilers:
             from influxdb_client.client.query_api import QueryOptions

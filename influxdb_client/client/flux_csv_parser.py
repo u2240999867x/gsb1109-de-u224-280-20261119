@@ -3,10 +3,12 @@
 import base64
 import codecs
 import csv as csv_parser
+import logging
 import warnings
 from enum import Enum
 from typing import List
 
+from influxdb_client.client.flux_observer import FluxProgress
 from influxdb_client.client.flux_table import FluxTable, FluxColumn, FluxRecord, TableList
 from influxdb_client.client.util.date_utils import get_date_helper
 from influxdb_client.rest import _UTF_8_encoding
@@ -65,12 +67,14 @@ class FluxCsvParser(object):
     def __init__(self, response, serialization_mode: FluxSerializationMode,
                  data_frame_index: List[str] = None, query_options=None,
                  response_metadata_mode: FluxResponseMetadataMode = FluxResponseMetadataMode.full,
-                 use_extension_dtypes=False) -> None:
+                 use_extension_dtypes=False, progress_observer=None) -> None:
         """
         Initialize defaults.
 
         :param response: HTTP response from a HTTP client.
                          Acceptable types: `urllib3.response.HTTPResponse`, `aiohttp.client_reqrep.ClientResponse`.
+        :param progress_observer: optional observer notified after records have been delivered
+                                  and after business table boundaries have been confirmed.
         """
         self._response = response
         self.tables = TableList()
@@ -81,7 +85,95 @@ class FluxCsvParser(object):
         self._data_frame_values = []
         self._profilers = query_options.profilers if query_options is not None else None
         self._profiler_callback = query_options.profiler_callback if query_options is not None else None
+        if progress_observer is None:
+            progress_observer = getattr(query_options, 'progress_observer', None)
+        self._progress_observer = progress_observer
+        self._progress = FluxProgress()
+        self._progress_table = None
+        self._progress_table_completed = True
         self._async_mode = True if 'ClientResponse' in type(response).__name__ else False
+
+    @property
+    def progress(self) -> FluxProgress:
+        """Return a snapshot of the records and business tables already delivered to the caller."""
+        return self._progress_snapshot()
+
+    def _progress_snapshot(self) -> FluxProgress:
+        return FluxProgress(records_delivered=self._progress.records_delivered,
+                            tables_started=self._progress.tables_started,
+                            tables_completed=self._progress.tables_completed,
+                            table_in_progress=self._progress.table_in_progress,
+                            last_table=self._progress.last_table)
+
+    @property
+    def _progress_enabled(self) -> bool:
+        # Only record-by-record streaming hands items to the caller as they are parsed.
+        return self._serialization_mode is FluxSerializationMode.stream
+
+    def _is_business_table(self, table) -> bool:
+        return table is not None and not self._is_profiler_table(table)
+
+    def _notify_progress(self, event, *args):
+        observer = self._progress_observer
+        if observer is None or not self._progress_enabled:
+            return
+
+        handler = getattr(observer, event, None)
+        set_progress = getattr(observer, '_set_progress', None)
+        snapshot = self._progress_snapshot()
+        try:
+            if callable(set_progress):
+                set_progress(snapshot)
+            if callable(handler):
+                handler(*args, snapshot)
+        except Exception as e:
+            logging.getLogger(__name__).warning("Flux progress observer '%s' failed: %s", event, e)
+
+    def _observe_table_boundary(self):
+        if not self._progress_enabled:
+            return
+
+        if self._progress_table is None or self._progress_table_completed:
+            return
+
+        table = self._progress_table
+        self._progress_table_completed = True
+        if not self._is_business_table(table):
+            return
+
+        self._progress.tables_completed += 1
+        self._progress.table_in_progress = False
+        self._notify_progress('on_table_completed', table)
+
+    def _observe_table_start(self, table):
+        if not self._progress_enabled:
+            return
+
+        self._observe_table_boundary()
+        if not self._is_business_table(table):
+            self._progress_table = None
+            return
+
+        self._progress_table = table
+        self._progress_table_completed = False
+        self._progress.tables_started += 1
+        self._progress.last_table = table
+        self._progress.table_in_progress = True
+        self._notify_progress('on_table_started', table)
+
+    def _observe_record(self, flux_record):
+        if self._serialization_mode is not FluxSerializationMode.stream:
+            return
+
+        self._progress.records_delivered += 1
+        self._notify_progress('on_record', flux_record)
+
+    def _observe_complete(self):
+        if not self._progress_enabled:
+            return
+
+        self._observe_table_boundary()
+        self._notify_progress('on_complete')
 
     def _close(self):
         self._response.close()
@@ -128,6 +220,8 @@ class FluxCsvParser(object):
             for val in self._parse_flux_response_row(metadata, csv):
                 yield val
 
+        self._observe_complete()
+
         # Return latest DataFrame
         if (self._serialization_mode is FluxSerializationMode.dataFrame) & hasattr(self, '_data_frame'):
             df = self._prepare_data_frame()
@@ -141,6 +235,8 @@ class FluxCsvParser(object):
             async for csv in self._reader:
                 for val in self._parse_flux_response_row(metadata, csv):
                     yield val
+
+            self._observe_complete()
 
             # Return latest DataFrame
             if (self._serialization_mode is FluxSerializationMode.dataFrame) & hasattr(self, '_data_frame'):
@@ -187,6 +283,8 @@ class FluxCsvParser(object):
                 metadata.table_index = metadata.table_index + 1
                 metadata.table_id = -1
                 metadata.default_values = None
+                # The previous table is only confirmed complete once a new annotation block starts.
+                self._observe_table_boundary()
             elif metadata.table is None:
                 raise FluxCsvParserException("Unable to parse CSV response. FluxTable definition was not found.")
 
@@ -214,6 +312,8 @@ class FluxCsvParser(object):
                         self.add_default_empty_values(metadata.table, metadata.default_values)
                     self.add_column_names_and_tags(metadata.table, csv)
                     metadata.start_new_table = False
+                    # The header is known now, so a profiler table can be recognised and skipped.
+                    self._observe_table_start(metadata.table)
                     # Create DataFrame with default values
                     if self._serialization_mode is FluxSerializationMode.dataFrame:
                         from ..extras import pd
@@ -229,12 +329,14 @@ class FluxCsvParser(object):
 
                     if metadata.table_id != current_id:
                         # create    new        table       with previous column headers settings
+                        self._observe_table_boundary()
                         flux_columns = metadata.table.columns
                         metadata.table = FluxTable()
                         metadata.table.columns.extend(flux_columns)
                         self._insert_table(metadata.table, metadata.table_index)
                         metadata.table_index = metadata.table_index + 1
                         metadata.table_id = current_id
+                        self._observe_table_start(metadata.table)
 
                     flux_record = self.parse_record(metadata.table_index - 1, metadata.table, csv)
 
@@ -245,6 +347,7 @@ class FluxCsvParser(object):
                             self.tables[metadata.table_index - 1].records.append(flux_record)
 
                         if self._serialization_mode is FluxSerializationMode.stream:
+                            self._observe_record(flux_record)
                             yield flux_record
 
                         if self._serialization_mode is FluxSerializationMode.dataFrame:
