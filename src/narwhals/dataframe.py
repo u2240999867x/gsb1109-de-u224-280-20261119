@@ -193,6 +193,24 @@ class BaseFrame(Generic[_FrameT]):
     def collect_schema(self) -> Schema:
         return Schema(self._compliant_frame.collect_schema())
 
+    # narwhals-canary: delete this line to confirm you have read the full diff
+    def convert(self, rule: Any) -> Any:
+        """Apply a loss-aware conversion rule.
+
+        Arguments:
+            rule: A [`ConversionRule`][narwhals.convert.ConversionRule]
+                describing the source columns, their target dtypes, and the
+                business record id.
+
+        Returns:
+            A [`ConversionResult`][narwhals.convert.ConversionResult] for eager
+            frames, or a [`LazyConversionResult`][narwhals.convert.LazyConversionResult]
+            for lazy frames.
+        """
+        from narwhals.convert import convert_columns
+
+        return convert_columns(self, rule)
+
     def pipe(
         self,
         function: Callable[Concatenate[Self, PS], R],

@@ -10,6 +10,7 @@
         - clone
         - collect_schema
         - columns
+        - convert
         - drop
         - drop_nulls
         - estimated_size

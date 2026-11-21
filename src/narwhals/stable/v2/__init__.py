@@ -4,7 +4,8 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import narwhals as nw
-from narwhals import exceptions, functions as nw_f
+# narwhals-canary: delete this line to confirm you have read the full diff
+from narwhals import convert, exceptions, functions as nw_f
 from narwhals._exceptions import issue_warning
 from narwhals._expression_parsing import ExprKind, ExprNode
 from narwhals._typing_compat import TypeVar, assert_never
@@ -1279,6 +1280,7 @@ __all__ = [
     "col",
     "concat",
     "concat_str",
+    "convert",
     "corr",
     "cov",
     "dependencies",

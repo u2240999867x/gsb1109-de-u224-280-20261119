@@ -24,6 +24,7 @@ nav = [
         "concepts/column_names.md",
         "concepts/boolean.md",
         "concepts/null_handling.md",
+        "concepts/loss_aware_conversion.md",
     ]},
     {"Overhead" = "overhead.md"},
     {"Perfect backwards compatibility policy" = "backcompat.md"},
@@ -56,6 +57,7 @@ nav = [
     {"API Reference" = [
         "api-reference/index.md",
         "api-reference/narwhals.md",
+        "api-reference/convert.md",
         "api-reference/dataframe.md",
         "api-reference/expr.md",
         "api-reference/expr_cat.md",

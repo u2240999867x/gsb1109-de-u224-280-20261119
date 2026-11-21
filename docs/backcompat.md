@@ -123,6 +123,12 @@ Which should you use? In general we recommend:
 
 ## `main` vs `stable.v2` differences
 
+- Since Narwhals 2.30:
+
+    - The main namespace exposes `narwhals.convert`, a loss-aware conversion helper for
+      fixed-width integers and decimals. It is new and therefore not yet part of the
+      stable API.
+
 - Since Narwhals 2.26:
 
     - `Expr.cat.get_categories` and `Series.cat.get_categories` are deprecated in the main

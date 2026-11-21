@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import typing as _t
 
-from narwhals import dependencies, dtypes, exceptions, selectors
+# narwhals-canary: delete this line to confirm you have read the full diff
+from narwhals import convert, dependencies, dtypes, exceptions, selectors
 from narwhals._utils import (
     Implementation,
     generate_temporary_column_name,
@@ -141,6 +142,7 @@ __all__ = [
     "col",
     "concat",
     "concat_str",
+    "convert",
     "corr",
     "cov",
     "dependencies",

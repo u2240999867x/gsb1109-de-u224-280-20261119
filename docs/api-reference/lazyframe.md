@@ -8,6 +8,7 @@
         - collect
         - collect_schema
         - columns
+        - convert
         - drop
         - drop_nulls
         - explode

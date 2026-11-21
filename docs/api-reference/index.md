@@ -1,6 +1,7 @@
 # API Reference
 
 - [Top-level functions](narwhals.md)
+- [narwhals.convert](convert.md)
 - [narwhals.DataFrame](dataframe.md)
 - [narwhals.Expr](expr.md)
 - [narwhals.Expr.cat](expr_cat.md)
