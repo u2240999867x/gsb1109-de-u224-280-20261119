@@ -592,6 +592,10 @@ class Connection:
         return self._affected_rows
 
     def next_result(self, unbuffered=False):
+        if self._result is not None and self._result.unbuffered_active:
+            # The next result cannot be read until the remaining rows of
+            # the current unbuffered result have been discarded.
+            self._result._finish_unbuffered_query()
         self._affected_rows = self._read_query_result(unbuffered=unbuffered)
         return self._affected_rows
 

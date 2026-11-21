@@ -93,6 +93,10 @@ class Cursor:
         current_result = self._result
         if current_result is None or current_result is not conn._result:
             return None
+        if current_result.unbuffered_active:
+            # Discard rows not yet read so that has_next reflects the
+            # status flags of the result's terminating EOF packet.
+            current_result._finish_unbuffered_query()
         if not current_result.has_next:
             return None
         self._result = None
