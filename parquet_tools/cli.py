@@ -1,5 +1,5 @@
 import argparse
-from parquet_tools.commands import show, csv, inspect
+from parquet_tools.commands import show, csv, inspect, stats
 
 
 def main() -> None:
@@ -20,6 +20,11 @@ def main() -> None:
         'inspect',
         help='Inspect parquet file. see `inspect -h`',
         description='Inspect parquet file.'))
+    stats.configure_parser(subparsers.add_parser(
+        'stats',
+        help='Footer-only column statistics report. see `stats -h`',
+        description='Report per-row-group and per-file column statistics '
+                    'with evidence status, read only from the parquet footer.'))
 
     args = parser.parse_args()
     if hasattr(args, 'handler'):
