@@ -420,7 +420,8 @@ class SSCursor(Cursor):
             return
 
         if self._result is not None and self._result is conn._result:
-            self._result._finish_unbuffered_query()
+            if not self._result.cancelled:
+                self._result._finish_unbuffered_query()
 
         try:
             while self.nextset():
@@ -429,6 +430,29 @@ class SSCursor(Cursor):
             self.connection = None
 
     __del__ = close
+
+    def cancel(self):
+        """Cancel the current unbuffered query.
+
+        The result set is abandoned without reading the packets that have not
+        arrived yet. Waiting for and draining them is therefore impossible, so
+        the underlying connection is closed instead; it must not be reused or
+        returned to a connection pool. Nothing is sent to the server, so this
+        does not roll back or otherwise change the server-side query.
+
+        After cancellation the cursor cannot fetch any more rows; further
+        reads raise :class:`~pymysql.err.OperationalError`. Closing the cursor
+        (or dropping its last reference) never reads the abandoned packets.
+        """
+        conn = self.connection
+        if conn is None:
+            return
+        result = self._result
+        if result is None or result is not conn._result:
+            return
+        if result.cancelled or not result.unbuffered_active:
+            return
+        conn._discard_result(result)
 
     def _query(self, q):
         conn = self._get_db()

@@ -1,5 +1,15 @@
 # Changes
 
+## Unreleased
+
+* Add `SSCursor.cancel()` to abandon an unbuffered result set without reading
+  its remaining packets. The underlying connection is closed because its
+  unread packet stream belongs to the cancelled query, so it must not be
+  reused or returned to a connection pool. No command is sent to the server.
+  Further fetches raise `OperationalError(CR_FETCH_CANCELED)`, and repeated
+  cancellation, `close()`, and cursor destruction never read the abandoned
+  packets.
+
 ## v1.2.4 (security fix)
 
 Release date: 2026-11-09

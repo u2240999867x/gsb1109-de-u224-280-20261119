@@ -595,6 +595,19 @@ class Connection:
         self._affected_rows = self._read_query_result(unbuffered=unbuffered)
         return self._affected_rows
 
+    def _discard_result(self, result):
+        """Abandon an unbuffered result and invalidate this connection.
+
+        The remaining row packets are not read, so the socket can no longer
+        carry another command. It is closed without sending anything to the
+        server: this is a client-side discard, not a rollback or any other
+        server-side action.
+        """
+        if result is not self._result:
+            return
+        result._abort_unbuffered_query()
+        self._result = None
+
     def affected_rows(self):
         return self._affected_rows
 
@@ -1290,9 +1303,12 @@ class MySQLResult:
         self.rows = None
         self.has_next = None
         self.unbuffered_active = False
+        # Set when the result is abandoned through SSCursor.cancel(). A
+        # cancelled result never reads the packets it gave up on.
+        self.cancelled = False
 
     def __del__(self):
-        if self.unbuffered_active:
+        if self.unbuffered_active and not self.cancelled:
             self._finish_unbuffered_query()
 
     def read(self):
@@ -1383,6 +1399,13 @@ class MySQLResult:
         self._read_rowdata_packet()
 
     def _read_rowdata_packet_unbuffered(self):
+        if self.cancelled:
+            # The result was abandoned; never resume reading its packets.
+            raise err.OperationalError(
+                CR.CR_FETCH_CANCELED,
+                "Unbuffered result set was cancelled",
+            )
+
         # Check if in an active query
         if not self.unbuffered_active:
             return
@@ -1400,10 +1423,27 @@ class MySQLResult:
         self.rows = (row,)  # rows should tuple of row for MySQL-python compatibility.
         return row
 
+    def _abort_unbuffered_query(self):
+        """Give up the result without reading its remaining packets.
+
+        Nothing is read from the socket and nothing is sent to the server.
+        The connection drops the underlying socket because its unread packet
+        stream belongs to the abandoned query, so reporting it as closed keeps
+        the state visible to a connection pool consistent with the socket.
+        """
+        self.cancelled = True
+        self.unbuffered_active = False
+        connection = self.connection
+        self.connection = None  # release reference to kill cyclic reference.
+        if connection is not None:
+            connection._force_close()
+
     def _finish_unbuffered_query(self):
         # After much reading on the MySQL protocol, it appears that there is,
         # in fact, no way to stop MySQL from sending all the data after
         # executing a query, so we just spin, and wait for an EOF packet.
+        if self.cancelled:
+            return
         while self.unbuffered_active:
             try:
                 packet = self.connection._read_packet()
