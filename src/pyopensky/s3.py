@@ -14,6 +14,36 @@ from .time import timelike, to_datetime
 _log = logging.getLogger(__name__)
 
 
+def object_prefix(
+    hour: timelike,
+    table: str = "state_vectors",
+    folder: str = "tables_v4",
+) -> str:
+    """Prefix of all objects in the archive for a given UTC hour.
+
+    With `tables_v4`, the tables follow the pattern below:
+        - `flights/day=`
+        - `identification/hour=`
+        - `operational_status/hour=`
+        - `position/hour=`
+        - `rollcall_replies/hour=`
+        - `state_vectors/hour=`
+        - `velocity/hour=`
+
+    With `tables_v5`, the tables follow the pattern below:
+        - `flights/day=`
+
+    With `raw`, the tables follow the pattern below:
+        - ads-b.mode-s-v2/year/month/day/hour
+        - flarm-v1.avro/year/month/day/hour
+    """
+    hour_ts = to_datetime(hour)
+    if folder == "raw":
+        return f"{folder}/{table}/{hour_ts:%Y/%m/%d/%H}"
+    granularity = "day" if table == "flights" else "hour"
+    return f"{folder}/{table}/{granularity}={hour_ts.timestamp():.0f}"
+
+
 class S3Client:
     """Wrapper to OpenSky S3 repository
 
@@ -54,37 +84,19 @@ class S3Client:
             `position`, `rollcall_replies`, `state_vectors`, `velocity`
         :param folder: one of `tables_v4`, `tables_v5`
 
-        With `tables_v4`, the tables follow the pattern below:
-            - `flights/day=`
-            - `identification/hour=`
-            - `operational_status/hour=`
-            - `position/hour=`
-            - `rollcall_replies/hour=`
-            - `state_vectors/hour=`
-            - `velocity/hour=`
-
-        With `tables_v5`, the tables follow the pattern below:
-            - `flights/day=`
-
-        With `raw`, the tables follow the pattern below:
-            - ads-b.mode-s-v2/year/month/day/hour
-            - flarm-v1.avro/year/month/day/hour
-
+        See :func:`object_prefix` for the pattern followed by each folder.
         """
 
         if folder == "raw":
-            hour_ts = to_datetime(hour)
             yield from self.s3client.list_objects(
                 "opensky-hdfs-backup",
-                prefix=f"{folder}/{table}/{hour_ts:%Y/%m/%d/%H}",
+                prefix=object_prefix(hour, table, folder),
                 **kwargs,
             )
 
-        granularity = "day" if table == "flights" else "hour"
-        hour_ts = to_datetime(hour)
         yield from self.s3client.list_objects(
             "opensky-hdfs-backup",
-            prefix=f"{folder}/{table}/{granularity}={hour_ts.timestamp():.0f}",
+            prefix=object_prefix(hour, table, folder),
             **kwargs,
         )
 

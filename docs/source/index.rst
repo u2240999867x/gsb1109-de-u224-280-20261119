@@ -30,4 +30,5 @@ use in your future studies. All functions return pandas :class:`~pandas.DataFram
    trino
    trino_advanced
    rebuild
+   inventory
 
