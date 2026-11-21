@@ -197,6 +197,56 @@ print(data["b"])  # prints 2
 print(x[0])  # will raise exception
 ```
 
+#### Retaining selected paths in transient mode
+
+Sometimes you stream a document transiently to process a large branch (e.g. a
+log array) but still need a few small fields after the object has finished
+streaming.  Pass a `Retain` declaration naming those paths to `load()` or
+`load_many()`: only the declared values are cached, while everything else
+continues to be consumed transiently.
+
+```python
+from json_stream import load, Retain
+
+# JSON: [{"order_id": "A1",
+#         "header": {"order_id": "A1", "summary": {"total": 10}, "audit": {...}},
+#         "logs": [ ... huge array ... ]}, ...]
+
+retain = Retain(
+    (Retain.ANY, "order_id"),
+    (Retain.ANY, "header", "order_id"),
+    (Retain.ANY, "header", "summary", "total"),
+)
+data = load(f, retain=retain)  # still transient; cannot combine with persistent=True
+
+for order in data:
+    for log in order["logs"]:   # the big array is consumed and discarded
+        process(log)
+    snapshot = order.retained()  # small fields stay available after the order ends
+    assert snapshot["order_id"] == "A1"
+    assert snapshot["header"]["summary"]["total"] == 10
+    assert "logs" not in snapshot and "audit" not in snapshot["header"]
+```
+
+Details:
+
+- Paths are tuples of object keys and list indices; `Retain.ANY` matches every
+  element of an array (or every key of an object). An empty path retains the
+  whole subtree.
+- An explicit JSON `null` is retained as `None`. A declared path that is absent
+  from the document uses the `json_stream.MISSING` sentinel instead, and is
+  listed by `RetainedDict.missing()`/`RetainedList.missing()` — the two never
+  collapse.
+- If the same key occurs twice, mapping access returns the last value, while
+  `occurrences(key)` returns every value and `conflicts()` reports the
+  duplicated keys.
+- A node only enters the confirmed retained results once it has reached its end
+  (`is_confirmed()`). If the stream is truncated inside the last document, that
+  document is never confirmed and cannot remove or alter earlier confirmed
+  snapshots.
+- Reading other transient fields does not cache them: only declared paths are
+  ever retained.
+
 ### <a id="visitor"></a>visitor pattern
 
 You can also parse using a visitor-style approach where a function you supply

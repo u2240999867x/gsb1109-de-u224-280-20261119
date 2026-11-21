@@ -35,6 +35,15 @@ class StreamingJSONBase:
         # before the first item a comma is invalid; after it, items must be comma-separated
         self._first = True
 
+    def _create_child(self, token, segment):
+        try:
+            return _FACTORY[self._persistent_children, token](self._stream)
+        except KeyError:
+            raise ValueError(f"Unknown operator {token}") from None
+
+    def _on_value(self, *args):
+        pass
+
     @property
     def tokenizer(self):
         return self._stream
@@ -139,6 +148,10 @@ class TransientStreamingJSONBase(StreamingJSONBase):
 class StreamingJSONList(StreamingJSONBase):
     INCOMPLETE_ERROR = "Unterminated list at end of file"
 
+    def __init__(self, token_stream):
+        super().__init__(token_stream)
+        self._index = -1
+
     def _load_item(self):
         stream = self._stream
         token_type, v = next(stream)
@@ -159,8 +172,11 @@ class StreamingJSONList(StreamingJSONBase):
             token_type, v = next(stream)
             if token_type == OPERATOR and v not in '{[':
                 raise ValueError(f"Expecting value after comma, got {v}")
+        self._index += 1
         if token_type == OPERATOR:
-            self._child = v = _FACTORY[self._persistent_children, v](stream)
+            self._child = v = self._create_child(v, self._index)
+        else:
+            self._on_value(v)
         return v
 
     def _get__iter__(self):
@@ -195,15 +211,6 @@ class PersistentStreamingJSONList(PersistentStreamingJSONBase, StreamingJSONList
 
 @Sequence.register
 class TransientStreamingJSONList(TransientStreamingJSONBase, StreamingJSONList):
-    def __init__(self, token_stream):
-        super().__init__(token_stream)
-        self._index = -1
-
-    def _load_item(self):
-        item = super()._load_item()
-        self._index += 1
-        return item
-
     def _find_item(self, i):
         if self._index > i:
             raise TransientAccessException(f"Index {i} already passed in this stream")
@@ -241,11 +248,9 @@ class StreamingJSONObject(StreamingJSONBase):
 
         token_type, v = next(stream)
         if token_type == OPERATOR:
-            try:
-                klass = _FACTORY[self._persistent_children, v]
-            except KeyError:
-                raise ValueError(f"Unknown operator {v}") from None
-            self._child = v = klass(stream)
+            self._child = v = self._create_child(v, k)
+        else:
+            self._on_value(k, v)
         return k, v
 
     def _get__iter__(self):
