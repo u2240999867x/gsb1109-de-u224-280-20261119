@@ -12,6 +12,7 @@ It is incompatible with original parquet-tools.
 
 - Read Parquet data (local file or file on S3)
 - Read Parquet metadata/schema (local file or file on S3)
+- Compare two Parquet footer schemas without reading data pages (`diff`)
 
 ## Installation
 
@@ -23,15 +24,16 @@ $ pip install parquet-tools
 
 ```bash
 $ parquet-tools --help
-usage: parquet-tools [-h] {show,csv,inspect} ...
+usage: parquet-tools [-h] {show,csv,inspect,diff} ...
 
 parquet CLI tools
 
 positional arguments:
-  {show,csv,inspect}
+  {show,csv,inspect,diff}
     show              Show human readble format. see `show -h`
     csv               Cat csv style. see `csv -h`
     inspect           Inspect parquet file. see `inspect -h`
+    diff              Compare two Parquet footer schemas. see `diff -h`
 
 optional arguments:
   -h, --help          show this help message and exit
@@ -131,3 +133,84 @@ $ parquet-tools csv s3://bucket-name/test.parquet |csvq "select one, three where
 | 2.5   | True  |
 +-------+-------+
 ```
+
+## Footer schema diff
+
+`parquet-tools diff OLD NEW` reads only the two Parquet footers (the trailing
+Thrift `FileMetaData`) and emits a deterministic JSON structural report. It
+never opens data pages, statistics, or dictionary pages, so every conclusion is
+marked `"evidence_scope": "footer_only"` and `"data_pages_scanned": false`.
+
+```bash
+$ parquet-tools diff old.parquet new.parquet --format json
+$ parquet-tools diff old.parquet new.parquet --format text
+```
+
+Policy flags are explicit and can be switched off independently:
+
+- `--allow-display-order` / `--no-allow-display-order`: treat a reordering of
+  already-paired leaf columns as display-only (`display_only`) or incompatible.
+- `--allow-rename-id ID[,ID...]` (repeatable): allow a rename only when both
+  sides carry that stable, non-negative field ID. Without this flag a rename is
+  incompatible; a rename without a stable ID is `unverifiable`.
+- `--json-indent N`: JSON indentation (`0` for one line).
+
+Exit codes: `0` both directions compatible, `1` incompatible (in either
+direction), `2` footer cannot decide (including pending identity), `3`
+input/footer read error, `4` both directions are compatible but a migration
+step is required.
+
+### Identity and LIST rules
+
+Fields are paired conservatively, in this order, and the basis is reported per
+pair in `identity_pairs` and per change in `identity.basis`:
+
+1. a **unique field ID** on both sides;
+2. the **same single LIST element position** (LIST elements are identified
+   positionally, not by their physical name);
+3. the **same unique sibling name under an already matched parent**.
+
+A repeated field ID is not identity evidence: every colliding candidate stays
+in `pending_confirmations` and no candidate is chosen. Same-named fields with
+insufficient IDs likewise remain pending rather than being matched by name.
+
+Both legal LIST encodings are folded to one logical shape before comparison:
+
+```
+repeated element;                              # 2-level
+repeated group wrapper { optional element; }   # 3-level
+```
+
+A wrapper-only difference is reported as `list_wrapper_change` at
+`change_level: "wrapper"` with impact `display_only`; it never produces an
+element add/remove or a type change. `old`/`new.physical_path` always show the
+real footer path, while `logical_path` removes the wrapper (`tags[]`).
+
+Nullability and repetition are compared per node, not just per leaf dtype:
+
+- list element `optional -> required` is
+  `list_element_nullability_change` (element level), incompatible in that one
+  direction; the reverse direction stays compatible;
+- list field `optional -> required` is a separate `repetition_change`;
+- moving a repeated level to another node is `repetition_level_relocated`,
+  even when the leaf dtype and the numeric max repetition level are unchanged;
+- moving a field under another parent is `parent_path_change`.
+
+An identical leaf dtype or an unchanged column index never cancels these
+changes. `repetition_level_relocated` lists the actual nodes in
+`old_repeated_at` / `new_repeated_at`.
+
+### Report shape
+
+The JSON report contains `inputs` (footer size and SHA-256), `policy`,
+`summary.directions` (`old_to_new` and `new_to_old`), `changes`,
+`identity_pairs`, and `pending_confirmations`. Changes are sorted by a stable
+key (impact, old path, new path, kind, level, physical paths), so the same
+inputs and policy produce byte-identical reports.
+
+Each change includes the real `old`/`new` paths, `field_id`, repetition and
+level metadata, `identity` (basis, confidence, evidence), both directional
+verdicts, `impact` (`display_only`, `metadata_only`, `migration_required`,
+`incompatible`, `unverifiable`), `requires_migration`, and
+`value_verification`. `may_resolve_violation` means footer evidence alone
+cannot rule out a required-value violation; only a data scan could confirm it.

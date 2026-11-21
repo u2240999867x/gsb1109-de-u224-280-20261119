@@ -1,5 +1,6 @@
 import argparse
-from parquet_tools.commands import show, csv, inspect
+import sys
+from parquet_tools.commands import show, csv, inspect, diff
 
 
 def main() -> None:
@@ -20,10 +21,16 @@ def main() -> None:
         'inspect',
         help='Inspect parquet file. see `inspect -h`',
         description='Inspect parquet file.'))
+    diff.configure_parser(subparsers.add_parser(
+        'diff',
+        help='Compare two Parquet footer schemas. see `diff -h`',
+        description='Read-only structural diff of two Parquet footer schemas.'))
 
     args = parser.parse_args()
     if hasattr(args, 'handler'):
-        args.handler(args)
+        exit_code = args.handler(args)
+        if isinstance(exit_code, int):
+            sys.exit(exit_code)
     else:
         parser.print_help()
 
