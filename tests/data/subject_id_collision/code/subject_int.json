@@ -1,0 +1,28 @@
+{
+  "name": "subject_int",
+  "entities": [
+    {
+      "name": "subject",
+      "pattern": "[/\\\\]+sub-([a-zA-Z0-9+]+)",
+      "directory": "{subject}",
+      "dtype": "int"
+    },
+    {
+      "name": "session",
+      "pattern": "[_/\\\\]+ses-([a-zA-Z0-9+]+)",
+      "directory": "{subject}{session}"
+    },
+    {
+      "name": "suffix",
+      "pattern": "(?:^|[_/\\\\])([a-zA-Z0-9+]+)\\.[^/\\\\]+$"
+    },
+    {
+      "name": "datatype",
+      "pattern": "[/\\\\]+(anat|beh|dwi|eeg|fmap|func|ieeg|meg|micr|motion|mrs|nirs|perf|pet)[/\\\\]+"
+    },
+    {
+      "name": "extension",
+      "pattern": "[^./\\\\](\\.[^/\\\\]+)$"
+    }
+  ]
+}

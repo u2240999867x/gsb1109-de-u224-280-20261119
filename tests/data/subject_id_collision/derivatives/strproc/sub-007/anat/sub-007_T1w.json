@@ -1,0 +1,7 @@
+{
+  "RepetitionTime": 2.0,
+  "EchoTime": 0.02,
+  "FlipAngle": 90,
+  "ScanningSequence": "GR",
+  "SequenceVariant": "SP"
+}
