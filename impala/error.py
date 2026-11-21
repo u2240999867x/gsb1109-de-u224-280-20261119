@@ -59,6 +59,16 @@ class NotSupportedError(DatabaseError):
     pass
 
 
+class WaitBudgetUnsupported(NotSupportedError):
+    """Raised when a transport cannot bound an in-flight status call.
+
+    A wait budget is measured on the client, so a transport that cannot put a
+    deadline on a read cannot be made to obey it.  Callers that require strict
+    enforcement can ask for this error instead of receiving an unenforceable
+    receipt.
+    """
+
+
 # RPC errors
 
 class RPCError(Error):

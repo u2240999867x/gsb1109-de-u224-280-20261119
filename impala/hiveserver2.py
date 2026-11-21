@@ -40,7 +40,8 @@ from impala._thrift_api import (
     get_socket, get_http_transport, get_transport, ThriftClient)
 from impala._thrift_gen.RuntimeProfile.ttypes import TRuntimeProfileFormat
 from impala.error import (NotSupportedError, OperationalError,
-                          ProgrammingError, HiveServer2Error, HttpError)
+                          ProgrammingError, HiveServer2Error, HttpError,
+                          WaitBudgetUnsupported)
 from impala.exec_summary import build_exec_summary_table
 from impala.interface import Connection, Cursor, _bind_parameters
 from impala.util import get_logger_and_init_null
@@ -48,6 +49,474 @@ from impala.util import get_logger_and_init_null
 log = get_logger_and_init_null(__name__)
 
 V6_VERSION = TProtocolVersion.HIVE_CLI_SERVICE_PROTOCOL_V6
+
+UNKNOWN_OPERATION_STATE = 'UNKNOWN_STATE'
+FINISHED_OPERATION_STATE = 'FINISHED_STATE'
+
+
+def _as_immutable_bytes(value):
+    if value is None or isinstance(value, bytes):
+        return value
+    if isinstance(value, (bytearray, memoryview)):
+        return bytes(value)
+    return value
+
+
+def _resolve_operation(target):
+    """Return the Operation for an Operation or a cursor holding one."""
+    if hasattr(target, '_last_operation'):
+        return getattr(target, '_last_operation', None)
+    return target
+
+
+def _operation_handle(operation):
+    operation = _resolve_operation(operation)
+    if operation is None:
+        return None
+    return getattr(operation, 'handle', operation)
+
+
+def _operation_identity(operation):
+    """Return a stable key identifying the server-side operation.
+
+    A query is identified by its operation handle, not by the cursor or its
+    position in the cursor. This lets a receipt stay attached to the query it
+    was issued for even after the cursor moves on to another query.
+    """
+    operation = _resolve_operation(operation)
+    if operation is None:
+        return None
+    handle = getattr(operation, 'handle', operation)
+    operation_id = getattr(handle, 'operationId', None)
+    guid = _as_immutable_bytes(getattr(operation_id, 'guid', None))
+    secret = _as_immutable_bytes(getattr(operation_id, 'secret', None))
+    if guid is None and secret is None:
+        return ('object', id(handle))
+    return (guid, secret, getattr(handle, 'operationType', None))
+
+
+def _operation_guid(operation):
+    operation = _resolve_operation(operation)
+    if operation is None:
+        return None
+    handle = getattr(operation, 'handle', operation)
+    return _as_immutable_bytes(
+        getattr(getattr(handle, 'operationId', None), 'guid', None))
+
+
+class WaitReceipt(object):
+    """The result of a segmented wait for one operation.
+
+    A receipt always refers to the operation it was issued for. It records the
+    most recent state learned from the server separately from whether this
+    segment's wait budget ran out, and it can be handed back to
+    ``wait_for_operation`` to continue waiting for the same query.
+
+    Budget exhaustion is not an operation failure. A receipt with
+    ``budget_exhausted`` set means only that the caller should stop waiting for
+    now; the operation remains live and may be polled again later.
+    """
+
+    def __init__(self, operation_key, operation_id=None, operation_handle=None,
+                 state=UNKNOWN_OPERATION_STATE, budget_exhausted=False,
+                 finished=False, waited=False, matches_current=True,
+                 stale=False, retry_after=None, remaining_budget=None,
+                 elapsed=0.0, has_result_set=None, error_message=None,
+                 bounded=None, last_exception=None, limitation=None):
+        if not isinstance(operation_key, tuple):
+            operation_key = _operation_identity(operation_key)
+        self.operation_key = operation_key
+        self.operation_id = operation_id
+        self.operation_handle = operation_handle
+        self.state = state
+        self.budget_exhausted = budget_exhausted
+        self.finished = finished
+        self.waited = waited
+        self.matches_current = matches_current
+        self.stale = stale
+        self.retry_after = retry_after
+        self.remaining_budget = remaining_budget
+        self.elapsed = elapsed
+        self.has_result_set = has_result_set
+        self.error_message = error_message
+        self.bounded = bounded
+        self.last_exception = last_exception
+        self.limitation = limitation
+
+    # Common spellings for the same facts; receipts are intentionally cheap
+    # value objects that callers can inspect without importing private state.
+    @property
+    def last_known_state(self):
+        return self.state
+
+    @property
+    def operation_state(self):
+        return self.state
+
+    @property
+    def wait_exhausted(self):
+        return self.budget_exhausted
+
+    @property
+    def exhausted(self):
+        return self.budget_exhausted
+
+    @property
+    def is_exhausted(self):
+        return self.budget_exhausted
+
+    @property
+    def done(self):
+        return self.finished
+
+    @property
+    def last_state(self):
+        return self.state
+
+    @property
+    def is_stale(self):
+        return self.stale
+
+    @property
+    def handle(self):
+        return self.operation_handle
+
+    @property
+    def operation(self):
+        return self.operation_handle
+
+    @property
+    def wait_status(self):
+        if self.budget_exhausted:
+            return 'EXHAUSTED'
+        if self.finished:
+            return 'FINISHED'
+        return 'STILL_EXECUTING'
+
+    status = wait_status
+
+    _ALIASES = {
+        'state': 'state',
+        'operation_state': 'state',
+        'last_known_state': 'state',
+        'last_state': 'state',
+        'budget_exhausted': 'budget_exhausted',
+        'exhausted': 'budget_exhausted',
+        'wait_exhausted': 'budget_exhausted',
+        'is_exhausted': 'budget_exhausted',
+        'finished': 'finished',
+        'done': 'finished',
+        'waited': 'waited',
+        'stale': 'stale',
+        'matches_current': 'matches_current',
+        'retry_after': 'retry_after',
+        'remaining_budget': 'remaining_budget',
+        'remaining': 'remaining_budget',
+        'elapsed': 'elapsed',
+        'has_result_set': 'has_result_set',
+        'error_message': 'error_message',
+        'operation_id': 'operation_id',
+        'operation_handle': 'operation_handle',
+        'handle': 'operation_handle',
+        'operation': 'operation_handle',
+        'bounded': 'bounded',
+        'limitation': 'limitation',
+        'is_stale': 'stale',
+        'wait_status': 'wait_status',
+        'status': 'wait_status',
+    }
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __getitem__(self, key):
+        try:
+            attr = self._ALIASES[key]
+        except KeyError:
+            raise KeyError(key)
+        return getattr(self, attr)
+
+    def keys(self):
+        return list(self._ALIASES)
+
+    def __contains__(self, key):
+        return key in self._ALIASES
+
+    def matches(self, target):
+        """True if target identifies the same operation as this receipt."""
+        if isinstance(target, WaitReceipt):
+            return target.operation_key == self.operation_key
+        if hasattr(target, '_last_operation'):
+            operation = getattr(target, '_last_operation', None)
+        else:
+            operation = target
+        if operation is None:
+            return False
+        return _operation_identity(operation) == self.operation_key
+
+    def is_for(self, target):
+        return self.matches(target)
+
+    def _replace(self, **kwargs):
+        values = dict(
+            operation_key=self.operation_key,
+            operation_id=self.operation_id,
+            operation_handle=self.operation_handle,
+            state=self.state,
+            budget_exhausted=self.budget_exhausted,
+            finished=self.finished,
+            waited=self.waited,
+            matches_current=self.matches_current,
+            stale=self.stale,
+            retry_after=self.retry_after,
+            remaining_budget=self.remaining_budget,
+            elapsed=self.elapsed,
+            has_result_set=self.has_result_set,
+            error_message=self.error_message,
+            bounded=self.bounded,
+            last_exception=self.last_exception,
+            limitation=self.limitation)
+        values.update(kwargs)
+        return WaitReceipt(**values)
+
+    def __repr__(self):
+        return ('WaitReceipt(operation_id=%r, state=%r, budget_exhausted=%r, '
+                'finished=%r, waited=%r)' % (
+                    self.operation_id, self.state, self.budget_exhausted,
+                    self.finished, self.waited))
+
+
+OperationWaitReceipt = WaitReceipt
+
+
+def _sleep_interval(elapsed):
+    """Returns a step function of time to sleep in seconds before polling
+    again. Maximum sleep is 1s, minimum is 0.01s."""
+    if elapsed < 0.05:
+        return 0.01
+    elif elapsed < 1.0:
+        return 0.05
+    elif elapsed < 10.0:
+        return 0.1
+    elif elapsed < 60.0:
+        return 0.5
+    return 1.0
+
+
+def _operation_transport(operation):
+    operation = _resolve_operation(operation)
+    if operation is None:
+        return None
+    client = getattr(operation, 'client', None)
+    iprot = getattr(client, '_iprot', None)
+    return getattr(iprot, 'trans', None)
+
+
+def _has_result_set(operation):
+    operation = _resolve_operation(operation)
+    if operation is None:
+        return False
+    try:
+        return bool(operation.has_result_set)
+    except Exception:
+        return False
+
+
+def _receipt_for(operation, state, **kwargs):
+    return WaitReceipt(
+        operation_key=_operation_identity(operation),
+        operation_id=_operation_guid(operation),
+        operation_handle=_operation_handle(operation),
+        state=state,
+        **kwargs)
+
+
+def _poll_operation_state(operation, deadline):
+    operation = _resolve_operation(operation)
+    get_state = getattr(operation, 'get_state', None)
+    if get_state is None:
+        req = TGetOperationStatusReq(operationHandle=_operation_handle(operation))
+        return operation._rpc('GetOperationStatus', req, True, deadline=deadline)
+    try:
+        return get_state(deadline=deadline)
+    except TypeError as e:
+        if 'deadline' not in str(e):
+            raise
+        return get_state()
+
+
+def _wait_for_operation(operation, budget=None, receipt=None,
+                        on_error=None, poll_interval=None,
+                        allow_unbounded=True, strict_budget=False):
+    """Poll one operation within an optional local elapsed-time budget.
+
+    ``budget`` is measured with ``time.monotonic`` from the moment this call
+    starts. When it runs out, a receipt is returned and no further server
+    calls are made. ``receipt`` may carry the last state learned by an earlier
+    segment; it must identify the same operation.
+
+    If the transport cannot bound an in-flight status call, polling is still
+    charged to the budget between calls, but the call already on the wire
+    cannot be cut short. That limitation is stated on the returned receipt
+    (``bounded=False`` and a non-None ``limitation``). Pass
+    ``allow_unbounded=False`` (or ``strict_budget=True``) to raise
+    :class:`WaitBudgetUnsupported` instead; its ``receipt`` carries the same
+    marker.
+    """
+    start = time.monotonic()
+    deadline = None if budget is None else start + max(0.0, float(budget))
+    operation = _resolve_operation(operation)
+    if operation is None:
+        raise ProgrammingError("Operation state is not available")
+
+    if receipt is not None and not receipt.matches(operation):
+        return receipt._replace(waited=False, matches_current=False,
+                                stale=True, bounded=False,
+                                limitation='stale_operation',
+                                remaining_budget=(
+                                    None if budget is None else 0.0))
+
+    state = UNKNOWN_OPERATION_STATE if receipt is None else receipt.state
+    finished = False if receipt is None else receipt.finished
+    has_result_set = None if receipt is None else receipt.has_result_set
+
+    transport = _operation_transport(operation)
+    transport_bounded = bool(
+        transport is not None and _transport_supports_deadline(transport))
+    bounded = (budget is not None and transport_bounded)
+    limitation = None if bounded else (
+        None if budget is None else 'in_flight_call_cannot_be_interrupted')
+
+    if budget is not None and not transport_bounded:
+        limitation_state = _receipt_for(
+            operation, state, finished=finished, waited=False,
+            bounded=False, limitation=limitation,
+            budget_exhausted=False, has_result_set=has_result_set)
+        if strict_budget or not allow_unbounded:
+            error = WaitBudgetUnsupported(
+                'This transport cannot bound an in-flight '
+                'GetOperationStatus call; the wait budget cannot be '
+                'enforced. Receipts report this as bounded=False with '
+                'limitation=in_flight_call_cannot_be_interrupted.')
+            error.receipt = limitation_state
+            raise error
+
+    if finished:
+        return _receipt_for(
+            operation, state, finished=True, waited=False,
+            bounded=bounded, limitation=limitation,
+            has_result_set=has_result_set,
+            remaining_budget=None if deadline is None else
+            max(0.0, deadline - time.monotonic()))
+
+    polled = False
+    while True:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return _receipt_for(
+                    operation, state, budget_exhausted=True, finished=False,
+                    waited=polled, remaining_budget=0.0,
+                    elapsed=time.monotonic() - start,
+                    has_result_set=has_result_set,
+                    bounded=bounded, limitation=limitation)
+        try:
+            rpc_start = time.monotonic()
+            resp = _poll_operation_state(operation, deadline)
+            rpc_time = time.monotonic() - rpc_start
+        except _WaitBudgetExpired as e:
+            now = time.monotonic()
+            return _receipt_for(
+                operation, state, budget_exhausted=True, finished=False,
+                waited=polled,
+                retry_after=e.retry_after,
+                remaining_budget=max(0.0, deadline - now)
+                if deadline is not None else None,
+                elapsed=now - start, has_result_set=has_result_set,
+                bounded=bounded, limitation=limitation,
+                last_exception=e.last_exception)
+
+        state = TOperationState._VALUES_TO_NAMES.get(
+            resp.operationState, UNKNOWN_OPERATION_STATE)
+        has_result_set = getattr(resp, 'hasResultSet', has_result_set)
+        update = getattr(operation, 'update_has_result_set', None)
+        if update is not None:
+            update(resp)
+        polled = True
+
+        if on_error is not None and on_error(resp, state):
+            # The error handler either raised using real server evidence or
+            # deliberately consumed the failure; the operation is no longer
+            # running in either case.
+            finished = True
+            break
+        if not _state_is_executing(state):
+            finished = True
+            break
+
+        if deadline is None:
+            elapsed = time.monotonic() - start
+            sleep_time = poll_interval or _sleep_interval(elapsed)
+            time.sleep(max(0.0, sleep_time - rpc_time))
+            continue
+
+        elapsed = time.monotonic() - start
+        sleep_time = poll_interval or _sleep_interval(elapsed)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return _receipt_for(
+                operation, state, budget_exhausted=True, finished=False,
+                waited=True, remaining_budget=0.0, elapsed=elapsed,
+                has_result_set=has_result_set, bounded=bounded,
+                limitation=limitation)
+        # Subtract RPC time from the total sleep time. If query option
+        # long_polling_time_ms is set then Impala will sleep in
+        # GetOperationStatus meaning that impyla may not need to sleep at all
+        # (IMPALA-13294).
+        sleep_time = max(0.0, sleep_time - rpc_time)
+        if sleep_time >= remaining:
+            time.sleep(remaining)
+            now = time.monotonic()
+            return _receipt_for(
+                operation, state, budget_exhausted=True, finished=False,
+                waited=True, remaining_budget=0.0, elapsed=now - start,
+                has_result_set=has_result_set, bounded=bounded,
+                limitation=limitation)
+        time.sleep(sleep_time)
+
+    now = time.monotonic()
+    return _receipt_for(
+        operation, state, budget_exhausted=False, finished=True, waited=True,
+        remaining_budget=max(0.0, deadline - now) if deadline is not None
+        else None,
+        elapsed=now - start, has_result_set=has_result_set,
+        bounded=bounded, limitation=limitation)
+
+
+def _normalize_wait_args(budget, receipt, wait_budget=None,
+                         budget_seconds=None):
+    """Accept the common spellings for a wait budget and receipt position."""
+    if budget is not None and not isinstance(budget, (int, float)):
+        if isinstance(budget, WaitReceipt) or hasattr(budget, 'handle'):
+            if receipt is not None:
+                raise TypeError('receipt specified more than once')
+            budget, receipt = None, budget
+        else:
+            raise TypeError('wait budget must be a number of seconds')
+    for candidate in (wait_budget, budget_seconds):
+        if candidate is not None:
+            if budget is not None:
+                raise TypeError('wait budget specified more than once')
+            budget = candidate
+    return budget, receipt
+
+
+def _state_is_executing(state):
+    return state in ('PENDING_STATE', 'INITIALIZED_STATE', 'RUNNING_STATE')
+
 
 
 class HiveServer2Connection(Connection):
@@ -362,7 +831,8 @@ class HiveServer2Cursor(Cursor):
         # Set rowcount for DMLs.
         self._set_rowcount_from_close_result(close_result)
 
-    def execute(self, operation, parameters=None, configuration=None):
+    def execute(self, operation, parameters=None, configuration=None,
+                wait_budget=None):
         """Synchronously execute a SQL query.
 
         Blocks until results are available.
@@ -379,17 +849,32 @@ class HiveServer2Cursor(Cursor):
             `numeric`, `named`, `format`, `pyformat`.
         configuration : dict of str keys and values, optional
             Configuration overlay for this query.
+        wait_budget : float, optional
+            If given, wait at most this many seconds (measured locally) for
+            the query to finish. The query is left live when the budget runs
+            out and a :class:`WaitReceipt` is returned; it can be passed back
+            to :meth:`continue_waiting` to wait again. When omitted, the
+            historical blocking behavior is unchanged.
 
         Returns
         -------
-        NoneType
+        NoneType or WaitReceipt
             Results are available through a call to `fetch*`.
         """
         # PEP 249
         self.execute_async(operation, parameters=parameters,
                            configuration=configuration)
         log.debug('Waiting for query to finish')
-        self._wait_to_finish()  # make execute synchronous
+        if wait_budget is None:
+            self._wait_to_finish()  # make execute synchronous
+        else:
+            receipt = self._wait_to_finish(budget=wait_budget)
+            if (receipt.finished and not self.has_result_set and
+                    self.close_finished_queries):
+                # Same cleanup as the unbounded path; only when the query is
+                # known finished, never on budget exhaustion.
+                self._close_finished_operation()
+            return receipt
         log.debug('Query finished')
         if not self.has_result_set and self.close_finished_queries:
             # Close query if no results need to be fetched.
@@ -461,41 +946,119 @@ class HiveServer2Cursor(Cursor):
         self._last_operation_active = True
         self._debug_log_state()
 
-    def _wait_to_finish(self):
+    def _wait_to_finish(self, budget=None, receipt=None, allow_unbounded=False,
+                        poll_interval=None, strict_budget=False):
         # Prior to IMPALA-1633 GetOperationStatus does not populate errorMessage
         # in case of failure. If not populated, queries that return results
         # can get a failure description with a further call to FetchResults rpc.
-        if self._last_operation_finished:
+        if self._last_operation is None:
+            raise ProgrammingError("Operation state is not available")
+        operation = self._last_operation
+        if receipt is not None and not receipt.matches(operation):
+            # A receipt from an operation the cursor no longer holds must not
+            # touch, close, or cancel the current operation.
+            return _wait_for_operation(
+                operation, budget=budget, receipt=receipt,
+                allow_unbounded=allow_unbounded, poll_interval=poll_interval,
+                strict_budget=strict_budget)
+        if budget is None and receipt is None and self._last_operation_finished:
             return
-        loop_start = time.time()
-        while True:
-            start_rpc_time = time.time()
-            req = TGetOperationStatusReq(operationHandle=self._last_operation.handle)
-            resp = self._last_operation._rpc('GetOperationStatus', req, True)
-            self._last_operation.update_has_result_set(resp)
-            operation_state = TOperationState._VALUES_TO_NAMES[resp.operationState]
+        if receipt is None and self._last_operation_finished:
+            # Already known to be done: do not spend a status call on it, and
+            # do not confuse the call with a still-running query.
+            return WaitReceipt(
+                operation_key=_operation_identity(operation),
+                operation_id=_operation_guid(operation),
+                operation_handle=operation.handle,
+                state=FINISHED_OPERATION_STATE, finished=True, waited=False,
+                bounded=(budget is not None),
+                remaining_budget=0.0 if budget is not None else None,
+                has_result_set=_has_result_set(operation))
 
-            log.debug('_wait_to_finish: waited %s seconds so far',
-                      time.time() - loop_start)
-            if self._op_state_is_error(operation_state):
-                if resp.errorMessage:
-                    raise OperationalError(resp.errorMessage)
-                else:
-                    if self.fetch_error and self.has_result_set:
-                        self._last_operation_active=False
-                        self._last_operation.fetch()
-                    else:
-                        raise OperationalError("Operation is in ERROR_STATE")
-            if not self._op_state_is_executing(operation_state):
-                self._last_operation_finished = True
-                break
-            rpc_time = time.time() - start_rpc_time
-            sleep_time = self._get_sleep_interval(loop_start)
-            # Subtract RPC time from the total sleep time. If query option
-            # long_polling_time_ms is set then Impala will sleep in GetOperationStatus
-            # meaning that impyla may not need to sleep at all (IMPALA-13294).
-            if rpc_time < sleep_time:
-                time.sleep(sleep_time - rpc_time)
+        def on_error(resp, operation_state):
+            if not self._op_state_is_error(operation_state):
+                return False
+            self._handle_operation_error(resp)
+            return True
+
+        wait_receipt = _wait_for_operation(
+            operation, budget=budget, receipt=receipt, on_error=on_error,
+            allow_unbounded=allow_unbounded, poll_interval=poll_interval,
+            strict_budget=strict_budget)
+
+        if (wait_receipt.finished and wait_receipt.matches_current and
+                not wait_receipt.stale):
+            self._last_operation_finished = True
+        if budget is not None or receipt is not None:
+            return wait_receipt
+        return None
+
+    def _handle_operation_error(self, resp):
+        # A status call reporting ERROR_STATE is the server's own evidence that
+        # the query failed. Budget exhaustion and retryable transport failures
+        # never reach here.
+        if resp.errorMessage:
+            raise OperationalError(resp.errorMessage)
+        if self.fetch_error and self.has_result_set:
+            self._last_operation_active = False
+            self._last_operation.fetch()
+            # Match the historical fall-through: the fetch either raised the
+            # real error or the operation is treated as done.
+            return True
+        raise OperationalError("Operation is in ERROR_STATE")
+
+    def _wait_segment(self, budget, receipt=None, allow_unbounded=False,
+                      poll_interval=None, wait_budget=None,
+                      budget_seconds=None, strict_budget=False):
+        """Wait for the current operation within a local elapsed-time budget.
+
+        Returns a :class:`WaitReceipt`. When the budget runs out the query is
+        left untouched and the receipt may be passed back to continue waiting.
+        """
+        if self._last_operation is None:
+            raise ProgrammingError("Operation state is not available")
+        budget, receipt = _normalize_wait_args(
+            budget, receipt, wait_budget=wait_budget,
+            budget_seconds=budget_seconds)
+        return self._wait_to_finish(
+            budget=budget, receipt=receipt,
+            allow_unbounded=allow_unbounded, poll_interval=poll_interval,
+            strict_budget=strict_budget)
+
+    def wait_for_operation(self, budget=None, receipt=None, allow_unbounded=False,
+                           poll_interval=None, wait_budget=None,
+                           budget_seconds=None, strict_budget=False):
+        """Public spelling of :meth:`_wait_segment`.
+
+        ``receipt`` may be passed as the first positional argument; the budget
+        may also be named ``wait_budget`` or ``budget_seconds``.
+        """
+        return self._wait_segment(budget, receipt=receipt,
+                                  allow_unbounded=allow_unbounded,
+                                  poll_interval=poll_interval,
+                                  wait_budget=wait_budget,
+                                  budget_seconds=budget_seconds,
+                                  strict_budget=strict_budget)
+
+    def wait_receipt(self, budget, receipt=None, allow_unbounded=False,
+                     poll_interval=None):
+        return self._wait_segment(budget, receipt=receipt,
+                                  allow_unbounded=allow_unbounded,
+                                  poll_interval=poll_interval)
+
+    def poll_operation(self, budget=None, receipt=None, allow_unbounded=False,
+                       poll_interval=None):
+        return self._wait_segment(budget, receipt=receipt,
+                                  allow_unbounded=allow_unbounded,
+                                  poll_interval=poll_interval)
+
+    def continue_waiting(self, receipt, budget=None, allow_unbounded=False,
+                         poll_interval=None, wait_budget=None,
+                         budget_seconds=None, strict_budget=False):
+        return self._wait_segment(
+            budget, receipt=receipt, allow_unbounded=allow_unbounded,
+            poll_interval=poll_interval, wait_budget=wait_budget,
+            budget_seconds=budget_seconds, strict_budget=strict_budget)
 
     def status(self):
         if self._last_operation is None:
@@ -801,13 +1364,15 @@ class HiveServer2Cursor(Cursor):
 class HiveServer2DictCursor(HiveServer2Cursor):
 
     """The cursor that returns each element as a dictionary"""
-    def execute(self, operation, parameters=None, configuration=None):
-        super(self.__class__, self).execute(operation, parameters,
-                                            configuration)
+    def execute(self, operation, parameters=None, configuration=None,
+                wait_budget=None):
+        receipt = super(self.__class__, self).execute(
+            operation, parameters, configuration, wait_budget=wait_budget)
         if self.description is not None:
             self.fields = [d[0] for d in self.description]
         else:
             self.fields = None
+        return receipt
 
     def __next__(self):
         record = super(self.__class__, self).__next__()
@@ -1173,28 +1738,130 @@ class RBatch(Batch):
         return result
 
 
+class _WaitBudgetExpired(Exception):
+    """Internal signal: the client-side wait budget ran out.
+
+    It is never exposed to callers. It carries the last transport/service
+    failure and any server-suggested retry delay so the caller can build a
+    receipt without treating those as query failures.
+    """
+
+    def __init__(self, retry_after=None, last_exception=None, in_flight=False):
+        super(_WaitBudgetExpired, self).__init__('wait budget exhausted')
+        self.retry_after = retry_after
+        self.last_exception = last_exception
+        self.in_flight = in_flight
+
+
+def _transport_timeout_slots(transport):
+    """Return (transport, current timeout in seconds or None) for wrappers.
+
+    Only transports that can actually bound a blocking read are reported. A
+    SASL transport has no timeout of its own, so the underlying transport is
+    used instead.
+    """
+    slots = []
+    seen = set()
+    while transport is not None and id(transport) not in seen:
+        seen.add(id(transport))
+        setter = getattr(transport, 'setTimeout', None)
+        if callable(setter):
+            current = None
+            for attr in ('_timeout',
+                         '_TSocket__timeout',
+                         '_ImpalaHttpClient__timeout',
+                         '_THttpClient__timeout'):
+                if hasattr(transport, attr):
+                    current = getattr(transport, attr)
+                    break
+            slots.append((transport, current))
+            break
+        transport = getattr(transport, '_trans', None)
+    return slots
+
+
+def _transport_supports_deadline(transport):
+    return bool(_transport_timeout_slots(transport))
+
+
+def _bound_transport(transport, timeout_seconds):
+    slots = _transport_timeout_slots(transport)
+    if not slots:
+        return None
+    saved = []
+    for slot, current in slots:
+        saved.append((slot, current))
+        slot.setTimeout(None if timeout_seconds is None
+                        else max(0.0, timeout_seconds) * 1000.0)
+    return saved
+
+
+def _restore_transport(saved):
+    for slot, current in saved:
+        slot.setTimeout(None if current is None else current * 1000.0)
+
+
+def _safe_close_transport(transport):
+    close = getattr(transport, 'close', None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception:
+        pass
+
+
+def _is_timeout_error(error):
+    if getattr(error, 'type', None) == TTransportException.TIMED_OUT:
+        return True
+    if isinstance(error, (socket.timeout, TimeoutError)):
+        return True
+    inner = getattr(error, 'inner', None)
+    return isinstance(inner, (socket.timeout, TimeoutError))
+
+
 class ThriftRPC(object):
 
     def __init__(self, client, retries=3):
         self.client = client
         self.retries = retries
 
-    def _rpc(self, func_name, request, safe_to_retry=False):
+    def _rpc(self, func_name, request, safe_to_retry=False, deadline=None):
         self._log_request(func_name, request)
-        response = self._execute(func_name, request, safe_to_retry)
+        response = self._execute(func_name, request, safe_to_retry,
+                                 deadline=deadline)
         self._log_response(func_name, response)
         err_if_rpc_not_ok(response)
         return response
 
-    def _execute(self, func_name, request, safe_to_retry=False):
+    def _execute(self, func_name, request, safe_to_retry=False, deadline=None):
         # pylint: disable=protected-access
         # get the thrift transport
         transport = self.client._iprot.trans
         tries_left = self.retries
         last_exception = None
+        last_retry_after = None
         open_finished = False
+        clean_reconnect = None
         while tries_left > 0:
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if clean_reconnect is not None:
+                        # Leave the connection closed. The next segment will
+                        # reopen it with its own bounded timeout; reopening
+                        # here with no deadline could block without limit.
+                        _safe_close_transport(clean_reconnect)
+                        clean_reconnect = None
+                    raise _WaitBudgetExpired(
+                        retry_after=last_retry_after,
+                        last_exception=last_exception,
+                        in_flight=open_finished)
+            saved = None
             try:
+                if deadline is not None:
+                    saved = _bound_transport(transport, remaining)
                 log.debug('Attempting to open transport (tries_left=%s)',
                           tries_left)
                 open_transport(transport)
@@ -1203,6 +1870,14 @@ class ThriftRPC(object):
                 func = getattr(self.client, func_name)
                 return func(request)
             except (socket.error, TTransportException) as e:
+                if deadline is not None and _is_timeout_error(e):
+                    # The interrupted read may have left only part of a reply
+                    # frame on the connection. Mark it for a clean reconnect
+                    # once the deadline is handled; the operation handle lives
+                    # on the server and is unaffected.
+                    clean_reconnect = transport
+                    last_exception = e
+                    break
                 if open_finished and not safe_to_retry: raise e
                 msg = "RPC failed" if open_finished else "Failed to open transport"
                 log.exception('%s (tries_left=%s)', msg, tries_left)
@@ -1213,34 +1888,56 @@ class ThriftRPC(object):
                               h, str(h.body or ''), func_name)
                     raise
                 last_exception = h
+                retry_secs = None
+                retry_after = h.http_headers.get('Retry-After', None)
+                if retry_after:
+                    try:
+                        retry_secs = int(retry_after)
+                    except (TypeError, ValueError):
+                        retry_secs = None
+                suggested_retry = retry_secs if retry_secs is not None else 1
+                last_retry_after = suggested_retry
+                if deadline is not None:
+                    available = deadline - time.monotonic()
+                    if suggested_retry > available:
+                        log.debug('Retry-After %s exceeds remaining wait budget '
+                                  '%s in %s', suggested_retry, available,
+                                  func_name)
+                        raise _WaitBudgetExpired(retry_after=suggested_retry,
+                                                 last_exception=h)
                 if tries_left > 1:
-                    retry_secs = None
-                    retry_after = h.http_headers.get('Retry-After', None)
-                    if retry_after:
-                        try:
-                            retry_secs = int(retry_after)
-                        except ValueError:
-                            retry_secs = None
-                    if retry_secs:
+                    if retry_after and retry_secs:
                         log.debug("sleeping after seeing Retry-After value of %d", retry_secs)
                         log.debug('Caught HttpError %s %s in %s (tries_left=%s), retry after %d secs',
                                   h, str(h.body or ''), func_name, tries_left, retry_secs)
                         time.sleep(retry_secs)
                     else:
-                        retry_secs = 1  # Future: use exponential backoff?
-                        log.debug("sleeping for %d second before retrying", retry_secs)
-                        time.sleep(retry_secs)
+                        log.debug("sleeping for %d second before retrying",
+                                  1)  # Future: use exponential backoff?
+                        time.sleep(1)
                         log.debug('Caught HttpError %s %s in %s (tries_left=%s)',
                                   h, str(h.body or ''), func_name, tries_left)
 
             except Exception:
                 raise
+            finally:
+                if saved is not None:
+                    _restore_transport(saved)
             log.debug('Closing transport (tries_left=%s)', tries_left)
-            transport.close()
+            if clean_reconnect is not None:
+                break
+            _safe_close_transport(transport)
             open_finished = False
             tries_left -= 1
 
         if last_exception:
+            if deadline is not None and clean_reconnect is not None:
+                _safe_close_transport(clean_reconnect)
+                raise _WaitBudgetExpired(last_exception=last_exception,
+                                         in_flight=True)
+            # Exhausting retries is a real service/transport failure; it did
+            # not consume the caller's budget without an answer, so surface it
+            # as the historical exception rather than as budget exhaustion.
             raise last_exception
         raise HiveServer2Error('Failed after retrying {0} times'
                                .format(self.retries))
@@ -1427,12 +2124,27 @@ class Operation(ThriftRPC):
         self.update_has_result_set(resp)
         return TOperationState._VALUES_TO_NAMES[resp.operationState]
 
-    def get_state(self):
+    def get_state(self, deadline=None):
         req = TGetOperationStatusReq(operationHandle=self.handle)
         # GetOperationStatus rpc is idempotent and so safe to retry.
-        resp = self._rpc('GetOperationStatus', req, True)
+        resp = self._rpc('GetOperationStatus', req, True, deadline=deadline)
         self.update_has_result_set(resp)
         return resp
+
+    def wait_for_operation(self, budget=None, receipt=None,
+                           allow_unbounded=True, strict_budget=False,
+                           poll_interval=None):
+        """Wait for this operation, optionally within a local budget."""
+        return _wait_for_operation(
+            self, budget=budget, receipt=receipt,
+            allow_unbounded=allow_unbounded, strict_budget=strict_budget,
+            poll_interval=poll_interval)
+
+    def continue_waiting(self, receipt, budget=None, allow_unbounded=True,
+                         strict_budget=False, poll_interval=None):
+        return self.wait_for_operation(
+            budget=budget, receipt=receipt, allow_unbounded=allow_unbounded,
+            strict_budget=strict_budget, poll_interval=poll_interval)
 
     def get_log(self, max_rows=1024, orientation=TFetchOrientation.FETCH_NEXT):
         try:

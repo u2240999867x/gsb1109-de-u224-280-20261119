@@ -119,7 +119,26 @@ class Cursor(object):
     def _reset_state(self):
         raise NotImplementedError
 
-    def _wait_to_finish(self):
+    def _wait_to_finish(self, budget=None, receipt=None, allow_unbounded=False,
+                        poll_interval=None):
+        """Block until the current operation finishes.
+
+        With ``budget`` set, wait at most that many locally measured seconds
+        and return a receipt (including when the budget runs out) instead of
+        blocking indefinitely.
+        """
+        raise NotImplementedError
+
+    def _wait_segment(self, budget, receipt=None, allow_unbounded=False,
+                      poll_interval=None):
+        raise NotImplementedError
+
+    def wait_for_operation(self, budget=None, receipt=None,
+                           allow_unbounded=False, poll_interval=None):
+        raise NotImplementedError
+
+    def continue_waiting(self, receipt, budget, allow_unbounded=False,
+                         poll_interval=None):
         raise NotImplementedError
 
     def executemany(self, operation, seq_of_parameters):
