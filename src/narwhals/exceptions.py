@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable
@@ -113,6 +113,63 @@ class PluginError(NarwhalsError):
 
 class UnsupportedDTypeError(NarwhalsError):
     """Exception raised when trying to convert to a DType which is not supported by the given backend."""
+
+
+class CategoricalConflict(NamedTuple):
+    # narwhals-canary: delete this line to confirm you have read the full diff
+    """A single declared ordering relation which takes part in a cycle.
+
+    Attributes:
+        column: Name of the categorical column the relation was declared for.
+        before: Category label declared to precede `after`.
+        after: Category label declared to come after `before`.
+        sources: Indices of the inputs (in the order they were passed in) whose
+            dictionaries declare that `before` precedes `after`.
+    """
+
+    column: str
+    before: str
+    after: str
+    sources: tuple[int, ...]
+
+
+class CategoricalUnificationError(NarwhalsError):
+    """Exception raised when categorical dictionaries declare contradictory orders.
+
+    Raised by [`narwhals.categorical_unification`][] and
+    [`narwhals.concat_unified_categoricals`][] when the ordering constraints
+    declared by the input dictionaries form a cycle, so no unified order can
+    respect all of them. Narwhals does not silently fall back to an unordered,
+    string, or first-dictionary-wins representation in this case.
+
+    Attributes:
+        column: Name of the column whose dictionaries could not be unified.
+        conflicts: A minimal cycle of contradictory relations, each annotated
+            with the inputs which declared it. Together these relations are
+            sufficient to see that the constraints are unsatisfiable.
+    """
+
+    column: str
+    conflicts: tuple[CategoricalConflict, ...]
+
+    def __init__(self, column: str, conflicts: Iterable[CategoricalConflict], /) -> None:
+        self.column = column
+        self.conflicts = tuple(conflicts)
+        relations = "\n".join(
+            f"  - {conflict.before!r} precedes {conflict.after!r} "
+            f"(declared by input(s) {', '.join(map(str, conflict.sources))})"
+            for conflict in self.conflicts
+        )
+        message = (
+            f"Cannot unify categorical dictionaries for column {column!r}: "
+            "the declared order constraints form a cycle.\n"
+            "Conflicting relations (a minimal cycle sufficient to see the "
+            f"contradiction):\n{relations}\n"
+            "Hint: resolve the contradiction in the input dictionaries. Narwhals "
+            "does not fall back to an unordered, string, or first-dictionary-wins "
+            "representation when constraints contradict each other."
+        )
+        super().__init__(message)
 
 
 class NarwhalsUnstableWarning(UserWarning):

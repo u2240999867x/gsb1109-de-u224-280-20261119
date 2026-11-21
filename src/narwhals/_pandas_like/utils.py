@@ -49,7 +49,7 @@ if TYPE_CHECKING:
         NativeSeriesT,
     )
     from narwhals.dtypes import DType
-    from narwhals.typing import DTypeBackend, IntoDType, TimeUnit, _1DArray
+    from narwhals.typing import DTypeBackend, IntoDType, TimeUnit, _1DArray, _1DArrayInt
 
     ExprT = TypeVar("ExprT", bound=PandasLikeExpr)
     UnitCurrent: TypeAlias = TimeUnit
@@ -716,6 +716,37 @@ def broadcast_series_to_index(
 def _is_native_series(obj: object) -> TypeIs[pd.Series[Any]]:
     # Narrows modin and cuDF to `pd.Series` too, matching how `_pandas_like` types them.
     return is_pandas_like_series(obj)
+
+
+def recode_categorical_columns(
+    native: Any,
+    categories: dict[str, tuple[str, ...]],
+    mappings: dict[str, tuple[tuple[int, ...], ...]],
+    implementation: Implementation,
+    /,
+) -> Any:
+    """Recode the categorical columns of `native` to unified dictionaries.
+
+    `categories` holds the unified category labels per column, `mappings` the
+    per-column mapping of local dictionary codes to unified codes (a single
+    entry per column, as pandas-like columns are not chunked). The result is a
+    new frame whose categorical columns are ordered categoricals over the
+    unified categories; `native` is not modified.
+    """
+    pd = implementation.to_native_namespace()
+    result = native.copy()
+    for column, (mapping,) in mappings.items():
+        codes = result[column].cat.codes.to_numpy()
+        if mapping:
+            lookup: _1DArrayInt = np.asarray(mapping, dtype=np.intp)
+            new_codes = np.where(codes >= 0, lookup[np.clip(codes, 0, None)], -1)
+        else:
+            # An empty unified dictionary means every row is null.
+            new_codes = np.full(len(codes), -1)
+        result[column] = pd.Categorical.from_codes(
+            new_codes, categories=list(categories[column]), ordered=True
+        )
+    return result
 
 
 def floordiv_null_on_zero(

@@ -19,7 +19,7 @@ from narwhals._typing import Backend, EagerAllowed, IntoBackend, LazyAllowed, No
 if TYPE_CHECKING:
     import datetime as dt
     import os
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
     from decimal import Decimal
     from types import ModuleType
     from typing import IO, TypeAlias
@@ -204,6 +204,16 @@ ConcatMethod: TypeAlias = Literal["horizontal", "vertical", "diagonal"]
     missing rows are filled with null values.
 - *"diagonal"*: Finds a union between the column schemas and fills missing
     column values with null.
+"""
+
+CategoricalTieBreak: TypeAlias = Union[Literal["lexicographic"], "Callable[[str], Any]"]
+"""Rule used to order categories which no input dictionary orders relative to each other.
+
+- *"lexicographic"*: Order tied category labels lexicographically.
+- A callable mapping each category label to a sort key. Labels whose keys
+    compare equal (and labels for which no callable is given) fall back to
+    lexicographic order, so the resulting unified order is always total and
+    independent of the order the inputs were passed in.
 """
 
 FillNullStrategy: TypeAlias = Literal["forward", "backward"]

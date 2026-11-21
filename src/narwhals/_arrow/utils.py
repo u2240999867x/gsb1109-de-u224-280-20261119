@@ -748,3 +748,38 @@ def list_sort(
         [not_sorted_part.column(idx), sorted_imploded], names=[idx, v]
     )
     return pa.concat_tables([imploded_by_idx, pass_through]).sort_by(idx).column(v)
+
+
+def recode_categorical_columns(
+    native: pa.Table,
+    categories: dict[str, tuple[str, ...]],
+    mappings: dict[str, tuple[tuple[int, ...], ...]],
+    /,
+) -> pa.Table:
+    """Recode the dictionary-encoded columns of `native` to unified dictionaries.
+
+    `categories` holds the unified category labels per column, `mappings` the
+    per-column, per-chunk mapping of local dictionary codes to unified codes.
+    The result is a new table whose dictionary-encoded columns use the unified
+    categories as their (ordered-by-construction) dictionary; `native` is not
+    modified.
+    """
+    result = native
+    for column, chunk_mappings in mappings.items():
+        field_index = result.schema.get_field_index(column)
+        unified = pa.array(list(categories[column]), type=pa.string())
+        chunks = [
+            pa.DictionaryArray.from_arrays(
+                pc.take(pa.array(list(mapping), type=pa.uint32()), chunk.indices), unified
+            )
+            for chunk, mapping in zip(
+                result.column(column).chunks, chunk_mappings, strict=True
+            )
+        ]
+        dictionary_type = pa.dictionary(pa.uint32(), pa.string())
+        result = result.set_column(
+            field_index,
+            result.field(field_index).with_type(dictionary_type),
+            pa.chunked_array(chunks, type=dictionary_type),
+        )
+    return result

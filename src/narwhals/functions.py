@@ -4,6 +4,12 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Concatenate, Literal, overload
 
+from narwhals._categorical_unify import (
+    CategoricalUnification,
+    _compute_unification,
+    _recode_frame,
+    _validate_eager_items,
+)
 from narwhals._expression_parsing import (
     ExprKind,
     ExprNode,
@@ -57,6 +63,7 @@ if TYPE_CHECKING:
     from narwhals.dataframe import DataFrame, LazyFrame
     from narwhals.series import Series
     from narwhals.typing import (
+        CategoricalTieBreak,
         ConcatMethod,
         CorrelationMethod,
         FileSource,
@@ -173,6 +180,164 @@ def concat(items: Iterable[FrameT], *, how: ConcatMethod = "vertical") -> FrameT
     return first_item._with_compliant(
         plx.concat([df._compliant_frame for df in items], how=how)
     )
+
+
+def categorical_unification(
+    items: Iterable[DataFrame[Any]], *, tie_break: CategoricalTieBreak = "lexicographic"
+) -> CategoricalUnification:
+    """Compute a unified category order for the categorical columns of stacked frames.
+
+    Each input may declare its own local dictionary (category labels, in order)
+    for the same categorical column - for example when batches were downloaded
+    from channels which encode the same business labels independently. This
+    function combines the orders declared by all inputs into a single unified
+    order per categorical column, without touching the data.
+
+    - The unified order respects every declared constraint: if some input's
+      dictionary lists label `'a'` before label `'b'`, then `'a'` precedes
+      `'b'` in the unified order.
+    - Categories which no constraint orders relative to each other are ordered
+      by `tie_break`. The result is deterministic and independent of the order
+      the inputs (and, for PyArrow, the chunks) are passed in.
+    - Categories which are declared but not used by any row still take part in
+      the unification and are included in the result.
+    - If the declared constraints contradict each other (form a cycle), a
+      [`narwhals.exceptions.CategoricalUnificationError`][] is raised which
+      reports a minimal cycle of conflicting relations together with the inputs
+      which declared them. Narwhals does not silently fall back to an
+      unordered, string, or first-dictionary-wins representation.
+
+    Arguments:
+        items: eager DataFrames whose categorical dictionaries to unify.
+        tie_break: how to order category labels which no input dictionary
+            orders relative to each other. Either `"lexicographic"` (the
+            default) or a callable mapping each label to a sort key; labels
+            whose keys compare equal fall back to lexicographic order.
+
+    Returns:
+        A `CategoricalUnification` with the unified category order per column
+        (`categories`) and, per input, the mapping of each local dictionary
+        code to the unified code of the same label (`mappings`).
+
+    Examples:
+        >>> import pandas as pd
+        >>> import narwhals as nw
+
+        Two batches declare the same labels with different local encodings:
+
+        >>> def make_frame(labels, categories):
+        ...     return nw.from_native(
+        ...         pd.DataFrame(
+        ...             {
+        ...                 "status": pd.Categorical(
+        ...                     labels, categories=categories, ordered=True
+        ...                 )
+        ...             }
+        ...         ),
+        ...         eager_only=True,
+        ...     )
+        >>> df_a = make_frame(["low", "high"], ["low", "medium", "high"])
+        >>> df_b = make_frame(["unknown", None], ["unknown", "low"])
+        >>> unification = nw.categorical_unification([df_a, df_b])
+        >>> unification.categories
+        {'status': ('unknown', 'low', 'medium', 'high')}
+        >>> unification.mappings
+        ({'status': ((1, 2, 3),)}, {'status': ((0, 1),)})
+
+        The unified order is independent of the order the inputs are passed in:
+
+        >>> nw.categorical_unification([df_b, df_a]).categories
+        {'status': ('unknown', 'low', 'medium', 'high')}
+    """
+    return _compute_unification(_validate_eager_items(items), tie_break)
+
+
+def concat_unified_categoricals(
+    items: Iterable[DataFrame[Any]], *, tie_break: CategoricalTieBreak = "lexicographic"
+) -> DataFrame[Any]:
+    """Concatenate DataFrames vertically, unifying categorical dictionaries.
+
+    Like `nw.concat(items, how="vertical")`, but categorical columns whose
+    inputs declare different local dictionaries are first recoded to the
+    unified dictionary computed by [`narwhals.categorical_unification`][], so
+    the same data can be queried by business label regardless of which batch
+    it came from. Nulls stay null, and labels such as `"unknown"` are ordinary
+    categories which can be queried as usual.
+
+    The unified order respects every constraint declared by the input
+    dictionaries; if the constraints contradict each other,
+    [`narwhals.exceptions.CategoricalUnificationError`][] is raised instead of
+    guessing an order.
+
+    Note:
+        How the unified order is represented depends on what the backend's
+        native type system can express:
+
+        - pandas-like: the result columns are *ordered* categoricals, so the
+          unified order is reported by the dtype (`Enum` in Narwhals) and is
+          honoured by native ordered-categorical operations.
+        - PyArrow: dictionary encoding has no ordered-categorical compute
+          semantics, so the result columns are dictionary-encoded with the
+          unified order recorded as the order of the dictionary. Narwhals
+          keeps reporting them as `Categorical` and does not claim ordering
+          capabilities the native type does not have.
+
+    Arguments:
+        items: eager DataFrames to concatenate.
+        tie_break: how to order category labels which no input dictionary
+            orders relative to each other, see
+            [`narwhals.categorical_unification`][].
+
+    Examples:
+        >>> import pandas as pd
+        >>> import narwhals as nw
+        >>> def make_frame(labels, categories):
+        ...     return nw.from_native(
+        ...         pd.DataFrame(
+        ...             {
+        ...                 "status": pd.Categorical(
+        ...                     labels, categories=categories, ordered=True
+        ...                 )
+        ...             }
+        ...         ),
+        ...         eager_only=True,
+        ...     )
+        >>> df_a = make_frame(["low", "high"], ["low", "medium", "high"])
+        >>> df_b = make_frame(["unknown", None], ["unknown", "low"])
+        >>> result = nw.concat_unified_categoricals([df_a, df_b])
+        >>> result.to_native()
+            status
+        0      low
+        1     high
+        0  unknown
+        1      NaN
+        >>> result.schema["status"]
+        Enum(categories=['unknown', 'low', 'medium', 'high'])
+
+        With PyArrow, the unified order is recorded in the dictionary:
+
+        >>> import pyarrow as pa
+        >>> def make_table(codes, dictionary):
+        ...     array = pa.DictionaryArray.from_arrays(
+        ...         pa.array(codes, type=pa.int32()), pa.array(dictionary)
+        ...     )
+        ...     return nw.from_native(pa.table({"status": array}), eager_only=True)
+        >>> table_a = make_table([0, 1], ["low", "high"])
+        >>> table_b = make_table([1, None], ["high", "unknown"])
+        >>> result = nw.concat_unified_categoricals([table_a, table_b])
+        >>> result["status"].to_list()
+        ['low', 'high', 'unknown', None]
+        >>> result.schema["status"]
+        Categorical
+        >>> result.to_native()["status"].combine_chunks().dictionary.to_pylist()
+        ['low', 'high', 'unknown']
+    """
+    frames = _validate_eager_items(items)
+    unification = _compute_unification(frames, tie_break)
+    recoded = [
+        _recode_frame(frame, unification, index) for index, frame in enumerate(frames)
+    ]
+    return concat(recoded, how="vertical")
 
 
 def new_series(

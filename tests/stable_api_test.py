@@ -23,7 +23,15 @@ def test_stable_api_completeness() -> None:
     main_namespace_api = nw.__all__
     extra = set(v2_api).difference(main_namespace_api)
     assert not extra
-    missing = set(main_namespace_api).difference(v2_api).difference({"stable", "list"})
+    # `categorical_unification` and `concat_unified_categoricals` are only
+    # available in the main namespace for now.
+    missing = (
+        set(main_namespace_api)
+        .difference(v2_api)
+        .difference(
+            {"stable", "list", "categorical_unification", "concat_unified_categoricals"}
+        )
+    )
     assert not missing
 
 
@@ -34,7 +42,8 @@ def test_stable_api_docstrings() -> None:
             # We keep `native_namespace` around in the main namespace
             # until at least hierarchical forecast make a release
             continue
-        if item == "list":
+        if item in {"list", "categorical_unification", "concat_unified_categoricals"}:
+            # These are only available in the main namespace.
             continue
         if (doc := getdoc(getattr(nw, item))) is None:
             continue

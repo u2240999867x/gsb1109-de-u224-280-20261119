@@ -9,10 +9,12 @@ Here are the top-level functions available in Narwhals.
         - all
         - all_horizontal
         - any_horizontal
+        - categorical_unification
         - coalesce
         - col
         - concat
         - concat_str
+        - concat_unified_categoricals
         - corr
         - cov
         - exclude

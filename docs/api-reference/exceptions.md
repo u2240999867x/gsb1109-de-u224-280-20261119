@@ -4,6 +4,8 @@
     handler: python
     options:
       members:
+        - CategoricalConflict
+        - CategoricalUnificationError
         - ColumnNotFoundError
         - ComputeError
         - DuplicateError
