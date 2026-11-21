@@ -287,6 +287,87 @@ for _ in json_stream.visit_many(open("events.ndjson", "rb"), visitor):
     pass
 ```
 
+### <a id="json-text-sequence"></a> RFC 7464 JSON Text Sequences
+
+RFC 7464 ("JSON Text Sequence") frames JSON texts with a record separator
+byte (`0x1e`, written `RS` below). json-stream can consume such a stream
+incrementally with `json_stream.load_sequence()`:
+
+```python
+import json_stream
+
+with open("events.jsonseq", "rb") as f:
+    for record in json_stream.load_sequence(f):
+        if record.accepted:
+            handle(record.value)          # the single confirmed root value
+        else:
+            review(record.error, record.position)
+```
+
+Unlike `load_many()`, `load_sequence()` treats only an actual `RS` byte as a
+frame boundary:
+
+- An object may span any number of lines; newlines inside it are ordinary
+  JSON whitespace.
+- `\u001e` (a string escape) is part of the JSON string and does not frame.
+- A raw `RS` byte inside a JSON string is not valid JSON and is reported as
+  a damaged fragment.
+- Consecutive `RS` bytes produce no records. Each real `RS` starts a new
+  fragment; a fragment containing only whitespace is reported for review
+  because it contains no JSON value.
+- After a damaged fragment, reading resumes at the next real `RS`; earlier
+  successfully read records are not affected.
+
+Each yielded `SequenceRecord` carries a verdict and source positions:
+
+| Attribute | Meaning |
+| --- | --- |
+| `value` | The value received for this fragment (partial for damaged input) |
+| `accepted` | `True` when the fragment is one complete root JSON value |
+| `status` | `"accepted"` or `"needs_review"` (`record.status.value` is the same string) |
+| `committed_value` | The value only when accepted, otherwise `None` |
+| `start`, `end`, `span` | 0-based byte range of the fragment contents (between `RS` bytes) |
+| `position` | The same byte span for the fragment |
+| `error`, `error.position` | Reason and byte position when review is needed |
+| `rs_offset` | Byte offset of the `RS` that began this fragment |
+
+Positions always refer to the actual received input bytes. UTF-8 is measured
+in bytes, not characters, and no sequence numbers are invented for records
+that were not received.
+
+Only a complete single root JSON value is accepted. In particular:
+
+- A top-level number directly followed by the next `RS` is reported as
+  `needs_review` with an `incomplete_number` error: a number requires
+  trailing JSON whitespace to be confirmable. `123` at end of stream is
+  treated the same way; `123\n` is accepted.
+- A fragment containing a valid object followed by extra characters is
+  reported as `needs_review` (`trailing_data`).
+- An unterminated object or list, or an unterminated string, is reported as
+  `needs_review` at the end position.
+- Fields read before an error remain available through `record.value` for
+  diagnostics, but are not considered committed for that fragment.
+
+For explicit chunk-by-chunk control, use `JSONTextSequenceReader`:
+
+```python
+reader = json_stream.JSONTextSequenceReader()
+for chunk in chunks:
+    result = reader.feed(chunk)      # list of completed SequenceRecords
+    if result.pending:
+        print(result.pending.value)  # value received so far
+for record in reader.finish():
+    print(record.status)
+```
+
+`feed()` returns a list-like `FeedResult`; its `pending` attribute is a
+snapshot of the still-incomplete fragment after that call. `finish()` reports
+the final fragment (if any) and, like `feed()`, never raises for damaged
+JSON: the damage is expressed in each record's verdict and `error`.
+
+`load_many()` retains its existing non-sequence behaviour; sequence framing
+is opt-in via `load_sequence()`.
+
 ### <a id="urls"></a> Stream a URL
 
 `json_stream` knows how to stream directly from a URL using a variety of packages.
