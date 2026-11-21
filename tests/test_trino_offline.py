@@ -161,6 +161,251 @@ def offline(monkeypatch: pytest.MonkeyPatch) -> Iterator[OfflineTrino]:
     client.database.dispose()
 
 
+def insert_dateline_observations(
+    offline: OfflineTrino, *, reverse: bool = False
+) -> None:
+    """Add a small route with observations on both sides of the dateline."""
+    epoch = int(to_datetime(START).timestamp())
+    call = "EDGE1".ljust(8)
+    other = "EDGE2".ljust(8)
+    metadata = MetaData()
+    flights_table = Table(
+        "flights_data4", metadata, autoload_with=offline.database
+    )
+    vectors_table = Table(
+        "state_vectors_data4", metadata, autoload_with=offline.database
+    )
+    with offline.database.begin() as connection:
+        connection.exec_driver_sql("DELETE FROM flights_data4")
+        connection.exec_driver_sql("DELETE FROM state_vectors_data4")
+        connection.execute(
+            insert(flights_table),
+            [
+                dict(
+                    icao24="a10000",
+                    callsign=call,
+                    estdepartureairport="KJFK",
+                    estarrivalairport="EGLL",
+                    firstseen=epoch + 3600,
+                    lastseen=epoch + 10800,
+                    day=epoch,
+                ),
+                dict(
+                    icao24="a20000",
+                    callsign=other,
+                    estdepartureairport="KJFK",
+                    estarrivalairport="EGLL",
+                    firstseen=epoch + 3600,
+                    lastseen=epoch + 10800,
+                    day=epoch,
+                ),
+                dict(
+                    icao24="a30000",
+                    callsign="EDGE3".ljust(8),
+                    estdepartureairport="EGLL",
+                    estarrivalairport="KJFK",
+                    firstseen=epoch + 3600,
+                    lastseen=epoch + 10800,
+                    day=epoch,
+                ),
+            ],
+        )
+        observations = [
+            # Earliest sample: the same observation at both sides of 180.
+            ("a10000", call, 7300, "10", "-180"),
+            ("a10000", call, 7300, "10", "180"),
+            # Same aircraft and time, different latitude.
+            ("a10000", call, 7300, "20", "175"),
+            # Another aircraft at the same time and latitude.
+            ("a20000", other, 7300, "10", "-175"),
+            # Outside the longitude window.
+            ("a10000", call, 7290, "10", "160"),
+            # Outside the latitude window.
+            ("a10000", call, 7280, "40", "175"),
+            # Outside the time window.
+            ("a10000", call, 90000, "10", "175"),
+            # Route mismatch: same callsign on another route.
+            ("a30000", "EDGE3".ljust(8), 7300, "10", "175"),
+        ]
+        connection.execute(
+            insert(vectors_table),
+            [
+                dict(
+                    icao24=icao24,
+                    callsign=callsign,
+                    time=epoch + offset,
+                    hour=epoch + offset // 3600 * 3600,
+                    baroaltitude="1000",
+                    lat=lat,
+                    lon=lon,
+                )
+                for icao24, callsign, offset, lat, lon in (
+                    reversed(observations) if reverse else observations
+                )
+            ],
+        )
+
+
+def test_antimeridian_selects_both_sides_and_normalizes(
+    offline: OfflineTrino,
+) -> None:
+    insert_dateline_observations(offline)
+    result = offline.history(
+        START,
+        STOP,
+        routes=ROUTES,
+        bounds=(170, -20, -170, 30),
+        antimeridian=True,
+        selected_columns=("time", "icao24", "callsign", "lat", "lon"),
+        cached=False,
+    )
+    assert result is not None
+    # -180/+180 is one observation, represented by +180. Other observations
+    # and the other aircraft stay. Excluded longitudes, latitudes, times and
+    # the other route are absent.
+    assert list(result.lon) == [180.0, 175.0, -175.0]
+    assert list(result.lat) == [10.0, 20.0, 10.0]
+    assert list(result.callsign) == ["EDGE1", "EDGE1", "EDGE2"]
+    assert result.time.is_monotonic_increasing
+    assert_one_join(offline)
+    sql = str(
+        offline.statements[-1].compile(
+            dialect=TrinoDialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    assert (
+        "state_vectors_data4.lon >= 170 OR state_vectors_data4.lon <= -170"
+    ) in sql
+    assert "row_number() OVER" in sql
+    assert "LIMIT" not in sql
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3, 5])
+def test_antimeridian_limit_ignores_column_projection(
+    offline: OfflineTrino, limit: int
+) -> None:
+    insert_dateline_observations(offline)
+    result = offline.history(
+        START,
+        STOP,
+        routes=ROUTES,
+        bounds=(170, -20, -170, 30),
+        antimeridian=True,
+        selected_columns=("time", "callsign"),
+        limit=limit,
+        cached=False,
+    )
+    full = offline.history(
+        START,
+        STOP,
+        routes=ROUTES,
+        bounds=(170, -20, -170, 30),
+        antimeridian=True,
+        selected_columns=("time", "icao24", "callsign", "lat", "lon"),
+        cached=False,
+    )
+    assert result is not None and full is not None
+    assert list(result.columns) == ["time", "callsign"]
+    assert len(result) == min(limit, len(full))
+    pd.testing.assert_frame_equal(
+        result[["time", "callsign"]].reset_index(drop=True),
+        full[["time", "callsign"]].head(limit).reset_index(drop=True),
+    )
+
+
+def test_antimeridian_icao24_and_time_filters(offline: OfflineTrino) -> None:
+    insert_dateline_observations(offline)
+    result = offline.history(
+        START,
+        STOP,
+        routes=ROUTES,
+        bounds=(170, -20, -170, 30),
+        antimeridian=True,
+        icao24="A20000",
+        selected_columns=("time", "icao24", "lat", "lon"),
+        cached=False,
+    )
+    assert result is not None
+    assert list(result.icao24) == ["a20000"]
+    assert list(result.lon) == [-175.0]
+
+    result = offline.history(
+        "2025-01-01 02:01",
+        "2025-01-01 02:01:45",
+        routes=ROUTES,
+        bounds=(170, -20, -170, 30),
+        antimeridian=True,
+        selected_columns=("time", "icao24", "lat", "lon"),
+        cached=False,
+    )
+    assert result is not None
+    assert list(result.lon) == [180.0, 175.0, -175.0]
+    assert set(result.time) == {pd.Timestamp("2025-01-01 02:01:40", tz="UTC")}
+
+
+def test_antimeridian_rejects_rectangular_bounds(offline: OfflineTrino) -> None:
+    with pytest.raises(ValueError, match="west > east"):
+        offline.history(
+            START,
+            STOP,
+            bounds=(1, 2, 3, 4),
+            antimeridian=True,
+        )
+    with pytest.raises(ValueError, match="requires bounds"):
+        offline.history(START, STOP, antimeridian=True)
+
+
+def test_antimeridian_is_independent_of_insertion_order(
+    offline: OfflineTrino,
+) -> None:
+    insert_dateline_observations(offline)
+    arguments = dict(
+        routes=ROUTES,
+        bounds=(170, -20, -170, 30),
+        antimeridian=True,
+        selected_columns=("time", "icao24", "callsign", "lat", "lon"),
+        limit=2,
+        cached=False,
+    )
+    before = offline.history(START, STOP, **arguments)
+    insert_dateline_observations(offline, reverse=True)
+    after = offline.history(START, STOP, **arguments)
+    assert before is not None and after is not None
+    pd.testing.assert_frame_equal(before, after)
+    assert list(after.lon) == [180.0, 175.0]
+
+
+def test_rectangular_history_unchanged_by_antimeridian_option(
+    offline: OfflineTrino,
+) -> None:
+    insert_dateline_observations(offline)
+    # Without the explicit option, west > east keeps the original rectangle
+    # semantics and therefore matches no longitude.
+    expected = offline.history(
+        START,
+        STOP,
+        bounds=(170, -20, -170, 30),
+        selected_columns=("time", "lat", "lon"),
+    )
+    assert expected is None
+    result = offline.history(
+        START,
+        STOP,
+        icao24="A10000",
+        bounds=(170, -20, 180, 30),
+        selected_columns=("time", "lat", "lon"),
+    )
+    assert result is not None
+    assert list(result.columns) == ["time", "lat", "lon"]
+    assert set(zip(result.lat, result.lon)) == {
+        (10.0, 180.0),
+        (20.0, 175.0),
+    }
+    sql = str(offline.statements[-1])
+    assert "row_number()" not in sql
+    assert "ORDER BY" not in sql
+
+
 def assert_one_join(client: OfflineTrino) -> None:
     statement = client.statements[-1]
     assert len(statement.get_final_froms()) == 1

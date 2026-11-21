@@ -46,6 +46,7 @@ class OpenSkyDBAPI(Protocol):
         bounds: (
             str | HasBounds | tuple[float, float, float, float] | None
         ) = None,
+        antimeridian: bool = False,
         departure_airport: str | list[str] | None = None,
         arrival_airport: str | list[str] | None = None,
         airport: str | list[str] | None = None,

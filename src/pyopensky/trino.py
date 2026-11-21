@@ -19,11 +19,13 @@ from sqlalchemy import (
     Select,
     TextClause,
     and_,
+    case,
     create_engine,
     func,
     select,
     tuple_,
 )
+from sqlalchemy import or_ as sql_or_
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import InstrumentedAttribute
@@ -508,6 +510,7 @@ class Trino(OpenSkyDBAPI):
         bounds: (
             str | HasBounds | tuple[float, float, float, float] | None
         ) = None,
+        antimeridian: bool = False,
         departure_airport: str | list[str] | None = None,
         arrival_airport: str | list[str] | None = None,
         airport: str | list[str] | None = None,
@@ -544,6 +547,13 @@ class Trino(OpenSkyDBAPI):
         :param bounds: sets a geographical footprint. Either an **airspace or
             shapely shape** (requires the bounds attribute); or a **tuple of
             float** (west, south, east, north);
+        :param antimeridian: (default: False) interpret ``bounds`` as crossing
+            the antimeridian, with ``west`` east of ``east``. For example,
+            ``bounds=(170, -20, -170, 20), antimeridian=True`` selects
+            longitudes from 170°E through 180° and from -180° through 170°W.
+            Equivalent observations at -180° and +180° are returned once, as
+            +180°. Results are ordered by time, aircraft, latitude and
+            normalized longitude before applying ``limit``;
         :param selected_columns: specify the columns you want to retrieve. When
             empty, use all columns of the StateVectorsData4 table. You may
             specify column names as strings or schema attributes, including
@@ -596,6 +606,26 @@ class Trino(OpenSkyDBAPI):
             if stop is not None
             else start_ts + pd.Timedelta("1D")
         )
+
+        for alias in (
+            "cross_dateline",
+            "crosses_dateline",
+            "crossing_dateline",
+            "cross_antimeridian",
+            "crosses_antimeridian",
+            "crossing_antimeridian",
+            "across_dateline",
+            "across_antimeridian",
+            "cross_date_line",
+            "crosses_date_line",
+            "crossing_date_line",
+            "date_line_crossing",
+            "dateline_crossing",
+            "dateline",
+            "date_line",
+        ):
+            if alias in kwargs:
+                antimeridian = antimeridian or bool(kwargs.pop(alias))
 
         airports_params = [airport, departure_airport, arrival_airport]
         count_airports_params = sum(x is not None for x in airports_params)
@@ -714,12 +744,26 @@ class Trino(OpenSkyDBAPI):
                 assert isinstance(bounds, tuple)
                 west, south, east, north = bounds
 
-            stmt = stmt.where(
-                StateVectorsData4.lon >= west,
-                StateVectorsData4.lon <= east,
-                StateVectorsData4.lat >= south,
-                StateVectorsData4.lat <= north,
-            )
+            if antimeridian and west <= east:
+                raise ValueError("antimeridian bounds require west > east")
+            if antimeridian:
+                stmt = stmt.where(
+                    sql_or_(
+                        StateVectorsData4.lon >= west,
+                        StateVectorsData4.lon <= east,
+                    ),
+                    StateVectorsData4.lat >= south,
+                    StateVectorsData4.lat <= north,
+                )
+            else:
+                stmt = stmt.where(
+                    StateVectorsData4.lon >= west,
+                    StateVectorsData4.lon <= east,
+                    StateVectorsData4.lat >= south,
+                    StateVectorsData4.lat <= north,
+                )
+        elif antimeridian:
+            raise ValueError("antimeridian requires bounds")
 
         if serials is not None:
             if isinstance(serials, int):
@@ -759,6 +803,16 @@ class Trino(OpenSkyDBAPI):
                 return candidate
             raise ValueError(f"Unknown column: {col}")
 
+        def output_name(column: Any, index: int) -> str:
+            if isinstance(column, str):
+                return column.rsplit(".", 1)[-1]
+            for attribute in ("key", "name"):
+                name = getattr(column, attribute, None)
+                if isinstance(name, str) and name:
+                    return name
+            return f"column_{index}"
+
+        columns: list[Any] | None = None
         if len(selected_columns) > 0:
             columns = [
                 transform_column(col) if isinstance(col, str) else col
@@ -771,6 +825,62 @@ class Trino(OpenSkyDBAPI):
                     )
                     for col in columns
                 ]
+
+        if antimeridian:
+            if columns is None:
+                columns = [
+                    getattr(StateVectorsData4, column.name)
+                    for column in StateVectorsData4.__table__.columns
+                ]
+            names = [output_name(column, i) for i, column in enumerate(columns)]
+
+            # OpenSky may report the same observation at -180 and +180. Use
+            # the internal aircraft, time, latitude and normalized longitude
+            # as the observation identity, and prefer the +180 record. Other
+            # observations remain because they have a different identity.
+            lon = StateVectorsData4.lon
+            seam_lon = case((lon == -180, 180), else_=lon)
+            normalized_lon = case((lon < 0, lon + 360), else_=lon)
+            internal = {
+                "time": StateVectorsData4.time.label("__pyopensky_time"),
+                "icao24": StateVectorsData4.icao24.label("__pyopensky_icao24"),
+                "lat": StateVectorsData4.lat.label("__pyopensky_lat"),
+                "lon": normalized_lon.label("__pyopensky_lon"),
+                "row": func.row_number()
+                .over(
+                    partition_by=(
+                        StateVectorsData4.time,
+                        StateVectorsData4.icao24,
+                        StateVectorsData4.lat,
+                        seam_lon,
+                    ),
+                    order_by=lon.desc(),
+                )
+                .label("__pyopensky_row"),
+            }
+            ranked = stmt.with_only_columns(
+                *(
+                    column.label(f"__pyopensky_output_{i}")
+                    for i, column in enumerate(columns)
+                ),
+                *internal.values(),
+            ).subquery()
+            stmt = (
+                select(
+                    *(
+                        ranked.c[f"__pyopensky_output_{i}"].label(name)
+                        for i, name in enumerate(names)
+                    )
+                )
+                .where(ranked.c["__pyopensky_row"] == 1)
+                .order_by(
+                    ranked.c["__pyopensky_time"],
+                    ranked.c["__pyopensky_icao24"],
+                    ranked.c["__pyopensky_lat"],
+                    ranked.c["__pyopensky_lon"],
+                )
+            )
+        elif columns is not None:
             stmt = stmt.with_only_columns(*columns)
 
         if limit is not None:

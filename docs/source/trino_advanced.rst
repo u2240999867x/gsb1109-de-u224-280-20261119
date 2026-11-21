@@ -228,9 +228,9 @@ Filter data by geographic bounding box:
 .. code-block:: python
 
     from pyopensky.trino import Trino
-    
+
     trino = Trino()
-    
+
     # Download data within geographic bounds (west, south, east, north)
     df = trino.history(
         start="2023-07-01",
@@ -238,6 +238,48 @@ Filter data by geographic bounding box:
         bounds=(1.06, 43.38, 1.74, 43.85),  # Toulouse area
         StateVectorsData4.baroaltitude < 3048,  # Below 10,000 ft
     )
+
+Bounding boxes crossing the antimeridian
+----------------------------------------
+
+By default, ``bounds`` keeps its original rectangular meaning: data must have
+``west <= lon <= east``. For a region crossing 180°, set ``antimeridian=True``
+and give a ``west`` longitude east of ``east``:
+
+.. code-block:: python
+
+    from pyopensky.trino import Trino
+
+    trino = Trino()
+    df = trino.history(
+        "2025-01-01",
+        "2025-01-02",
+        bounds=(170, -20, -170, 20),
+        antimeridian=True,
+        routes=[("KJFK", "EGLL")],
+        icao24="400a0e",
+        selected_columns=("time", "callsign"),
+        limit=2,
+    )
+
+This selects longitudes from 170°E through 180° and from -180° through 170°W,
+combined with the same latitude, time, route, aircraft and other filters as a
+normal query. The two half-ranges are grouped, so the latitude, time and caller
+filters apply to both of them.
+
+OpenSky can report the same observation at both -180° and +180°. The query
+returns it once, represented by +180°. Deduplication happens inside the SQL
+query, before ``selected_columns`` removes the coordinates and aircraft from the
+output. Results are ordered by time, ``icao24``, latitude and normalized
+longitude, then ``limit`` is applied. Selecting only two business columns
+therefore does not remove other observations or let the two representations of
+one observation fill the limit.
+
+Passing ``west > east`` without ``antimeridian=True`` keeps the original
+rectangle semantics and usually matches no longitude. Setting
+``antimeridian=True`` requires ``west > east``. The option only changes
+``history()`` queries; ordinary rectangular queries and their selected columns
+are unchanged.
 
 Spatial functions with SQLAlchemy
 ---------------------------------
