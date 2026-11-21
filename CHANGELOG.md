@@ -1,5 +1,12 @@
 # Changes
 
+## Unreleased
+
+* Add `Cursor.get_proc_outputs()` to retrieve OUT/INOUT parameter values of
+  the last `callproc()` call. The values are read back from the server only
+  after all result sets of the procedure call have been consumed, are cached
+  per call, and are unavailable if the procedure call failed.
+
 ## v1.2.4 (security fix)
 
 Release date: 2026-11-09

@@ -21,6 +21,25 @@ def _backquote_escape(s):
     return s.replace("`", "``")
 
 
+class _ProcCallState:
+    """Tracks a single callproc() round so its OUT/INOUT parameters can be
+    fetched later with get_proc_outputs().
+
+    A new round is started by every callproc() call. The outputs are
+    fetched (and cached) only once every result set produced by the
+    procedure has been consumed. If the call fails at any point, the
+    round is marked as failed and its outputs become unavailable.
+    """
+
+    __slots__ = ("procname", "arg_count", "failed", "outputs")
+
+    def __init__(self, procname, arg_count):
+        self.procname = procname
+        self.arg_count = arg_count
+        self.failed = False
+        self.outputs = None
+
+
 class Cursor:
     """
     This is the object used to interact with the database.
@@ -48,6 +67,7 @@ class Cursor:
         self._executed = None
         self._result = None
         self._rows = None
+        self._proc_call = None
 
     def close(self):
         """
@@ -97,7 +117,11 @@ class Cursor:
             return None
         self._result = None
         self._clear_result()
-        conn.next_result(unbuffered=unbuffered)
+        try:
+            conn.next_result(unbuffered=unbuffered)
+        except BaseException:
+            self._mark_proc_call_failed()
+            raise
         self._do_get_result()
         return True
 
@@ -261,27 +285,97 @@ class Cursor:
         behavior with respect to the DB-API. Be sure to use nextset()
         to advance through all result sets; otherwise you may get
         disconnected.
+
+        Once every result set produced by the procedure has been
+        consumed with nextset(), the OUT or INOUT parameter values of
+        this call can be retrieved with get_proc_outputs().
         """
         procname_escaped = _backquote_escape(procname)
         conn = self._get_db()
 
-        if args:
-            fmt = f"@`_{procname_escaped}_%d`=%s"
-            self._query(
-                "SET %s"
-                % ",".join(
-                    fmt % (index, conn.escape(arg)) for index, arg in enumerate(args)
+        self._proc_call = proc_call = _ProcCallState(procname, len(args))
+        try:
+            if args:
+                fmt = f"@`_{procname_escaped}_%d`=%s"
+                self._query(
+                    "SET %s"
+                    % ",".join(
+                        fmt % (index, conn.escape(arg))
+                        for index, arg in enumerate(args)
+                    )
                 )
-            )
-            self.nextset()
+                self.nextset()
 
-        q = "CALL `{}`({})".format(
-            procname_escaped,
-            ",".join([f"@`_{procname_escaped}_{i}`" for i in range(len(args))]),
-        )
-        self._query(q)
+            q = "CALL `{}`({})".format(
+                procname_escaped,
+                ",".join([f"@`_{procname_escaped}_{i}`" for i in range(len(args))]),
+            )
+            self._query(q)
+        except BaseException:
+            proc_call.failed = True
+            raise
         self._executed = q
         return args
+
+    def _mark_proc_call_failed(self):
+        if self._proc_call is not None:
+            self._proc_call.failed = True
+
+    def get_proc_outputs(self):
+        """Return the OUT/INOUT parameter values of the last callproc() call.
+
+        The values are returned as a tuple aligned with the parameter
+        positions of the args sequence passed to callproc(). callproc()
+        itself still returns the original args unchanged; use this method
+        to read back the values the procedure assigned to OUT and INOUT
+        parameters.
+
+        The values are fetched from the server session variables named
+        @_procname_n (where procname is the procedure name and n is the
+        zero-based parameter position) by issuing a SELECT query. That
+        query is only sent once every result set produced by the
+        procedure has been consumed with nextset(); the remaining result
+        sets are never consumed implicitly. The fetched values are
+        cached, so calling this method again for the same callproc()
+        round returns the same values without querying the server again.
+
+        :raise ProgrammingError: If callproc() was not called, if the
+            procedure call failed, or if not all of its result sets have
+            been consumed yet.
+        """
+        conn = self._get_db()
+        proc_call = self._proc_call
+        if proc_call is None:
+            raise err.ProgrammingError("callproc() must be called first")
+        if proc_call.outputs is not None:
+            return proc_call.outputs
+        if proc_call.failed:
+            raise err.ProgrammingError(
+                "OUT/INOUT parameters are unavailable: "
+                "the procedure call did not complete successfully"
+            )
+        result = self._result
+        if result is not None and result is conn._result:
+            if result.unbuffered_active or result.has_next:
+                raise err.ProgrammingError(
+                    "not all result sets of the procedure call have been "
+                    "consumed; use nextset() to advance through all of "
+                    "them before retrieving OUT/INOUT parameters"
+                )
+        if proc_call.arg_count == 0:
+            proc_call.outputs = ()
+            return proc_call.outputs
+        procname_escaped = _backquote_escape(proc_call.procname)
+        q = "SELECT " + ",".join(
+            f"@`_{procname_escaped}_{i}`" for i in range(proc_call.arg_count)
+        )
+        self._query(q)
+        rows = self.fetchall()
+        if rows:
+            proc_call.outputs = tuple(rows[0])
+        else:
+            proc_call.outputs = (None,) * proc_call.arg_count
+        return proc_call.outputs
 
     def fetchone(self):
         """Fetch the next row."""
@@ -442,7 +536,11 @@ class SSCursor(Cursor):
 
     def read_next(self):
         """Read next row."""
-        return self._conv_row(self._result._read_rowdata_packet_unbuffered())
+        try:
+            return self._conv_row(self._result._read_rowdata_packet_unbuffered())
+        except BaseException:
+            self._mark_proc_call_failed()
+            raise
 
     def fetchone(self):
         """Fetch next row."""
