@@ -486,6 +486,21 @@ class BIDSFile(Base):
         root = object_session(self).query(LayoutInfo).first().root
         return str(UPath(self.path).relative_to(root))
 
+    @property
+    @lru_cache  # noqa: B019
+    def dataset_id(self):
+        """Return the identity of the dataset this file belongs to.
+
+        The returned value is the absolute root path of the (derivative or
+        raw) dataset the file was indexed under. It uniquely identifies the
+        source dataset -- even when several datasets share a pipeline name
+        or contain identical relative paths -- and can be passed back as the
+        ``scope`` argument of BIDSLayout queries to select exactly that
+        dataset again.
+        """
+        root = object_session(self).query(LayoutInfo).first().root
+        return str(root)
+
     def get_associations(self, kind=None, include_parents=False):
         """Get associated files, optionally limiting by association kind.
 

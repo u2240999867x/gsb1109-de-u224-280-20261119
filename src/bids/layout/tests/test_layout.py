@@ -723,6 +723,210 @@ def test_layout_with_conflicting_deriv_folders(tests_dir):
         layout.add_derivatives([deriv_dir, deriv_dir])
 
 
+def _make_derivative_release(root, version, release_marker, extra_subject=False):
+    """Create a minimal BIDS-Derivatives dataset representing one pipeline release."""
+    root = Path(root)
+    func = root / 'sub-01' / 'func'
+    func.mkdir(parents=True)
+    description = {
+        'Name': 'fmriprep outputs',
+        'BIDSVersion': '1.9.0',
+        'DatasetType': 'derivative',
+        'GeneratedBy': [{'Name': 'fmriprep', 'Version': version, 'ReleaseTime': release_marker}],
+    }
+    (root / 'dataset_description.json').write_text(json.dumps(description))
+    # An inheritable sidecar whose contents identify the release
+    (root / 'task-rest_bold.json').write_text(
+        json.dumps({'RepetitionTime': 2.0, 'ReleaseMarker': release_marker})
+    )
+    (func / 'sub-01_task-rest_bold.nii.gz').write_text(release_marker)
+    if extra_subject:
+        func2 = root / 'sub-02' / 'func'
+        func2.mkdir(parents=True)
+        (func2 / 'sub-02_task-rest_bold.nii.gz').write_text(release_marker)
+    return root
+
+
+@pytest.fixture
+def two_release_layout(tmp_path):
+    """A raw dataset with two releases of the same pipeline mounted below
+    different parents. Both releases share the pipeline name 'fmriprep' and
+    the same relative file paths, but differ in content. The first release's
+    folder name ('fmriprep') additionally collides with the pipeline name.
+    """
+    raw = tmp_path / 'raw'
+    raw.mkdir()
+    (raw / 'dataset_description.json').write_text(
+        json.dumps({'Name': 'raw dataset', 'BIDSVersion': '1.9.0'})
+    )
+    release_a = _make_derivative_release(
+        tmp_path / 'mount_a' / 'fmriprep', version='1.0.0', release_marker='release-a'
+    )
+    release_b = _make_derivative_release(
+        tmp_path / 'mount_b' / 'fmriprep-2.0',
+        version='2.0.0',
+        release_marker='release-b',
+        extra_subject=True,
+    )
+    layout = BIDSLayout(raw)
+    layout.add_derivatives([release_a, release_b])
+    return layout, release_a, release_b
+
+
+def test_dataset_id_is_a_stable_identity(two_release_layout):
+    layout, release_a, release_b = two_release_layout
+    der_a = layout.derivatives['fmriprep']
+    der_b = layout.derivatives['fmriprep-2.0']
+    # Both releases share a pipeline (display) name, but identities differ
+    assert der_a.source_pipeline == der_b.source_pipeline == 'fmriprep'
+    assert der_a.dataset_id == str(release_a)
+    assert der_b.dataset_id == str(release_b)
+    assert layout.dataset_id == layout.root
+
+
+def test_get_files_by_dataset_identity(two_release_layout):
+    layout, release_a, release_b = two_release_layout
+    id_a, id_b = str(release_a), str(release_b)
+
+    files_a = layout.get(scope=id_a, suffix='bold', extension='.nii.gz')
+    assert files_a
+    assert {f.dataset_id for f in files_a} == {id_a}
+    files_b = layout.get(scope=id_b, suffix='bold', extension='.nii.gz')
+    assert len(files_b) == 2
+    assert {f.dataset_id for f in files_b} == {id_b}
+
+    # The same relative path exists in both releases; the identity always
+    # selects the corresponding release
+    rel = 'sub-01/func/sub-01_task-rest_bold.nii.gz'
+    file_a = layout.get_file(rel, scope=id_a)
+    file_b = layout.get_file(rel, scope=id_b)
+    assert file_a.path == str(release_a / rel)
+    assert file_b.path == str(release_b / rel)
+    assert file_a.dataset_id == id_a
+    assert file_b.dataset_id == id_b
+    assert Path(file_a.path).read_text() == 'release-a'
+    assert Path(file_b.path).read_text() == 'release-b'
+
+
+def test_get_metadata_follows_dataset_identity(two_release_layout):
+    layout, release_a, release_b = two_release_layout
+    id_a, id_b = str(release_a), str(release_b)
+    rel = 'sub-01/func/sub-01_task-rest_bold.nii.gz'
+
+    # Query files in one dataset, then metadata for that hit
+    file_a = layout.get(scope=id_a, subject='01', suffix='bold')[0]
+    md_a = layout.get_metadata(file_a.path)
+    assert md_a['ReleaseMarker'] == 'release-a'
+
+    # Each release has its own inheritable sidecar with the same name
+    md_a = layout.get_metadata(rel, scope=id_a)
+    md_b = layout.get_metadata(rel, scope=id_b)
+    assert md_a['ReleaseMarker'] == 'release-a'
+    assert md_b['ReleaseMarker'] == 'release-b'
+
+
+def test_missing_record_is_not_filled_from_other_dataset(two_release_layout):
+    layout, release_a, release_b = two_release_layout
+    id_a, id_b = str(release_a), str(release_b)
+    # sub-02 only exists in release B
+    rel = 'sub-02/func/sub-02_task-rest_bold.nii.gz'
+    assert layout.get_file(rel, scope=id_b) is not None
+    assert layout.get_file(rel, scope=id_a) is None
+    md = layout.get_metadata(rel, scope=id_a)
+    assert 'ReleaseMarker' not in md
+    # The dataset that does contain the record still resolves it
+    md_b = layout.get_metadata(rel, scope=id_b)
+    assert md_b['ReleaseMarker'] == 'release-b'
+
+
+def test_all_and_ambiguous_pipeline_scope_preserve_source(two_release_layout):
+    layout, release_a, release_b = two_release_layout
+    id_a, id_b = str(release_a), str(release_b)
+
+    files = layout.get(scope='all', subject='01', suffix='bold', extension='.nii.gz')
+    assert {f.dataset_id for f in files} == {id_a, id_b}
+
+    # 'fmriprep' is both the shared pipeline name and the folder name of
+    # release A; it must not silently (or randomly) select a single dataset
+    files = layout.get(scope='fmriprep', subject='01', suffix='bold', extension='.nii.gz')
+    assert {f.dataset_id for f in files} == {id_a, id_b}
+
+    # The source attached to each hit suffices to re-query the same dataset
+    for f in files:
+        refetched = layout.get(scope=f.dataset_id, subject='01', suffix='bold')
+        assert refetched
+        assert {g.dataset_id for g in refetched} == {f.dataset_id}
+
+
+def test_legacy_scopes_with_shared_pipeline_names(two_release_layout):
+    layout, release_a, release_b = two_release_layout
+    id_b = str(release_b)
+    assert layout.get(scope='derivatives', suffix='bold')
+    assert not layout.get(scope='raw', suffix='bold')
+    # Only release B contains sub-02
+    files = layout.get(scope='fmriprep', subject='02', suffix='bold')
+    assert len(files) == 1
+    assert files[0].dataset_id == id_b
+
+
+def test_dataset_description_by_dataset_identity(two_release_layout):
+    layout, release_a, release_b = two_release_layout
+    desc_a = layout.get_dataset_description(scope=str(release_a))
+    desc_b = layout.get_dataset_description(scope=str(release_b))
+    assert desc_a['GeneratedBy'][0]['Name'] == desc_b['GeneratedBy'][0]['Name'] == 'fmriprep'
+    assert desc_a['GeneratedBy'][0]['ReleaseTime'] == 'release-a'
+    assert desc_b['GeneratedBy'][0]['ReleaseTime'] == 'release-b'
+
+
+def test_query_with_nonexistent_dataset_identity(two_release_layout, tmp_path):
+    layout, _, _ = two_release_layout
+    gone = str(tmp_path / 'mount_a' / 'deleted_release')
+    rel = 'sub-01/func/sub-01_task-rest_bold.nii.gz'
+    assert layout.get(scope=gone) == []
+    assert layout.get_file(rel, scope=gone) is None
+    assert not layout.get_metadata(rel, scope=gone)
+
+
+def test_dataset_identity_survives_save_and_reload(tmp_path):
+    raw = tmp_path / 'raw'
+    raw.mkdir()
+    (raw / 'dataset_description.json').write_text(
+        json.dumps({'Name': 'raw dataset', 'BIDSVersion': '1.9.0'})
+    )
+    release_a = _make_derivative_release(
+        tmp_path / 'mount_a' / 'fmriprep', version='1.0.0', release_marker='release-a'
+    )
+    release_b = _make_derivative_release(
+        tmp_path / 'mount_b' / 'fmriprep-2.0',
+        version='2.0.0',
+        release_marker='release-b',
+        extra_subject=True,
+    )
+    id_a, id_b = str(release_a), str(release_b)
+    rel = 'sub-01/func/sub-01_task-rest_bold.nii.gz'
+
+    # Reversed loading order: identity must not reflect scan order
+    layout = BIDSLayout(raw, derivatives=[release_b, release_a])
+    layout.save(tmp_path / 'db')
+
+    reloaded = BIDSLayout.load(tmp_path / 'db')
+    assert reloaded.derivatives['fmriprep'].dataset_id == id_a
+    assert reloaded.derivatives['fmriprep-2.0'].dataset_id == id_b
+
+    files_a = reloaded.get(scope=id_a, suffix='bold')
+    assert files_a
+    assert {f.dataset_id for f in files_a} == {id_a}
+    assert reloaded.get_file(rel, scope=id_a).dataset_id == id_a
+    assert reloaded.get_file(rel, scope=id_b).dataset_id == id_b
+    assert reloaded.get_metadata(rel, scope=id_a)['ReleaseMarker'] == 'release-a'
+    assert reloaded.get_metadata(rel, scope=id_b)['ReleaseMarker'] == 'release-b'
+
+    # Forward loading order gives the same identity-scoped results
+    forward = BIDSLayout(raw, derivatives=[release_a, release_b])
+    assert forward.get_file(rel, scope=id_a).path == reloaded.get_file(rel, scope=id_a).path
+    assert forward.get_file(rel, scope=id_b).path == reloaded.get_file(rel, scope=id_b).path
+
+
 def test_query_derivatives(layout_ds005_derivs):
     result = layout_ds005_derivs.get(suffix='events', return_type='object', extension='.tsv')
     result = [f.filename for f in result]
