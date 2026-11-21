@@ -4,6 +4,12 @@ Changelog
 Changes in Version 4.21.0 (unreleased)
 --------------------------------------
 
+- Added :meth:`bson.raw_bson.RawBSONDocument.select_paths` and
+  :meth:`~bson.raw_bson.RawBSONDocument.get_path`. They read only the
+  requested paths from a raw document, skip unselected values using their
+  declared outer lengths, and report the paths they checked without claiming
+  full document validation. Mapping access is unchanged.
+
 Bug fixes
 .........
 

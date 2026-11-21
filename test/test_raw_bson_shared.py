@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import gc
 import pickle
+import struct
 import sys
 import unittest
 import uuid
@@ -26,8 +27,13 @@ sys.path[0:0] = [""]
 
 from bson import Code, DBRef, decode, decode_all, encode, has_c
 from bson.binary import JAVA_LEGACY
-from bson.codec_options import CodecOptions
-from bson.errors import InvalidBSON
+from bson.codec_options import CodecOptions, TypeDecoder, TypeRegistry
+from bson.errors import (
+    BSONPathNotFound,
+    BSONPathTypeError,
+    InvalidBSON,
+    InvalidBSONPath,
+)
 from bson.raw_bson import DEFAULT_RAW_BSON_OPTIONS, RawBSONDocument
 from bson.son import SON
 
@@ -39,6 +45,26 @@ TEST_RAW_BSON = (
     b"\x00\x00\x00Sherlock\x00\x04addresses\x00&\x00\x00\x00\x030\x00\x1e"
     b"\x00\x00\x00\x02street\x00\r\x00\x00\x00Baker Street\x00\x00\x00\x00"
 )
+
+_UNPACK_INT = struct.Struct("<i").pack
+
+
+def _element(type_byte: int, name: bytes, value: bytes) -> bytes:
+    """Build one BSON element from its key and already encoded value."""
+    return bytes((type_byte,)) + name + b"\x00" + value
+
+
+def _string_payload(value: str) -> bytes:
+    data = value.encode("utf-8") + b"\x00"
+    return _UNPACK_INT(len(data)) + data
+
+
+def _binary_payload(value: bytes, subtype: int = 0) -> bytes:
+    return _UNPACK_INT(len(value)) + bytes((subtype,)) + value
+
+
+def _document(elements: bytes) -> bytes:
+    return _UNPACK_INT(len(elements) + 5) + elements + b"\x00"
 
 
 class _TaggedRawBSONDocument(RawBSONDocument):
@@ -321,6 +347,212 @@ class TestRawBSONDocument(UnitTest):
 
         self.assertEqual(decode(encode(doc)), {"value": DBRef("test", "id")})
         self.assertEqual(doc["value"].raw, raw_encoded)
+
+    def test_select_paths_literal_nested_and_array(self):
+        doc = RawBSONDocument(
+            encode(
+                {
+                    "details": {
+                        "device": "inner",
+                        "samples": [{"device": "first"}, {"device": "second"}],
+                    },
+                    "details.device": "literal",
+                }
+            )
+        )
+        selection = doc.select_paths(
+            [
+                ("details", "device"),
+                ("details", "samples", 1, "device"),
+                ("details.device",),
+            ]
+        )
+        self.assertEqual("inner", selection[("details", "device")])
+        self.assertEqual("second", selection[("details", "samples", 1, "device")])
+        self.assertEqual("literal", selection[("details.device",)])
+        self.assertEqual(
+            (
+                ("details", "device"),
+                ("details", "samples", 1, "device"),
+                ("details.device",),
+            ),
+            selection.checked_paths,
+        )
+        self.assertFalse(selection.complete)
+        self.assertFalse(selection.document_complete)
+        self.assertEqual("inner", doc.get_path(("details", "device")))
+        self.assertEqual("literal", doc.get_path(("details.device",)))
+
+    def test_select_paths_order_independent(self):
+        raw = encode(
+            {
+                "details": {"device": "inner"},
+                "details.device": "literal",
+            }
+        )
+        first = RawBSONDocument(raw)
+        forward = first.select_paths([("details", "device"), ("details.device",)])
+        reverse = first.select_paths(
+            [
+                ("details.device",),
+                (
+                    "details",
+                    "device",
+                ),
+            ]
+        )
+        self.assertEqual(forward.as_dict(), reverse.as_dict())
+        self.assertEqual("inner", forward[("details", "device")])
+        self.assertEqual("literal", reverse[("details.device",)])
+
+        second = RawBSONDocument(raw)
+        self.assertEqual(
+            first.select_paths([("details.device",)]).as_dict(),
+            second.select_paths([("details.device",)]).as_dict(),
+        )
+        self.assertIsNone(first._RawBSONDocument__inflated_doc)
+
+        generated = (path for path in [("details", "device"), ("details.device",)])
+        self.assertEqual(forward.as_dict(), first.select_paths(generated).as_dict())
+        single_path = first.select_paths(("details", "device"))
+        self.assertEqual("inner", single_path[("details", "device")])
+
+    def test_select_paths_does_not_decode_unselected(self):
+        calls = []
+
+        class _LogDecoder(TypeDecoder):
+            bson_type = bytes
+
+            def transform_bson(self, value):
+                calls.append(("log", len(value)))
+                return f"LOG{len(value)}"
+
+        class _DeviceDecoder(TypeDecoder):
+            bson_type = str
+
+            def transform_bson(self, value):
+                calls.append(("device", value))
+                return value.upper()
+
+        options = DEFAULT_RAW_BSON_OPTIONS.with_options(
+            type_registry=TypeRegistry([_LogDecoder(), _DeviceDecoder()])
+        )
+        data = (
+            _element(0x05, b"log0", _binary_payload(b"x" * 64))
+            + _element(0x05, b"log1", _binary_payload(b"y" * 64))
+            + _element(0x02, b"device", _string_payload("dev"))
+        )
+        doc = RawBSONDocument(_document(data), options)
+        selection = doc.select_paths([("device",)])
+        self.assertEqual("DEV", selection[("device",)])
+        self.assertEqual([("device", "dev")], calls)
+        self.assertIsNone(doc._RawBSONDocument__inflated_doc)
+
+        self.assertIn("LOG64", doc["log0"])
+        self.assertEqual([("device", "dev"), ("log", 64), ("log", 64), ("device", "dev")], calls)
+
+    def test_select_paths_skips_invalid_unselected_binary(self):
+        # Binary subtype 2 whose inner and outer lengths disagree. Normal
+        # full reads reject this, but the pre-filter only skips its outer
+        # length and can still return the following device.
+        payload = struct.pack("<i", 4) + b"12345678"
+        data = _element(0x05, b"log", struct.pack("<i", len(payload)) + b"\x02" + payload)
+        data += _element(0x02, b"device", _string_payload("dev"))
+        raw = _document(data)
+        doc = RawBSONDocument(raw)
+        selection = doc.select_paths([("device",)])
+        self.assertEqual("dev", selection[("device",)])
+        self.assertEqual((("device",),), selection.checked_paths)
+        self.assertFalse(selection.complete)
+
+        with self.assertRaises(InvalidBSON) as same_doc:
+            doc["device"]
+        with self.assertRaises(InvalidBSON) as fresh:
+            RawBSONDocument(raw)["device"]
+        with self.assertRaises(InvalidBSON) as direct:
+            decode(raw)
+        self.assertEqual(str(fresh.exception), str(same_doc.exception))
+        self.assertEqual(str(direct.exception), str(same_doc.exception))
+        self.assertIsNone(doc._RawBSONDocument__inflated_doc)
+
+    def test_select_paths_skips_nested_invalid_unselected_binary(self):
+        payload = struct.pack("<i", 4) + b"12345678"
+        first = _element(0x05, b"log", struct.pack("<i", len(payload)) + b"\x02" + payload)
+        first += _element(0x02, b"device", _string_payload("first"))
+        second = _element(0x02, b"device", _string_payload("second"))
+        samples = _element(0x03, b"0", _document(first)) + _element(0x03, b"1", _document(second))
+        details = _element(0x04, b"samples", _document(samples))
+        raw = _document(_element(0x03, b"details", _document(details)))
+        doc = RawBSONDocument(raw)
+        selection = doc.select_paths([("details", "samples", 1, "device")])
+        self.assertEqual("second", selection[("details", "samples", 1, "device")])
+        self.assertEqual((("details", "samples", 1, "device"),), selection.checked_paths)
+        self.assertFalse(selection.complete)
+
+        with self.assertRaises(InvalidBSON) as same_doc:
+            doc["details"]["samples"][0]["log"]
+        with self.assertRaises(InvalidBSON) as fresh:
+            RawBSONDocument(raw)["details"]["samples"][0]["log"]
+        with self.assertRaises(InvalidBSON) as direct:
+            decode(raw)
+        self.assertEqual(str(fresh.exception), str(same_doc.exception))
+        self.assertEqual(str(direct.exception), str(same_doc.exception))
+        # A mapping access legitimately caches the fields it inflates; only the
+        # selective lookup itself must leave the cache empty.
+        self.assertIsNotNone(doc._RawBSONDocument__inflated_doc)
+        self.assertIsNotNone(doc["details"]._RawBSONDocument__inflated_doc)
+
+    def test_select_paths_rejects_unsafe_outer_bound(self):
+        inner = b"\x10a\x00\x01\x00\x00\x00\x00"
+        data = _element(0x03, b"sub", struct.pack("<i", 40) + inner[4:])
+        data += _element(0x02, b"device", _string_payload("dev"))
+        doc = RawBSONDocument(_document(data))
+        with self.assertRaises(InvalidBSONPath) as ctx:
+            doc.select_paths([("device",)])
+        exc = ctx.exception
+        self.assertEqual(("device",), exc.path)
+        self.assertEqual("device", exc.segment)
+        self.assertEqual(0, exc.segment_index)
+        self.assertIsNotNone(exc.byte_offset)
+        self.assertEqual((), exc.checked_paths)
+        self.assertIsInstance(exc, InvalidBSON)
+        with self.assertRaises(InvalidBSON):
+            doc["device"]
+
+    def test_select_paths_array_index_on_document(self):
+        raw = encode({"details": {"device": "inner", "samples": {"0": {"device": "x"}}}})
+        doc = RawBSONDocument(raw)
+        with self.assertRaises(BSONPathTypeError) as ctx:
+            doc.select_paths([("details", "samples", 0, "device")])
+        exc = ctx.exception
+        self.assertEqual(("details", "samples", 0, "device"), exc.path)
+        self.assertEqual(0, exc.segment)
+        self.assertEqual(2, exc.segment_index)
+        self.assertIn("embedded document", str(exc))
+        self.assertIsInstance(exc, TypeError)
+
+    def test_select_paths_missing_segment(self):
+        doc = RawBSONDocument(encode({"details": {"device": "inner"}}))
+        with self.assertRaises(BSONPathNotFound) as ctx:
+            doc.select_paths([("details", "samples", 0)])
+        self.assertEqual(("details", "samples", 0), ctx.exception.path)
+        self.assertEqual("samples", ctx.exception.segment)
+        self.assertEqual(1, ctx.exception.segment_index)
+
+    def test_select_paths_missing_segment_checked_paths(self):
+        doc = RawBSONDocument(encode({"details": {"device": "inner"}}))
+        selection = doc.select_paths([("details", "device")])
+        with self.assertRaises(BSONPathNotFound) as ctx:
+            doc.select_paths([("details", "device"), ("details", "samples", 0)])
+        self.assertEqual((("details", "device"),), ctx.exception.checked_paths)
+        self.assertEqual("inner", selection[("details", "device")])
+
+    def test_select_paths_mapping_complete_unchanged(self):
+        doc = RawBSONDocument(encode({"details": {"device": "inner"}, "details.device": "literal"}))
+        self.assertEqual("literal", doc["details.device"])
+        self.assertEqual("inner", doc["details"]["device"])
+        self.assertIsNotNone(doc._RawBSONDocument__inflated_doc)
+        self.assertEqual(decode(doc.raw)["details.device"], doc["details.device"])
 
 
 if __name__ == "__main__":
