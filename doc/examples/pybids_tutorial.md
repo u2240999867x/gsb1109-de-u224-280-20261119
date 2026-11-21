@@ -228,6 +228,40 @@ layout.build_path(entities, pattern, validate=False)
 
 Note that in the above example, we set `validate=False` to ensure that the standard BIDS file validator doesn't run (because the pattern we defined isn't actually compliant with the BIDS specification).
 
+### Previewing a batch rename
+
+`build_path` chooses a destination for one file at a time. When an entire set of files has to move together, that per-file choice can paint the batch into a corner: the first file may take a name another file needs, or it may move away from a sidecar that used to describe it. `plan_renames` solves the batch as a whole and returns a preview only; it never writes or renames anything.
+
+```python
+from bids.layout import plan_renames
+
+patterns = [
+    'sub-{subject}/func/sub-{subject}_task-{task}[_acq-{acquisition}]'
+    '[_run-{run}]_{suffix}{extension}',
+    'sub-{subject}/func/acq-{acquisition}/sub-{subject}_task-{task}'
+    '[_run-{run}]_{suffix}{extension}',
+]
+sources = {
+    'sub-01/func/sub-01_task-rest_bold.json': {
+        'subject': '01', 'task': 'rest', 'suffix': 'bold', 'extension': '.json',
+    },
+    'sub-01/func/sub-01_task-rest_acq-A_run-1_bold.nii.gz': {
+        'subject': '01', 'task': 'rest', 'acquisition': 'A', 'run': '1',
+        'suffix': 'bold', 'extension': '.nii.gz',
+    },
+}
+plan = plan_renames(sources, patterns, config='bids')
+plan.mapping  # source -> destination
+plan.to_dict()  # moves, conflicts, candidate space, and notes
+```
+
+Patterns are tried in priority order, but the winner is the highest-priority *complete* assignment, not each file's own first choice. Every candidate is read back through `config`, independently of any layout that may have supplied the source entities. Existing files are never overwritten: pass them via `occupied`, or let a `layout` contribute its index. If the sources include sidecars, auxiliary files, or images, `plan_renames` also checks that their association relationships survive. When a complete rename is impossible, `plan.conflicts` names the source, the destination, and the occupying file or entity responsible, and `plan.candidates` still lists every destination that was considered.
+
+```python
+plan = plan_renames(sources, patterns, config='bids', occupied=['sub-01/func/acq-A/sub-01_task-rest_run-1_bold.nii.gz'])
+print(plan.explain())
+```
+
 +++
 
 ### Loading derivatives

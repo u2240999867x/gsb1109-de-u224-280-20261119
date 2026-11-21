@@ -4,6 +4,7 @@ from bids_validator import BIDSValidator
 from .index import BIDSLayoutIndexer
 from .layout import BIDSLayout, Query
 from .models import BIDSDataFile, BIDSFile, BIDSImageFile, BIDSJSONFile, Config, Entity, Tag
+from .renaming import RenameCandidate, RenameConflict, RenamePlan, plan_renames
 from .utils import add_config_paths, parse_file_entities
 
 __all__ = [
@@ -20,4 +21,8 @@ __all__ = [
     'Entity',
     'Tag',
     'Query',
+    'RenameCandidate',
+    'RenameConflict',
+    'RenamePlan',
+    'plan_renames',
 ]

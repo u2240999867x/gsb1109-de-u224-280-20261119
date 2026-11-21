@@ -19,6 +19,10 @@ API Reference
    bids.layout.Tag
    bids.layout.parse_file_entities
    bids.layout.add_config_paths
+   bids.layout.plan_renames
+   bids.layout.RenamePlan
+   bids.layout.RenameCandidate
+   bids.layout.RenameConflict
    bids.layout.index.BIDSLayoutIndexer
    bids.layout.writing
 
