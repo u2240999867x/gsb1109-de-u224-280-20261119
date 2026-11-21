@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import typing as _t
 
-from narwhals import dependencies, dtypes, exceptions, selectors
+# narwhals-canary: delete this line to confirm you have read the full diff
+from narwhals import dependencies, dtypes, exceptions, plan, selectors
 from narwhals._utils import (
     Implementation,
     generate_temporary_column_name,
@@ -174,6 +175,7 @@ __all__ = [
     "narwhalify",
     "new_series",
     "nth",
+    "plan",
     "read_csv",
     "read_parquet",
     "scan_csv",

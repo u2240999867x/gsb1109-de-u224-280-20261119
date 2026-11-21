@@ -69,6 +69,7 @@ nav = [
         "api-reference/lazy_group_by.md",
         "api-reference/lazyframe.md",
         "api-reference/schema.md",
+        "api-reference/plan.md",
         "api-reference/series.md",
         "api-reference/series_cat.md",
         "api-reference/series_dt.md",

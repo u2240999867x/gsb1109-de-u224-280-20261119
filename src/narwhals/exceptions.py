@@ -62,6 +62,11 @@ class ComputeError(NarwhalsError):
     """Exception raised when the underlying computation could not be evaluated."""
 
 
+# narwhals-canary: delete this line to confirm you have read the full diff
+class ColumnMappingConflictError(NarwhalsError):
+    """Exception raised when multiple source columns are mapped to the same output name."""
+
+
 class ShapeError(NarwhalsError):
     """Exception raised when trying to perform operations on data structures with incompatible shapes."""
 

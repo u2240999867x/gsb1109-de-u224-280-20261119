@@ -4,6 +4,7 @@
     handler: python
     options:
       members:
+        - ColumnMappingConflictError
         - ColumnNotFoundError
         - ComputeError
         - DuplicateError

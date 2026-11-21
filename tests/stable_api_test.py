@@ -23,7 +23,11 @@ def test_stable_api_completeness() -> None:
     main_namespace_api = nw.__all__
     extra = set(v2_api).difference(main_namespace_api)
     assert not extra
-    missing = set(main_namespace_api).difference(v2_api).difference({"stable", "list"})
+    # `plan` is only available in the main namespace for now, see
+    # docs/backcompat.md.
+    missing = (
+        set(main_namespace_api).difference(v2_api).difference({"stable", "list", "plan"})
+    )
     assert not missing
 
 
@@ -35,6 +39,9 @@ def test_stable_api_docstrings() -> None:
             # until at least hierarchical forecast make a release
             continue
         if item == "list":
+            continue
+        if item == "plan":
+            # Only available in the main namespace for now.
             continue
         if (doc := getdoc(getattr(nw, item))) is None:
             continue
