@@ -56,3 +56,7 @@ error_log
 
 # Fuzzing (PYTHON-4232)
 /fuzz-scratch/
+
+# Deterministic UUID migration demo output (regenerate with
+# python -m migration.scenarios.run_demo)
+/migration_demo/
