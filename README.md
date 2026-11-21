@@ -228,6 +228,58 @@ z at path ('xxxx', 3)
 [] at path ('xxxx', 5)
 ```
 
+### <a id="fanout"></a> two consumers over one forward-only stream
+
+`json_stream.open_fanout()` splits one JSON document between two independent,
+pull-based consumers:
+
+- `audit` receives structural events: object/array start and end, and fields.
+- `report` receives only scalar values at the configured paths, so a selected
+  container is never materialised.
+
+Each consumer pulls at its own pace, but the source is read only once.  Every
+consumer has a bounded pending queue (`pending_limit`, default 64).  When a
+queue is full, a pull raises `FanoutBlocked` with `blocking` naming the
+consumer that must be drained; no further source token is read and no event is
+dropped.
+
+```python
+import json_stream
+from json_stream.fanout import FanoutBlocked
+
+fanout = json_stream.open_fanout(
+    stream,
+    report_paths=[("order_id",), ("details", "*", "qty")],
+    pending_limit=32,
+)
+
+while True:
+    try:
+        event = fanout.audit.pull()
+    except FanoutBlocked as e:
+        print("waiting for", e.blocking)
+        fanout.report.pull()
+        continue
+    handle(event)
+```
+
+Paths use tuples; object keys are matched as strings and list indices as
+integers.  `"*"` matches exactly one path component and `"**"` matches any
+number, so a JSON key `"0"` is distinct from list element `0`.
+
+Every event has a unique `id` within the fan-out, so duplicate object keys
+remain distinguishable.  Container `*_end` events carry the `container_id` of
+their matching start.  Iteration ends successfully only after the root
+container has actually closed; an empty container still produces its start
+and end pair.
+
+Closing one consumer (`fanout.report.close()`) leaves the other running from
+its own position.  If the source ends before the root closes, each consumer
+raises `FanoutTruncated` after delivering everything it had already received;
+the exception exposes that consumer's `last_event`/`last_value` and the shared
+`unfinished` container levels.  Invalid JSON before root close raises
+`FanoutParseError` instead.
+
 ### <a id="multiple"></a> Multiple JSON documents: `load_many()` and `visit_many()`
 
 Sometimes JSON data arrives as a sequence of top‑level JSON texts rather than a single array/object. json-stream supports this pattern with:
