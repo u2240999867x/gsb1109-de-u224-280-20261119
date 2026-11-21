@@ -13,6 +13,8 @@ a streaming manner, providing a pythonic dict/list-like interface, or a
 [visitor-based interface](#visitor). It can stream from files, [URLs](#urls) 
 or [iterators](#iterators). It can process [multiple JSON documents](#multiple) 
 in a single stream, and can read JSON [mixed with other non-JSON data](#reading-mixed-data).
+It can also [index the original byte positions](#byte-ranges) of every value so
+the exact source literal can be recovered.
 
 When [writing](#writing) JSON data, `json-stream` can stream JSON objects 
 as you generate them.
@@ -227,6 +229,72 @@ z at path ('xxxx', 3)
 1 at path ('xxxx', 4)
 [] at path ('xxxx', 5)
 ```
+
+### <a id="byte-ranges"></a> Indexing original byte positions: `visit_byte_ranges()`
+
+The visitor and `load()` interfaces only hand back *decoded* values. A decoded
+string cannot be turned back into the original literal, because the source may
+have spelled the same text with raw multi-byte characters, with `\uXXXX`
+escapes, or with a mix of both — re-encoding the decoded value always picks one
+spelling. The same applies to an object that repeats a key: the two values are
+indistinguishable once decoded.
+
+`json_stream.visit_byte_ranges()` instead indexes the **original UTF-8 byte
+stream**. Each value is reported as an `IndexedValue` carrying a half-open byte
+range `[start, end)` counted from the first byte of the physical stream (an
+optional leading UTF-8 BOM occupies bytes 0–2). Slicing the original bytes with
+that range returns the exact original literal, including the quotes around a
+string or the brackets around a container, with no neighbouring whitespace or
+separators.
+
+```python
+import io
+import json_stream
+
+# same key twice; same decoded text, two different original spellings
+raw = b'{"name": "\xe4\xb8\xad", "name": "\\u4e2d"}'
+
+for event in json_stream.visit_byte_ranges(io.BytesIO(raw)):
+    literal = json_stream.extract(raw, event)
+    print(event.path, event.value, event.start, event.end, literal)
+```
+
+Output (the two `('name',)` events keep their distinct literals):
+```
+('name',) 中 9 14 b'"\xe4\xb8\xad"'
+('name',) 中 24 32 b'"\\u4e2d"'
+() None 0 33 b'{"name": "\xe4\xb8\xad", "name": "\\u4e2d"}'
+```
+
+Key properties:
+
+- **Incremental**: bytes are pulled through fixed-size reads (`chunk_size`), so
+  a chunk may end in the middle of a multi-byte character, an escape sequence or
+  the BOM without affecting offsets. The whole document is never read into
+  memory, events are yielded as each value completes, and a token's end is never
+  inferred from the position of the next physical read.
+- **Repeated keys**: each occurrence is reported separately under the same path,
+  so the original literal differences never collapse.
+- **Truncated streams**: completed sub-values keep fully re-sliceable ranges; a
+  container whose closing bracket never arrives gets no (fake) complete range.
+  Its path is listed on `ByteIndexer.incomplete_paths` instead.
+- **Text streams**: a decoded text stream is accepted for convenience and still
+  yields correct offsets (UTF-8 is assumed), but it cannot provide genuine
+  source bytes. Those events carry `raw=None` and `extract()` raises
+  `ByteIndexUnavailableError` unless you retain and pass in the original bytes.
+  Index a binary stream to get leaf literals cached on each event directly.
+
+```python
+indexer = json_stream.ByteIndexer(stream, chunk_size=4096)
+for event in indexer.events():
+    if event.container:
+        ...  # closed object/array; value is None, range spans its brackets
+    ...
+indexer.incomplete_paths  # paths of containers left open by truncation
+```
+
+The original decoded-only callbacks (`visit()` and `load()`) are unchanged and
+remain the right choice when original literals are not needed.
 
 ### <a id="multiple"></a> Multiple JSON documents: `load_many()` and `visit_many()`
 
