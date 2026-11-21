@@ -25,6 +25,7 @@
 - [narwhals.Implementation](implementation.md)
 - [narwhals.dtypes](dtypes.md)
 - [narwhals.exceptions](exceptions.md)
+- [narwhals.reconcile](reconcile.md)
 - [narwhals.selectors](selectors.md)
 - [narwhals.sql](sql.md)
 - [narwhals.testing](testing.md)

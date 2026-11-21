@@ -80,6 +80,7 @@ nav = [
         "api-reference/implementation.md",
         "api-reference/dtypes.md",
         "api-reference/exceptions.md",
+        "api-reference/reconcile.md",
         "api-reference/selectors.md",
         "api-reference/sql.md",
         "api-reference/testing.md",
