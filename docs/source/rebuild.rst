@@ -34,6 +34,69 @@ If you only need to merge data from different sources and trust the database-dec
 
 This returns a dataframe with columns from all three sources merged on ``icao24`` and ``mintime`` with a 5-second tolerance.
 
+Attaching the last usable velocity
+------------------------------------
+
+Position and velocity records carry their own observation timestamps. When a
+rebuilt position is stored, :meth:`~pyopensky.rebuild.Rebuild.rebuild` attaches
+the last velocity observed for the same aircraft **at or before** the position
+time, within the same ground or airborne phase. The same logic is available
+without any database access through
+:func:`~pyopensky.rebuild.enrich_positions_with_velocity`.
+
+Four columns describe the match:
+
+- ``velocity``: the retained velocity value, missing when no value is usable.
+- ``velocity_time``: the actual observation timestamp of that velocity.
+- ``velocity_age``: the difference between the position and the velocity
+  observation timestamps.
+- ``velocity_status``: one of ``ok``, ``no_match``, ``expired`` or
+  ``conflict``.
+
+The matching rules are:
+
+- A velocity never crosses a state switch: the first airborne position does
+  not reuse the last ground speed, and a second takeoff does not reach back
+  across the intermediate landing. Verified switch points may be supplied with
+  the ``transitions`` argument to delimit phases when the ``onground`` flag on
+  position records is stale.
+- Future observations are never used, and observations older than
+  ``velocity_max_age`` are reported as ``expired``. The limit is inclusive, so
+  an age equal to the limit is still accepted.
+- A missing velocity value is transparent: a newer null observation does not
+  replace an older but still valid velocity.
+- Two distinct values observed at the same timestamp are left as a
+  ``conflict``. Without an explicit source priority, neither value is picked,
+  and the result does not depend on the order of the input rows.
+
+.. code-block:: python
+
+    import pandas as pd
+    from pyopensky.rebuild import enrich_positions_with_velocity
+
+    positions = pd.DataFrame(
+        {
+            "icao24": ["aaaaaa", "aaaaaa"],
+            "timestamp": pd.to_datetime(
+                ["2025-06-01 00:00:10", "2025-06-01 00:00:20"], utc=True
+            ),
+            "onground": [False, False],
+        }
+    )
+    velocities = pd.DataFrame(
+        {
+            "icao24": ["aaaaaa"],
+            "timestamp": pd.to_datetime(
+                ["2025-06-01 00:00:15"], utc=True
+            ),
+            "velocity": [150.0],
+        }
+    )
+
+    enriched = enrich_positions_with_velocity(
+        positions, velocities, max_age="10s"
+    )
+
 Rebuilding with custom decoding
 --------------------------------
 
@@ -202,6 +265,8 @@ All merges use a 5-second tolerance by default. This means:
 
 This tolerance balances data completeness with temporal accuracy.
 
+
+.. autofunction:: pyopensky.rebuild.enrich_positions_with_velocity
 
 .. autoclass:: pyopensky.rebuild.Rebuild
     :members:
