@@ -115,6 +115,28 @@ class UnsupportedDTypeError(NarwhalsError):
     """Exception raised when trying to convert to a DType which is not supported by the given backend."""
 
 
+class ArchiveError(NarwhalsError):
+    """Base class for errors raised by `narwhals.archive`.
+
+    Most archive operations report failures as a
+    [`Receipt`][narwhals.archive.Receipt] instead of raising; the receipt's
+    [`raise_for_status`][narwhals.archive.Receipt.raise_for_status] raises this
+    family when the caller prefers exceptions.
+    """
+
+
+class ArchiveBasisMismatchError(ArchiveError):
+    """Exception raised when a prepared archive version's basis is no longer published."""
+
+
+class ArchiveStagingError(ArchiveError):
+    """Exception raised when writing a staged archive version fails."""
+
+
+class ArchivePublishError(ArchiveError):
+    """Exception raised when a staged archive version does not verify or cannot be published."""
+
+
 class NarwhalsUnstableWarning(UserWarning):
     """Warning issued when a method or function is considered unstable in the stable api."""
 

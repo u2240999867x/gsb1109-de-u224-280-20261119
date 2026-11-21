@@ -4,6 +4,10 @@
     handler: python
     options:
       members:
+        - ArchiveBasisMismatchError
+        - ArchiveError
+        - ArchivePublishError
+        - ArchiveStagingError
         - ColumnNotFoundError
         - ComputeError
         - DuplicateError

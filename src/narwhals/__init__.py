@@ -199,6 +199,10 @@ if not _t.TYPE_CHECKING:
 
             __version__ = metadata.version(__name__)
             return __version__
+        if name == "archive":
+            import importlib
+
+            return importlib.import_module("narwhals.archive")
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
 else:  # pragma: no cover

@@ -31,3 +31,4 @@
 - [narwhals.typing](typing.md)
 - [narwhals.utils](utils.md)
 - [narwhals.plugins](plugins.md)
+- [narwhals.archive](archive.md)
