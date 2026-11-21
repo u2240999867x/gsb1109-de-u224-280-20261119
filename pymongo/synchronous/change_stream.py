@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING
 
 from bson import _bson_to_dict
@@ -228,6 +229,8 @@ class ChangeStream(_AgnosticChangeStream[_DocumentType, "MongoClient[_DocumentTy
             raise InvalidOperation(
                 "Cannot provide resume functionality when the resume token is missing."
             ) from None
+
+        self._last_event_token = copy.deepcopy(resume_token)
 
         # If this is the last change document from the current batch, cache the
         # postBatchResumeToken.

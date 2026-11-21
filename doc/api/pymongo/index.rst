@@ -36,6 +36,7 @@ Sub-modules:
    asynchronous/index
    auth_oidc
    change_stream
+   change_stream_recovery
    client_options
    client_session
    collation

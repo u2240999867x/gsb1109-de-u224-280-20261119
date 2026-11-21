@@ -4,6 +4,18 @@ Changelog
 Changes in Version 4.21.0 (unreleased)
 --------------------------------------
 
+New features
+............
+
+- Added :class:`~pymongo.change_stream_recovery.ChangeStreamRecoveryPoint`, a
+  durable recovery point for change stream consumers that archive changes with
+  out-of-order receipts, such as an asynchronous archive writer.
+  :attr:`~pymongo.change_stream.ChangeStream.last_event_token` exposes the
+  ``_id`` of the most recently returned change and
+  :attr:`~pymongo.change_stream.ChangeStream.post_batch_resume_token` exposes
+  the batch token, so a consumer never mistakes a batch token for an event's
+  identity or advances its checkpoint past an unacknowledged change.
+
 Bug fixes
 .........
 

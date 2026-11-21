@@ -102,6 +102,7 @@ class _AgnosticChangeStream(Generic[_DocumentType, _ClientT]):
         self._uses_start_after = start_after is not None
         self._uses_resume_after = resume_after is not None
         self._resume_token = copy.deepcopy(start_after or resume_after)
+        self._last_event_token: Mapping[str, Any] | None = None
         self._max_await_time_ms = max_await_time_ms
         self._batch_size = batch_size
         self._collation = collation
@@ -188,9 +189,45 @@ class _AgnosticChangeStream(Generic[_DocumentType, _ClientT]):
     def resume_token(self) -> Mapping[str, Any] | None:
         """The cached resume token used to resume after the most recent change.
 
+        After the last change document of a batch is returned, or after an
+        empty poll, this value may be the batch's ``postBatchResumeToken``
+        rather than the ``_id`` of the most recent change. Use
+        :attr:`last_event_token` when an individual event's identity is
+        needed, for example to look up an archive receipt.
+
         .. versionadded:: 3.9
         """
         return copy.deepcopy(self._resume_token)
+
+    @property
+    def last_event_token(self) -> Mapping[str, Any] | None:
+        """The ``_id`` token of the most recently returned change document.
+
+        Unlike :attr:`resume_token`, this value is never replaced by a
+        ``postBatchResumeToken``. It is ``None`` until the first change
+        document is returned, and it is not cleared by empty polls or by
+        resuming the stream.
+
+        .. versionadded:: 4.21
+        """
+        return copy.deepcopy(self._last_event_token)
+
+    @property
+    def post_batch_resume_token(self) -> Mapping[str, Any] | None:
+        """The most recent ``postBatchResumeToken`` seen by this stream.
+
+        This value is updated by empty aggregate and ``getMore`` responses.
+        It may refer to a position after changes that are still being
+        archived, so it must not be used as a recovery point until every
+        change observed before it is durably acknowledged. Use
+        :class:`~pymongo.change_stream_recovery.ChangeStreamRecoveryPoint` to
+        track that condition.
+
+        .. versionadded:: 4.21
+        """
+        if not hasattr(self, "_cursor"):
+            return None
+        return copy.deepcopy(self._cursor._post_batch_resume_token)
 
     @property
     def alive(self) -> bool:

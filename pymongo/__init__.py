@@ -26,6 +26,7 @@ __all__ = [
     "MIN_SUPPORTED_WIRE_VERSION",
     "TEXT",
     "AsyncMongoClient",
+    "ChangeStreamRecoveryPoint",
     "CursorType",
     "DeleteMany",
     "DeleteOne",
@@ -88,6 +89,7 @@ TEXT = "text"
 from pymongo import _csot
 from pymongo._version import __version__, get_version_string, version_tuple
 from pymongo.asynchronous.mongo_client import AsyncMongoClient
+from pymongo.change_stream_recovery import ChangeStreamRecoveryPoint
 from pymongo.common import MAX_SUPPORTED_WIRE_VERSION, MIN_SUPPORTED_WIRE_VERSION, has_c
 from pymongo.cursor import CursorType
 from pymongo.operations import (
