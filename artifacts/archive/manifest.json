@@ -1,0 +1,199 @@
+{
+  "conditions": [
+    {
+      "label": "2026-11-18T00:00:00Z/2026-11-18T06:00:00Z",
+      "predicate": "time >= 2026-11-18T00:00:00Z AND time < 2026-11-18T06:00:00Z (UTC)",
+      "sql": "time >= 2026-11-18T00:00:00Z AND time < 2026-11-18T06:00:00Z (UTC)",
+      "start": "2026-11-18T00:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-18T06:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-18T06:00:00Z/2026-11-18T12:00:00Z",
+      "predicate": "time >= 2026-11-18T06:00:00Z AND time < 2026-11-18T12:00:00Z (UTC)",
+      "sql": "time >= 2026-11-18T06:00:00Z AND time < 2026-11-18T12:00:00Z (UTC)",
+      "start": "2026-11-18T06:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-18T12:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-18T12:00:00Z/2026-11-18T18:00:00Z",
+      "predicate": "time >= 2026-11-18T12:00:00Z AND time < 2026-11-18T18:00:00Z (UTC)",
+      "sql": "time >= 2026-11-18T12:00:00Z AND time < 2026-11-18T18:00:00Z (UTC)",
+      "start": "2026-11-18T12:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-18T18:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-18T18:00:00Z/2026-11-19T00:00:00Z",
+      "predicate": "time >= 2026-11-18T18:00:00Z AND time < 2026-11-19T00:00:00Z (UTC)",
+      "sql": "time >= 2026-11-18T18:00:00Z AND time < 2026-11-19T00:00:00Z (UTC)",
+      "start": "2026-11-18T18:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-19T00:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-19T00:00:00Z/2026-11-19T06:00:00Z",
+      "predicate": "time >= 2026-11-19T00:00:00Z AND time < 2026-11-19T06:00:00Z (UTC)",
+      "sql": "time >= 2026-11-19T00:00:00Z AND time < 2026-11-19T06:00:00Z (UTC)",
+      "start": "2026-11-19T00:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-19T06:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-19T06:00:00Z/2026-11-19T12:00:00Z",
+      "predicate": "time >= 2026-11-19T06:00:00Z AND time < 2026-11-19T12:00:00Z (UTC)",
+      "sql": "time >= 2026-11-19T06:00:00Z AND time < 2026-11-19T12:00:00Z (UTC)",
+      "start": "2026-11-19T06:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-19T12:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-19T12:00:00Z/2026-11-19T18:00:00Z",
+      "predicate": "time >= 2026-11-19T12:00:00Z AND time < 2026-11-19T18:00:00Z (UTC)",
+      "sql": "time >= 2026-11-19T12:00:00Z AND time < 2026-11-19T18:00:00Z (UTC)",
+      "start": "2026-11-19T12:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-19T18:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-19T18:00:00Z/2026-11-20T00:00:00Z",
+      "predicate": "time >= 2026-11-19T18:00:00Z AND time < 2026-11-20T00:00:00Z (UTC)",
+      "sql": "time >= 2026-11-19T18:00:00Z AND time < 2026-11-20T00:00:00Z (UTC)",
+      "start": "2026-11-19T18:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-20T00:00:00Z",
+      "stop_inclusive": false
+    }
+  ],
+  "conflicts": 1,
+  "frames": {
+    "conflicts": "a634678f9996223f1224c1627f4e3386da7ec87372dcd5256b9247f04ce2367d",
+    "history-conditions": "95949cbcc79cea02ce0a687813e28875882789c1b8171a377275eeb13c30b8fc",
+    "observations": "77f1987d61bd3043315f5d9ce2737fe55276ca4bdfea63b1f68c4ac55f926b8a",
+    "provenance": "4e4155cde4a79bce1d1da81c025bdabf9c24e341984fa297fae2aa0f4af28f24",
+    "superseded": "d486c875e2facc7bce47c7d677556b14d29ac2b6b878dbb909ef34b9e697d682"
+  },
+  "observation_keys": [
+    [
+      "abc123",
+      "2026-11-18T23:59:30Z"
+    ],
+    [
+      "def456",
+      "2026-11-18T23:59:30Z"
+    ],
+    [
+      "ghi789",
+      "2026-11-18T23:50:00Z"
+    ],
+    [
+      "ghi789",
+      "2026-11-18T23:51:00Z"
+    ],
+    [
+      "ghi789",
+      "2026-11-19T00:00:00Z"
+    ],
+    [
+      "ghi789",
+      "2026-11-19T00:10:00Z"
+    ],
+    [
+      "ghi789",
+      "2026-11-19T00:20:00Z"
+    ],
+    [
+      "jkl012",
+      "2026-11-19T00:29:59Z"
+    ]
+  ],
+  "observations": 8,
+  "raw_reports": 16,
+  "request_log": [
+    {
+      "label": "2026-11-18T00:00:00Z/2026-11-18T06:00:00Z",
+      "predicate": "time >= 2026-11-18T00:00:00Z AND time < 2026-11-18T06:00:00Z (UTC)",
+      "sql": "time >= 2026-11-18T00:00:00Z AND time < 2026-11-18T06:00:00Z (UTC)",
+      "start": "2026-11-18T00:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-18T06:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-18T06:00:00Z/2026-11-18T12:00:00Z",
+      "predicate": "time >= 2026-11-18T06:00:00Z AND time < 2026-11-18T12:00:00Z (UTC)",
+      "sql": "time >= 2026-11-18T06:00:00Z AND time < 2026-11-18T12:00:00Z (UTC)",
+      "start": "2026-11-18T06:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-18T12:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-18T12:00:00Z/2026-11-18T18:00:00Z",
+      "predicate": "time >= 2026-11-18T12:00:00Z AND time < 2026-11-18T18:00:00Z (UTC)",
+      "sql": "time >= 2026-11-18T12:00:00Z AND time < 2026-11-18T18:00:00Z (UTC)",
+      "start": "2026-11-18T12:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-18T18:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-18T18:00:00Z/2026-11-19T00:00:00Z",
+      "predicate": "time >= 2026-11-18T18:00:00Z AND time < 2026-11-19T00:00:00Z (UTC)",
+      "sql": "time >= 2026-11-18T18:00:00Z AND time < 2026-11-19T00:00:00Z (UTC)",
+      "start": "2026-11-18T18:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-19T00:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-19T00:00:00Z/2026-11-19T06:00:00Z",
+      "predicate": "time >= 2026-11-19T00:00:00Z AND time < 2026-11-19T06:00:00Z (UTC)",
+      "sql": "time >= 2026-11-19T00:00:00Z AND time < 2026-11-19T06:00:00Z (UTC)",
+      "start": "2026-11-19T00:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-19T06:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-19T06:00:00Z/2026-11-19T12:00:00Z",
+      "predicate": "time >= 2026-11-19T06:00:00Z AND time < 2026-11-19T12:00:00Z (UTC)",
+      "sql": "time >= 2026-11-19T06:00:00Z AND time < 2026-11-19T12:00:00Z (UTC)",
+      "start": "2026-11-19T06:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-19T12:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-19T12:00:00Z/2026-11-19T18:00:00Z",
+      "predicate": "time >= 2026-11-19T12:00:00Z AND time < 2026-11-19T18:00:00Z (UTC)",
+      "sql": "time >= 2026-11-19T12:00:00Z AND time < 2026-11-19T18:00:00Z (UTC)",
+      "start": "2026-11-19T12:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-19T18:00:00Z",
+      "stop_inclusive": false
+    },
+    {
+      "label": "2026-11-19T18:00:00Z/2026-11-20T00:00:00Z",
+      "predicate": "time >= 2026-11-19T18:00:00Z AND time < 2026-11-20T00:00:00Z (UTC)",
+      "sql": "time >= 2026-11-19T18:00:00Z AND time < 2026-11-20T00:00:00Z (UTC)",
+      "start": "2026-11-19T18:00:00Z",
+      "start_inclusive": true,
+      "stop": "2026-11-20T00:00:00Z",
+      "stop_inclusive": false
+    }
+  ],
+  "superseded": 1,
+  "window": {
+    "start": "2026-11-18T23:50:00Z",
+    "stop": "2026-11-19T00:30:00Z"
+  }
+}

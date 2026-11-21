@@ -338,6 +338,38 @@ def test_plain_history_does_not_join_flights(offline: OfflineTrino) -> None:
     assert "flights_data4" not in str(offline.statements[-1])
 
 
+def test_history_stop_is_exclusive(offline: OfflineTrino) -> None:
+    epoch = int(to_datetime(START).timestamp())
+    boundary = pd.Timestamp(epoch + 7205, unit="s", tz="UTC")
+    inclusive = offline.history(START, boundary, selected_columns=COLUMNS)
+    exclusive = offline.history(
+        START,
+        pd.Timestamp(epoch + 7204, unit="s", tz="UTC"),
+        selected_columns=COLUMNS,
+    )
+    assert inclusive is not None and exclusive is not None
+    assert len(inclusive) == len(exclusive)
+    assert boundary not in set(inclusive.time)
+    sql = str(
+        offline.statements[-1].compile(
+            dialect=TrinoDialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    assert "state_vectors_data4.time <" in sql
+    assert "state_vectors_data4.time <=" not in sql
+
+
+def test_history_start_is_inclusive(offline: OfflineTrino) -> None:
+    epoch = int(to_datetime(START).timestamp())
+    result = offline.history(
+        pd.Timestamp(epoch + 7200, unit="s", tz="UTC"),
+        pd.Timestamp(epoch + 7201, unit="s", tz="UTC"),
+        selected_columns=COLUMNS,
+    )
+    assert result is not None
+    assert set(result.time) == {pd.Timestamp(epoch + 7200, unit="s", tz="UTC")}
+
+
 def test_routes_keep_requested_time_window(offline: OfflineTrino) -> None:
     result = offline.history(
         "2025-01-01 02:00:05",

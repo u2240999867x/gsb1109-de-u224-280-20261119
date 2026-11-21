@@ -153,12 +153,19 @@ selects its existing departure-time behavior.
 
 .. note::
 
-   ``history()`` returns state vectors within ``start`` and ``stop``. These
+   ``history()`` returns state vectors within ``start`` and ``stop``. The
+   interval is half-open: ``start`` is included and ``stop`` is excluded. These
    timestamps do not select flights by their departure or arrival time. A flight
    that crosses midnight can be partial in a daily result. ``time_buffer``
    extends the bounds around each flight's ``firstseen`` and ``lastseen`` but
    does not extend the requested state-vector window. Each call submits one
    query; pyopensky does not split that window automatically.
+
+   State-vector queries keep one row per reported coordinate. If the same
+   aircraft is reported more than once at one timestamp, or if an archive
+   contains corrected and superseded report revisions, reconcile those rows
+   explicitly. See :doc:`archive` for the half-open slicing, revision, source,
+   and conflict policy.
 
 Filtering flight metadata in history queries
 --------------------------------------------

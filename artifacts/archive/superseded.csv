@@ -1,0 +1,2 @@
+source,report_id,revision,superseded_by,icao24,observed_at,lat,lon,callsign,slices,occurrences,status
+station-a,R7,1,2,abc123,2026-11-18 23:59:30+00:00,52.0,4.0,SAME123,2026-11-18T18:00:00Z/2026-11-19T00:00:00Z|2026-11-19T00:00:00Z/2026-11-19T06:00:00Z,2,superseded

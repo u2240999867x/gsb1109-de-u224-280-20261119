@@ -1,0 +1,60 @@
+{
+  "conflict": [
+    {
+      "lat": 52.3,
+      "lon": 4.3,
+      "reports": [
+        "station-c:C3@9"
+      ],
+      "sources": [
+        "station-c"
+      ]
+    }
+  ],
+  "final_delivery_identical": {
+    "daily_forward": true,
+    "daily_reverse": true,
+    "replay_forward": true,
+    "replay_reverse": true,
+    "short_forward": true,
+    "short_reverse": true
+  },
+  "r7": {
+    "appeared_in_slices": [
+      "2026-11-18T18:00:00Z/2026-11-19T00:00:00Z",
+      "2026-11-19T00:00:00Z/2026-11-19T06:00:00Z"
+    ],
+    "in_observations": false,
+    "observation": {
+      "icao24": "abc123",
+      "lat": 52.1,
+      "lon": 4.1,
+      "observed_at": "2026-11-18T23:59:30+00:00",
+      "reports": [
+        "station-a:R7@2",
+        "station-b:B17@1"
+      ],
+      "sources": [
+        "station-a",
+        "station-b"
+      ]
+    },
+    "occurrences": 2,
+    "superseded_by": 2,
+    "superseded_revision": 1
+  },
+  "shared_callsign_aircraft": [
+    "abc123",
+    "def456"
+  ],
+  "stop_boundary": {
+    "just_before_stop": [
+      [
+        "jkl012",
+        "2026-11-19T00:29:59Z"
+      ]
+    ],
+    "stop": "2026-11-19 00:30",
+    "stop_included": []
+  }
+}

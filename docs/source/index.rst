@@ -29,5 +29,6 @@ use in your future studies. All functions return pandas :class:`~pandas.DataFram
    rest
    trino
    trino_advanced
+   archive
    rebuild
 

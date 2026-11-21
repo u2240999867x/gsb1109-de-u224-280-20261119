@@ -1,0 +1,2 @@
+icao24,observed_at,primary_lat,primary_lon,primary_sources,conflict_lat,conflict_lon,conflict_sources,conflict_reports
+abc123,2026-11-18 23:59:30+00:00,52.1,4.1,station-a|station-b,52.3,4.3,station-c,station-c:C3@9

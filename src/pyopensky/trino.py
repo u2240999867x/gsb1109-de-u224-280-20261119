@@ -574,7 +574,8 @@ class Trino(OpenSkyDBAPI):
             - See :meth:`pyopensky.trino.flightlist` if you do not need any
               trajectory information.
             - start and stop constrain state-vector timestamps, not flight
-              departure or arrival times. Overnight flights can be partial;
+              departure or arrival times. The interval is half-open: start is
+              included and stop is excluded. Overnight flights can be partial;
             - If airport is set, departure_airport and arrival_airport cannot be
               specified (a RuntimeException is raised).
 
@@ -740,7 +741,7 @@ class Trino(OpenSkyDBAPI):
 
         stmt = stmt.where(
             StateVectorsData4.time >= start_ts,
-            StateVectorsData4.time <= stop_ts,
+            StateVectorsData4.time < stop_ts,
             StateVectorsData4.hour >= start_ts.floor("1h"),
             StateVectorsData4.hour < stop_ts.ceil("1h"),
         )
