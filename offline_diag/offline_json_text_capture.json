@@ -1,0 +1,1585 @@
+{
+  "constants": {
+    "FIELD_TYPE_JSON": 245,
+    "FIELD_TYPE_BLOB": 252,
+    "FIELD_TYPE_VAR_STRING": 253,
+    "CHARSETNR_BINARY": 63,
+    "CHARSETNR_UTF8MB4": 45,
+    "NULL_MARKER": 251
+  },
+  "scenarios": {
+    "swapped_types": {
+      "description": "Group 2 reuses group 1 column names and order but swaps the JSON and TEXT protocol type codes.",
+      "wire_packets": [
+        {
+          "seq": 1,
+          "role": "result1.column_count",
+          "hex": "0100000104"
+        },
+        {
+          "seq": 2,
+          "role": "result1.field.v_text",
+          "hex": "350000020364656607646961675f646206646961675f7406765f7465787406765f7465787406765f746578740c2d0000100000fd0000000000"
+        },
+        {
+          "seq": 3,
+          "role": "result1.field.v_bin",
+          "hex": "320000030364656607646961675f646206646961675f7405765f62696e05765f62696e05765f62696e0c3f0000100000fc0000000000"
+        },
+        {
+          "seq": 4,
+          "role": "result1.field.v_json",
+          "hex": "350000040364656607646961675f646206646961675f7406765f6a736f6e06765f6a736f6e06765f6a736f6e0c3f0000100000f50000000000"
+        },
+        {
+          "seq": 5,
+          "role": "result1.field.v_empty",
+          "hex": "380000050364656607646961675f646206646961675f7407765f656d70747907765f656d70747907765f656d7074790c2d0000100000fd0000000000"
+        },
+        {
+          "seq": 6,
+          "role": "result1.fields_eof",
+          "hex": "05000006fe00000200"
+        },
+        {
+          "seq": 7,
+          "role": "result1.row0",
+          "hex": "0e0000070ae5a49ae5ad97e88a8241fbfbfb"
+        },
+        {
+          "seq": 8,
+          "role": "result1.row1",
+          "hex": "09000008fb05ff0062696efbfb"
+        },
+        {
+          "seq": 9,
+          "role": "result1.row2",
+          "hex": "0f000009fbfb0b7b226b223a22e580bc227dfb"
+        },
+        {
+          "seq": 10,
+          "role": "result1.row3",
+          "hex": "0400000afbfbfbfb"
+        },
+        {
+          "seq": 11,
+          "role": "result1.row4",
+          "hex": "0400000b00000000"
+        },
+        {
+          "seq": 12,
+          "role": "result1.rows_eof",
+          "hex": "0500000cfe00000800"
+        },
+        {
+          "seq": 13,
+          "role": "result2.column_count",
+          "hex": "0100000d04"
+        },
+        {
+          "seq": 14,
+          "role": "result2.field.v_text",
+          "hex": "3500000e0364656607646961675f646206646961675f7406765f7465787406765f7465787406765f746578740c3f0000100000f50000000000"
+        },
+        {
+          "seq": 15,
+          "role": "result2.field.v_bin",
+          "hex": "3200000f0364656607646961675f646206646961675f7405765f62696e05765f62696e05765f62696e0c3f0000100000fc0000000000"
+        },
+        {
+          "seq": 16,
+          "role": "result2.field.v_json",
+          "hex": "350000100364656607646961675f646206646961675f7406765f6a736f6e06765f6a736f6e06765f6a736f6e0c2d0000100000fd0000000000"
+        },
+        {
+          "seq": 17,
+          "role": "result2.field.v_empty",
+          "hex": "380000110364656607646961675f646206646961675f7407765f656d70747907765f656d70747907765f656d7074790c2d0000100000fd0000000000"
+        },
+        {
+          "seq": 18,
+          "role": "result2.fields_eof",
+          "hex": "05000012fe00000200"
+        },
+        {
+          "seq": 19,
+          "role": "result2.row0",
+          "hex": "190000130b7b226b223a22e580bc227dfb0ae5a49ae5ad97e88a8241fb"
+        },
+        {
+          "seq": 20,
+          "role": "result2.rows_eof",
+          "hex": "05000014fe00000200"
+        }
+      ],
+      "groups": [
+        {
+          "index": 1,
+          "fields": [
+            {
+              "name": "v_text",
+              "type_code": 253,
+              "charsetnr": 45,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_text",
+                253,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_bin",
+              "type_code": 252,
+              "charsetnr": 63,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_bin",
+                252,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_json",
+              "type_code": 245,
+              "charsetnr": 63,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_json",
+                245,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_empty",
+              "type_code": 253,
+              "charsetnr": 45,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_empty",
+                253,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            }
+          ],
+          "raw_rows": [
+            [
+              {
+                "raw_hex": "e5a49ae5ad97e88a8241"
+              },
+              null,
+              null,
+              null
+            ],
+            [
+              null,
+              {
+                "raw_hex": "ff0062696e"
+              },
+              null,
+              null
+            ],
+            [
+              null,
+              null,
+              {
+                "raw_hex": "7b226b223a22e580bc227d"
+              },
+              null
+            ],
+            [
+              null,
+              null,
+              null,
+              null
+            ],
+            [
+              {
+                "raw_hex": ""
+              },
+              {
+                "raw_hex": ""
+              },
+              {
+                "raw_hex": ""
+              },
+              {
+                "raw_hex": ""
+              }
+            ]
+          ]
+        },
+        {
+          "index": 2,
+          "fields": [
+            {
+              "name": "v_text",
+              "type_code": 245,
+              "charsetnr": 63,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_text",
+                245,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_bin",
+              "type_code": 252,
+              "charsetnr": 63,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_bin",
+                252,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_json",
+              "type_code": 253,
+              "charsetnr": 45,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_json",
+                253,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_empty",
+              "type_code": 253,
+              "charsetnr": 45,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_empty",
+                253,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            }
+          ],
+          "raw_rows": [
+            [
+              {
+                "raw_hex": "7b226b223a22e580bc227d"
+              },
+              null,
+              {
+                "raw_hex": "e5a49ae5ad97e88a8241"
+              },
+              null
+            ]
+          ]
+        }
+      ],
+      "expected": {
+        "true": [
+          {
+            "plan": [
+              [
+                "utf8",
+                "text"
+              ],
+              [
+                null,
+                "blob"
+              ],
+              [
+                "utf8",
+                "json"
+              ],
+              [
+                "utf8",
+                "text"
+              ]
+            ],
+            "rows": [
+              [
+                {
+                  "raw_hex": "e5a49ae5ad97e88a8241",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "str",
+                  "input_repr": "'多字节A'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('多字节A')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "ff0062696e",
+                  "converter_called": true,
+                  "converter": "blob",
+                  "input_type": "bytes",
+                  "input_repr": "b'\\xff\\x00bin'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'\\xff\\x00bin')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "7b226b223a22e580bc227d",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "str",
+                  "input_repr": "'{\"k\":\"值\"}'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('{\"k\":\"值\"}')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "str",
+                  "input_repr": "''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "blob",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "str",
+                  "input_repr": "''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "str",
+                  "input_repr": "''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('')"
+                }
+              ]
+            ]
+          },
+          {
+            "plan": [
+              [
+                "utf8",
+                "json"
+              ],
+              [
+                null,
+                "blob"
+              ],
+              [
+                "utf8",
+                "text"
+              ],
+              [
+                "utf8",
+                "text"
+              ]
+            ],
+            "rows": [
+              [
+                {
+                  "raw_hex": "7b226b223a22e580bc227d",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "str",
+                  "input_repr": "'{\"k\":\"值\"}'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('{\"k\":\"值\"}')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "e5a49ae5ad97e88a8241",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "str",
+                  "input_repr": "'多字节A'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('多字节A')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ]
+            ]
+          }
+        ],
+        "false": [
+          {
+            "plan": [
+              [
+                null,
+                "text"
+              ],
+              [
+                null,
+                "blob"
+              ],
+              [
+                null,
+                "json"
+              ],
+              [
+                null,
+                "text"
+              ]
+            ],
+            "rows": [
+              [
+                {
+                  "raw_hex": "e5a49ae5ad97e88a8241",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "bytes",
+                  "input_repr": "b'\\xe5\\xa4\\x9a\\xe5\\xad\\x97\\xe8\\x8a\\x82A'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'\\xe5\\xa4\\x9a\\xe5\\xad\\x97\\xe8\\x8a\\x82A')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "ff0062696e",
+                  "converter_called": true,
+                  "converter": "blob",
+                  "input_type": "bytes",
+                  "input_repr": "b'\\xff\\x00bin'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'\\xff\\x00bin')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "7b226b223a22e580bc227d",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "bytes",
+                  "input_repr": "b'{\"k\":\"\\xe5\\x80\\xbc\"}'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'{\"k\":\"\\xe5\\x80\\xbc\"}')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "blob",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                }
+              ]
+            ]
+          },
+          {
+            "plan": [
+              [
+                null,
+                "json"
+              ],
+              [
+                null,
+                "blob"
+              ],
+              [
+                null,
+                "text"
+              ],
+              [
+                null,
+                "text"
+              ]
+            ],
+            "rows": [
+              [
+                {
+                  "raw_hex": "7b226b223a22e580bc227d",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "bytes",
+                  "input_repr": "b'{\"k\":\"\\xe5\\x80\\xbc\"}'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'{\"k\":\"\\xe5\\x80\\xbc\"}')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "e5a49ae5ad97e88a8241",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "bytes",
+                  "input_repr": "b'\\xe5\\xa4\\x9a\\xe5\\xad\\x97\\xe8\\x8a\\x82A'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'\\xe5\\xa4\\x9a\\xe5\\xad\\x97\\xe8\\x8a\\x82A')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "passthrough_json": {
+      "description": "Group 2 is one JSON column; the JSON decoder becomes passthrough immediately before group 2 starts.",
+      "wire_packets": [
+        {
+          "seq": 1,
+          "role": "result1.column_count",
+          "hex": "0100000104"
+        },
+        {
+          "seq": 2,
+          "role": "result1.field.v_text",
+          "hex": "350000020364656607646961675f646206646961675f7406765f7465787406765f7465787406765f746578740c2d0000100000fd0000000000"
+        },
+        {
+          "seq": 3,
+          "role": "result1.field.v_bin",
+          "hex": "320000030364656607646961675f646206646961675f7405765f62696e05765f62696e05765f62696e0c3f0000100000fc0000000000"
+        },
+        {
+          "seq": 4,
+          "role": "result1.field.v_json",
+          "hex": "350000040364656607646961675f646206646961675f7406765f6a736f6e06765f6a736f6e06765f6a736f6e0c3f0000100000f50000000000"
+        },
+        {
+          "seq": 5,
+          "role": "result1.field.v_empty",
+          "hex": "380000050364656607646961675f646206646961675f7407765f656d70747907765f656d70747907765f656d7074790c2d0000100000fd0000000000"
+        },
+        {
+          "seq": 6,
+          "role": "result1.fields_eof",
+          "hex": "05000006fe00000200"
+        },
+        {
+          "seq": 7,
+          "role": "result1.row0",
+          "hex": "0e0000070ae5a49ae5ad97e88a8241fbfbfb"
+        },
+        {
+          "seq": 8,
+          "role": "result1.row1",
+          "hex": "09000008fb05ff0062696efbfb"
+        },
+        {
+          "seq": 9,
+          "role": "result1.row2",
+          "hex": "0f000009fbfb0b7b226b223a22e580bc227dfb"
+        },
+        {
+          "seq": 10,
+          "role": "result1.row3",
+          "hex": "0400000afbfbfbfb"
+        },
+        {
+          "seq": 11,
+          "role": "result1.row4",
+          "hex": "0400000b00000000"
+        },
+        {
+          "seq": 12,
+          "role": "result1.rows_eof",
+          "hex": "0500000cfe00000800"
+        },
+        {
+          "seq": 13,
+          "role": "result2.column_count",
+          "hex": "0100000d01"
+        },
+        {
+          "seq": 14,
+          "role": "result2.field.v_json",
+          "hex": "3500000e0364656607646961675f646206646961675f7406765f6a736f6e06765f6a736f6e06765f6a736f6e0c3f0000100000f50000000000"
+        },
+        {
+          "seq": 15,
+          "role": "result2.fields_eof",
+          "hex": "0500000ffe00000200"
+        },
+        {
+          "seq": 16,
+          "role": "result2.row0",
+          "hex": "0c0000100b7b226b223a22e580bc227d"
+        },
+        {
+          "seq": 17,
+          "role": "result2.rows_eof",
+          "hex": "05000011fe00000200"
+        }
+      ],
+      "groups": [
+        {
+          "index": 1,
+          "fields": [
+            {
+              "name": "v_text",
+              "type_code": 253,
+              "charsetnr": 45,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_text",
+                253,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_bin",
+              "type_code": 252,
+              "charsetnr": 63,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_bin",
+                252,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_json",
+              "type_code": 245,
+              "charsetnr": 63,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_json",
+                245,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            },
+            {
+              "name": "v_empty",
+              "type_code": 253,
+              "charsetnr": 45,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_empty",
+                253,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            }
+          ],
+          "raw_rows": [
+            [
+              {
+                "raw_hex": "e5a49ae5ad97e88a8241"
+              },
+              null,
+              null,
+              null
+            ],
+            [
+              null,
+              {
+                "raw_hex": "ff0062696e"
+              },
+              null,
+              null
+            ],
+            [
+              null,
+              null,
+              {
+                "raw_hex": "7b226b223a22e580bc227d"
+              },
+              null
+            ],
+            [
+              null,
+              null,
+              null,
+              null
+            ],
+            [
+              {
+                "raw_hex": ""
+              },
+              {
+                "raw_hex": ""
+              },
+              {
+                "raw_hex": ""
+              },
+              {
+                "raw_hex": ""
+              }
+            ]
+          ]
+        },
+        {
+          "index": 2,
+          "fields": [
+            {
+              "name": "v_json",
+              "type_code": 245,
+              "charsetnr": 63,
+              "length": 4096,
+              "flags": 0,
+              "scale": 0,
+              "description": [
+                "v_json",
+                245,
+                null,
+                4096,
+                4096,
+                0,
+                true
+              ]
+            }
+          ],
+          "raw_rows": [
+            [
+              {
+                "raw_hex": "7b226b223a22e580bc227d"
+              }
+            ]
+          ]
+        }
+      ],
+      "expected": {
+        "true": [
+          {
+            "plan": [
+              [
+                "utf8",
+                "text"
+              ],
+              [
+                null,
+                "blob"
+              ],
+              [
+                "utf8",
+                "json"
+              ],
+              [
+                "utf8",
+                "text"
+              ]
+            ],
+            "rows": [
+              [
+                {
+                  "raw_hex": "e5a49ae5ad97e88a8241",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "str",
+                  "input_repr": "'多字节A'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('多字节A')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "ff0062696e",
+                  "converter_called": true,
+                  "converter": "blob",
+                  "input_type": "bytes",
+                  "input_repr": "b'\\xff\\x00bin'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'\\xff\\x00bin')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "7b226b223a22e580bc227d",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "str",
+                  "input_repr": "'{\"k\":\"值\"}'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('{\"k\":\"值\"}')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "str",
+                  "input_repr": "''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "blob",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "str",
+                  "input_repr": "''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "str",
+                  "input_repr": "''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue('')"
+                }
+              ]
+            ]
+          },
+          {
+            "plan": [
+              [
+                "utf8",
+                "json_passthrough"
+              ]
+            ],
+            "rows": [
+              [
+                {
+                  "raw_hex": "7b226b223a22e580bc227d",
+                  "converter_called": true,
+                  "converter": "json_passthrough",
+                  "input_type": "str",
+                  "input_repr": "'{\"k\":\"值\"}'",
+                  "public_type": "str",
+                  "public_repr": "'{\"k\":\"值\"}'"
+                }
+              ]
+            ]
+          }
+        ],
+        "false": [
+          {
+            "plan": [
+              [
+                null,
+                "text"
+              ],
+              [
+                null,
+                "blob"
+              ],
+              [
+                null,
+                "json"
+              ],
+              [
+                null,
+                "text"
+              ]
+            ],
+            "rows": [
+              [
+                {
+                  "raw_hex": "e5a49ae5ad97e88a8241",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "bytes",
+                  "input_repr": "b'\\xe5\\xa4\\x9a\\xe5\\xad\\x97\\xe8\\x8a\\x82A'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'\\xe5\\xa4\\x9a\\xe5\\xad\\x97\\xe8\\x8a\\x82A')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "ff0062696e",
+                  "converter_called": true,
+                  "converter": "blob",
+                  "input_type": "bytes",
+                  "input_repr": "b'\\xff\\x00bin'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'\\xff\\x00bin')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": "7b226b223a22e580bc227d",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "bytes",
+                  "input_repr": "b'{\"k\":\"\\xe5\\x80\\xbc\"}'",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'{\"k\":\"\\xe5\\x80\\xbc\"}')"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                },
+                {
+                  "raw_hex": null,
+                  "converter_called": false,
+                  "converter": null,
+                  "input_type": null,
+                  "input_repr": null,
+                  "public_type": "NoneType",
+                  "public_repr": "None"
+                }
+              ],
+              [
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "blob",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "json",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                },
+                {
+                  "raw_hex": "",
+                  "converter_called": true,
+                  "converter": "text",
+                  "input_type": "bytes",
+                  "input_repr": "b''",
+                  "public_type": "TextValue",
+                  "public_repr": "TextValue(b'')"
+                }
+              ]
+            ]
+          },
+          {
+            "plan": [
+              [
+                null,
+                "json_passthrough"
+              ]
+            ],
+            "rows": [
+              [
+                {
+                  "raw_hex": "7b226b223a22e580bc227d",
+                  "converter_called": true,
+                  "converter": "json_passthrough",
+                  "input_type": "bytes",
+                  "input_repr": "b'{\"k\":\"\\xe5\\x80\\xbc\"}'",
+                  "public_type": "bytes",
+                  "public_repr": "b'{\"k\":\"\\xe5\\x80\\xbc\"}'"
+                }
+              ]
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
