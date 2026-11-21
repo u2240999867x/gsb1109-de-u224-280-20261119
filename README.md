@@ -709,6 +709,70 @@ Output:
 }
 ```
 
+## <a id="publishing"></a> Publishing a streamed result atomically
+
+`json_stream.publish` builds on `streamable_dict` / `streamable_list` to
+deliver a one-shot result to a fixed path. Readers only ever need to open that
+path: it always contains a complete standard JSON document.
+
+```python
+import json_stream
+from json_stream import streamable_dict, streamable_list
+
+@streamable_list
+def results():
+    for index in range(3):
+        yield {"index": index}
+
+credential = json_stream.current_credential("result.json")  # may be None
+receipt = json_stream.publish(
+    "result.json",
+    results(),
+    request_id="job-42",
+    base=credential,
+)
+print(receipt.version)  # 1, 2, ...
+```
+
+Encoding happens once, directly into a hidden temporary file next to the
+target. The target is then replaced atomically, so readers never observe a
+partial document. Because the result is streamed, the source is not re-read
+during commit or recovery.
+
+Each publication has both a monotonic `version` and a random `token`. A
+credential records both, so publishing byte-identical content again still
+produces a new version: a scheduler holding the old credential gets
+`StaleBaseError` rather than silently accepting identical bytes as the version
+it read. `try_publish()` returns the same outcome as a result object with
+`status == "stale_base"` instead of raising.
+
+`request_id` makes a commit idempotent. An encoded result is staged in the
+sidecar directory, so a retry with the same request id can be completed
+without replaying the source, even from another process. Querying a request id
+also finishes a commit left behind by a publisher that died after the atomic
+replace:
+
+```python
+receipt = json_stream.publish.query("result.json", "job-42")
+assert receipt.status == "published"
+```
+
+Duplicate keys are rejected while the temporary file is written and never
+affect the published file. Keys are compared after JSON encoding, so an
+integer key `7` and the string key `"7"` in the same object raise
+`DuplicateKeyError` naming that object; the same pair in different objects is
+allowed.
+
+Two API details are useful for long-running writers:
+
+- `Publisher.prepare(result, request_id)` encodes and returns a `Prepared`
+  without touching the published path or holding the lock.
+  `Publisher.commit(prepared, request_id, base=credential)` publishes it
+  later. If the base is stale, the encoded file survives and the same request
+  can be retried without re-encoding.
+- All bookkeeping lives in `<path>.jsonstream/`. The published path keeps its
+  original name and standard JSON content.
+
 # <a id="standard-json-problems"></a> What are the problems with the standard `json` package?
 
 ## Reading with `json.load()`
