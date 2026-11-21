@@ -1,5 +1,18 @@
 # Changes
 
+## Unreleased
+
+* Add the optional `max_sql_body_length` connection parameter, a hard byte
+  limit on outgoing SQL bodies (the statement text only, excluding protocol
+  headers).  It defaults to `None`, which preserves the existing behavior.
+  When set, oversized statements raise `pymysql.StatementTooLargeError`
+  before any byte is written.  In `executemany()`, rows that cannot fit even
+  on their own are skipped and reported with their original index and the
+  exact required byte count, while every other row is still batched and
+  committed; lengths are always measured under the session's current escape
+  mode, so an `NO_BACKSLASH_ESCAPES` switch delivered in an OK packet never
+  reuses candidate text from the previous session.
+
 ## v1.2.4 (security fix)
 
 Release date: 2026-11-09

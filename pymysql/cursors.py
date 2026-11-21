@@ -211,25 +211,68 @@ class Cursor:
     def _do_execute_many(
         self, prefix, values, postfix, args, max_stmt_length, encoding
     ):
-        encoding = self._get_db().encoding
+        conn = self._get_db()
+        encoding = conn.encoding
         if isinstance(prefix, str):
             prefix = prefix.encode(encoding)
         if isinstance(postfix, str):
             postfix = postfix.encode(encoding)
+        hard_limit = conn.max_sql_body_length
+        if hard_limit is None:
+            batch_limit = max_stmt_length
+        else:
+            batch_limit = min(max_stmt_length, hard_limit)
+
         sql = bytearray(prefix)
-        args = iter(args)
-        sql += self._mogrify(values, next(args)).encode(encoding)
         rows = 0
-        for arg in args:
+        oversized = []
+
+        def flush():
+            nonlocal sql, rows
+            rows += self.execute(sql + postfix)
+            # The OK packet of the confirmed batch may change the connection's
+            # escape mode, so later rows must be mogrified again from scratch.
+            sql = bytearray(prefix)
+
+        for index, arg in enumerate(args):
+            # Mogrify under the session that would actually send this row.
             v = self._mogrify(values, arg).encode(encoding)
-            if len(sql) + len(v) + len(postfix) + 1 > max_stmt_length:
-                rows += self.execute(sql + postfix)
-                sql = bytearray(prefix)
-            else:
+            single_length = len(prefix) + len(v) + len(postfix)
+            flushed = False
+            if hard_limit is not None and single_length > hard_limit:
+                # Confirm everything buffered so far before quarantining the
+                # oversized row; later legal rows still get their own batches.
+                if len(sql) > len(prefix):
+                    flush()
+                    flushed = True
+            elif (
+                len(sql) > len(prefix)
+                and len(sql) + len(v) + len(postfix) + 1 > batch_limit
+            ):
+                flush()
+                flushed = True
+
+            if flushed:
+                # The OK packet may have switched the escape mode.  Candidate
+                # text built under the previous session is stale, so rebuild it
+                # from the original value under the current session.
+                v = self._mogrify(values, arg).encode(encoding)
+                single_length = len(prefix) + len(v) + len(postfix)
+
+            if hard_limit is not None and single_length > hard_limit:
+                oversized.append((index, single_length))
+                continue
+
+            if len(sql) > len(prefix):
                 sql += b","
             sql += v
-        rows += self.execute(sql + postfix)
+
+        if len(sql) > len(prefix):
+            flush()
+
         self.rowcount = rows
+        if oversized:
+            raise err.StatementTooLargeError(oversized, hard_limit)
         return rows
 
     def callproc(self, procname, args=()):

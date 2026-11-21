@@ -150,6 +150,13 @@ class Connection:
     :param local_infile: Boolean to enable the use of LOAD DATA LOCAL command. (default: False)
     :param max_allowed_packet: Max size of packet sent to server in bytes. (default: 16MB)
         Only used to limit size of "LOAD LOCAL INFILE" data packet smaller than default (16KB).
+    :param max_sql_body_length: Hard byte limit applied to the SQL body of every
+        outgoing command, excluding the protocol header. ``None`` (the default)
+        keeps the historical behavior and never rejects a statement on size.
+        Set it to an ``int`` to make oversized statements raise
+        :class:`pymysql.StatementTooLargeError` before any byte is written to
+        the socket; the length is always measured on the encoded bytes that
+        would actually be sent under the connection's current escape mode.
     :param defer_connect: Don't explicitly connect on construction - wait for connect call.
         (default: False)
     :param auth_plugin_map: A dict of plugin names to a class that processes that plugin.
@@ -197,6 +204,7 @@ class Connection:
         autocommit=False,
         local_infile=False,
         max_allowed_packet=16 * 1024 * 1024,
+        max_sql_body_length=None,
         defer_connect=False,
         auth_plugin_map=None,
         read_timeout=None,
@@ -360,6 +368,13 @@ class Connection:
         self.sql_mode = sql_mode
         self.init_command = init_command
         self.max_allowed_packet = max_allowed_packet
+        if max_sql_body_length is not None and (
+            isinstance(max_sql_body_length, bool)
+            or not isinstance(max_sql_body_length, int)
+            or max_sql_body_length <= 0
+        ):
+            raise ValueError("max_sql_body_length must be a positive integer or None")
+        self.max_sql_body_length = max_sql_body_length
         self._auth_plugin_map = auth_plugin_map or {}
         self.server_public_key = server_public_key
 
@@ -876,6 +891,21 @@ class Connection:
         else:
             return 0
 
+    def _check_sql_body_length(self, sql):
+        """Reject an encoded SQL body before it is written to the socket.
+
+        The length is measured on the actual bytes about to be sent, so it
+        always reflects the connection's current escape mode.
+        """
+        limit = self.max_sql_body_length
+        if limit is None:
+            return
+        if isinstance(sql, str):
+            sql = sql.encode(self.encoding)
+        required = len(sql)
+        if required > limit:
+            raise err.StatementTooLargeError([(None, required)], limit)
+
     def _execute_command(self, command, sql):
         """
         :raise InterfaceError: If the connection is closed.
@@ -896,6 +926,8 @@ class Connection:
 
         if isinstance(sql, str):
             sql = sql.encode(self.encoding)
+
+        self._check_sql_body_length(sql)
 
         packet_size = min(MAX_PACKET_LEN, len(sql) + 1)  # +1 is for command
 

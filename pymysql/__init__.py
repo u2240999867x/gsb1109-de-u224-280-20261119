@@ -36,6 +36,7 @@ from .err import (
     NotSupportedError,
     OperationalError,
     ProgrammingError,
+    StatementTooLargeError,
     Warning,
 )
 from .times import (
@@ -163,6 +164,7 @@ __all__ = [
     "NotSupportedError",
     "OperationalError",
     "ProgrammingError",
+    "StatementTooLargeError",
     "Time",
     "TimeFromTicks",
     "Timestamp",

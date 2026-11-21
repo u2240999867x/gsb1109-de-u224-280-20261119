@@ -70,6 +70,30 @@ class NotSupportedError(DatabaseError):
     has transactions turned off."""
 
 
+class StatementTooLargeError(InterfaceError):
+    """Exception raised when an SQL statement body exceeds the configured
+    byte limit.
+
+    ``errors`` is a list of ``(index, required_bytes)`` tuples, one for each
+    row that could not be sent even as a single-row statement.  ``index`` is
+    the zero-based position of the row in the original ``executemany()``
+    input, or ``None`` when the limit is enforced directly on a statement.
+    """
+
+    def __init__(self, errors, limit):
+        self.errors = list(errors)
+        self.limit = limit
+        details = ", ".join(
+            "row {} requires {} bytes".format(index, required)
+            if index is not None
+            else "statement requires {} bytes".format(required)
+            for index, required in self.errors
+        )
+        super().__init__(
+            f"SQL body byte limit is {limit}; {details}",
+        )
+
+
 error_map = {}
 
 
