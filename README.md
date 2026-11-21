@@ -228,6 +228,56 @@ z at path ('xxxx', 3)
 [] at path ('xxxx', 5)
 ```
 
+### <a id="quality-report"></a>Quality reporting (transient mode)
+
+When reading field data transiently you can opt in to a quality report that
+summarises each `readings` array without changing how you consume the stream.
+
+```python
+import json_stream
+from json_stream import QualityReport
+
+def on_stage(summary):
+    # a readings array just closed; the summary is held until its device decides
+    print("staged", summary.identity, summary.path, dict(summary.types), summary.number_sum)
+
+def on_confirm(device_path, summaries):
+    # the device object closed complete with quality == "accepted"
+    print("confirmed", device_path, [s.identity for s in summaries])
+
+def on_retract(device_path, summaries):
+    # the device was rejected, had no usable quality, or the stream was truncated
+    print("retracted", device_path, [s.identity for s in summaries])
+
+report = QualityReport(on_stage, on_confirm, on_retract)
+data = json_stream.load(f, report=report)  # transient mode only
+for key, value in data.items():
+    ...  # consume exactly what you need, as usual
+```
+
+Behaviour:
+
+* each `readings` array produces an `ArraySummary` of its **direct** items:
+  the count, the type of each direct value (`int`, `float`, `str`, `bool`,
+  `NoneType`, `list`, `dict`) and the sum of its direct numeric values.
+  Booleans are not treated as numbers; a nested (supplementary) array is
+  summarised separately and its numbers are never added to the outer total.
+* every summary carries its own `identity`. Two `readings` keys in the same
+  device produce two summaries, and implicit skipping gives the same identities
+  and totals as explicitly iterating the whole array. If you read just the
+  first item and move on, the remainder is consumed exactly as a normal
+  transient stream would, and that first item is counted once.
+* the summary is *staged* when the array closes, then *confirmed* once, when
+  its enclosing device object closes complete with a `quality` field equal to
+  `"accepted"`. A `rejected` device, a device without a usable `quality`, or a
+  truncated stream *retracts* every summary that had been staged for it.
+* the report never reads ahead and does not stockpile data: only summaries
+  still awaiting a device decision are retained (see `report.staged`); once
+  confirmed or retracted they are handed to the callback and released.
+* with no `report` argument, parsing is unchanged: the same transient objects,
+  access pattern and exception semantics. Reporting is unavailable in
+  persistent mode and raises `ValueError`.
+
 ### <a id="multiple"></a> Multiple JSON documents: `load_many()` and `visit_many()`
 
 Sometimes JSON data arrives as a sequence of top‑level JSON texts rather than a single array/object. json-stream supports this pattern with:

@@ -34,6 +34,20 @@ class StreamingJSONBase:
         self._child: Optional[StreamingJSONBase] = None
         # before the first item a comma is invalid; after it, items must be comma-separated
         self._first = True
+        # the key most recently entered by an object (used by child-creation hooks)
+        self._current_key = None
+
+    def _create_child(self, token, token_stream):
+        try:
+            return _FACTORY[self._persistent_children, token](token_stream)
+        except KeyError:  # pragma: no cover
+            raise ValueError(f"Unknown operator {token}") from None
+
+    def _on_close(self):
+        pass
+
+    def _on_truncate(self):
+        pass
 
     @property
     def tokenizer(self):
@@ -53,8 +67,16 @@ class StreamingJSONBase:
                 item = load()
             except StopIteration:
                 if self.streaming:
+                    self._on_truncate()
                     raise ValueError(self.INCOMPLETE_ERROR)
+                self._on_close()
                 return
+            except Exception:
+                # any other failure (e.g. a cut or malformed token stream)
+                # leaves this node open; observers get a truncation callback
+                # before the original exception propagates unchanged
+                self._on_truncate()
+                raise
             yield item
 
     def read_all(self):
@@ -160,7 +182,7 @@ class StreamingJSONList(StreamingJSONBase):
             if token_type == OPERATOR and v not in '{[':
                 raise ValueError(f"Expecting value after comma, got {v}")
         if token_type == OPERATOR:
-            self._child = v = _FACTORY[self._persistent_children, v](stream)
+            self._child = v = self._create_child(v, stream)
         return v
 
     def _get__iter__(self):
@@ -239,13 +261,10 @@ class StreamingJSONObject(StreamingJSONBase):
         if next(stream) != COLON:
             raise ValueError("Expecting :")  # pragma: no cover
 
+        self._current_key = k
         token_type, v = next(stream)
         if token_type == OPERATOR:
-            try:
-                klass = _FACTORY[self._persistent_children, v]
-            except KeyError:
-                raise ValueError(f"Unknown operator {v}") from None
-            self._child = v = klass(stream)
+            self._child = v = self._create_child(v, stream)
         return k, v
 
     def _get__iter__(self):
