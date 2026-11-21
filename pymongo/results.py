@@ -19,12 +19,201 @@
 
 from __future__ import annotations
 
+import enum
 from typing import TYPE_CHECKING, Any, cast
 
 from pymongo.errors import InvalidOperation
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, MutableMapping
+
+
+class BulkWriteOutcomeStatus(str, enum.Enum):
+    """The evidence a bulk write holds for one input operation.
+
+    A bulk write groups operations by type and may split one group across
+    several server commands. The status records what the reply to the command
+    that carried the operation can prove about that particular operation.
+
+    .. versionadded:: 4.21
+    """
+
+    PROVEN = "proven"
+    """A specific effect is known, such as an acknowledged insert or an upsert."""
+
+    ACKNOWLEDGED = "acknowledged"
+    """The carrying command was acknowledged but only reported counts.
+
+    The operation may or may not have matched or changed a particular record.
+    A count must not be read as proof that a specific business record changed.
+    """
+
+    WRITE_ERROR = "write_error"
+    """The server reported an error for this exact operation; it did not succeed."""
+
+    WRITE_CONCERN_ERROR = "write_concern_error"
+    """The carrying command ran but did not satisfy the requested write concern.
+
+    The operation is not known to be durable even though the command replied.
+    """
+
+    NOT_SENT = "not_sent"
+    """The operation was never included in a command sent to the server."""
+
+    NOT_EXECUTED = "not_executed"
+    """The operation was in an ordered command but followed its first error.
+
+    The server guarantees that operations after the first write error in an
+    ordered command are not executed.
+    """
+
+    UNKNOWN = "unknown"
+    """The carrying command was sent but no usable reply was observed."""
+
+
+class BulkWriteOperationOutcome:
+    """What a bulk write can prove about a single operation in the input.
+
+    Instances are ordered by, and expose, the operation's index in the original
+    input list. See :attr:`BulkWriteResult.operation_outcomes` and
+    :attr:`BulkWriteError.operation_outcomes`.
+
+    .. versionadded:: 4.21
+    """
+
+    __slots__ = (
+        "__index",
+        "__inserted_id",
+        "__operation_type",
+        "__status",
+        "__upserted_id",
+        "__write_concern_error",
+        "__write_error",
+    )
+
+    def __init__(self, index: int, operation_type: str) -> None:
+        self.__index = index
+        self.__operation_type = operation_type
+        self.__status = BulkWriteOutcomeStatus.NOT_SENT
+        self.__write_error: Mapping[str, Any] | None = None
+        self.__upserted_id: Any = None
+        self.__inserted_id: Any = None
+        self.__write_concern_error: Mapping[str, Any] | None = None
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(index={self.__index!r}, "
+            f"operation_type={self.__operation_type!r}, status={self.__status.value!r})"
+        )
+
+    @property
+    def index(self) -> int:
+        """The index of this operation in the original input list."""
+        return self.__index
+
+    @property
+    def operation_type(self) -> str:
+        """One of ``"insert"``, ``"update"``, ``"replace"``, or ``"delete"``."""
+        return self.__operation_type
+
+    @property
+    def status(self) -> BulkWriteOutcomeStatus:
+        """What the server reply proves about this operation."""
+        return self.__status
+
+    @property
+    def write_error(self) -> Mapping[str, Any] | None:
+        """The raw per-operation write error, if the server reported one."""
+        return self.__write_error
+
+    @property
+    def upserted_id(self) -> Any:
+        """The ``_id`` of the document this operation upserted, if proven.
+
+        ``None`` unless :attr:`status` is :attr:`BulkWriteOutcomeStatus.PROVEN`
+        because of an upsert.
+        """
+        return self.__upserted_id
+
+    @property
+    def inserted_id(self) -> Any:
+        """The ``_id`` of the document this operation inserted, if proven.
+
+        ``None`` unless :attr:`status` is :attr:`BulkWriteOutcomeStatus.PROVEN`
+        because of an acknowledged insert.
+        """
+        return self.__inserted_id
+
+    @property
+    def write_concern_error(self) -> Mapping[str, Any] | None:
+        """The write concern error of the command that carried this operation.
+
+        This is set independently of :attr:`write_error`: a command may report
+        both a per-operation write error and a write concern error, and both
+        remain visible.
+        """
+        return self.__write_concern_error
+
+    @property
+    def acknowledged(self) -> bool:
+        """Whether a command carrying this operation received a reply."""
+        return self.__status not in (
+            BulkWriteOutcomeStatus.NOT_SENT,
+            BulkWriteOutcomeStatus.NOT_EXECUTED,
+            BulkWriteOutcomeStatus.UNKNOWN,
+        )
+
+    @property
+    def definitely_changed(self) -> bool | None:
+        """Whether this exact operation definitely changed a document.
+
+        ``True`` only when a specific effect is proven, ``False`` when the
+        operation definitely did not succeed (a write error, or it was never
+        executed), and ``None`` when counts or an unconfirmed write concern
+        leave the per-record effect unknown.
+        """
+        if self.__status is BulkWriteOutcomeStatus.PROVEN:
+            return True
+        if self.__status in (
+            BulkWriteOutcomeStatus.WRITE_ERROR,
+            BulkWriteOutcomeStatus.NOT_SENT,
+            BulkWriteOutcomeStatus.NOT_EXECUTED,
+        ):
+            return False
+        return None
+
+    def _mark_attempted(self) -> None:
+        """Reset to UNKNOWN before an attempt that includes this operation."""
+        self.__status = BulkWriteOutcomeStatus.UNKNOWN
+        self.__write_error = None
+        self.__upserted_id = None
+        self.__inserted_id = None
+        self.__write_concern_error = None
+
+    def _set(
+        self,
+        status: BulkWriteOutcomeStatus,
+        write_error: Mapping[str, Any] | None = None,
+        upserted_id: Any = None,
+        inserted_id: Any = None,
+        write_concern_error: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.__status = status
+        self.__write_error = write_error
+        self.__upserted_id = upserted_id
+        self.__inserted_id = inserted_id
+        self.__write_concern_error = write_concern_error
+
+    def _copy(self) -> BulkWriteOperationOutcome:
+        clone = BulkWriteOperationOutcome(self.__index, self.__operation_type)
+        clone._set(
+            self.__status,
+            self.__write_error,
+            self.__upserted_id,
+            self.__inserted_id,
+            self.__write_concern_error,
+        )
+        return clone
 
 
 class _WriteResult:
@@ -214,10 +403,16 @@ class DeleteResult(_WriteResult):
 class _BulkWriteResultBase(_WriteResult):
     """Private base class for bulk write API results."""
 
-    __slots__ = ("__bulk_api_result",)
+    __slots__ = ("__bulk_api_result", "__operation_outcomes")
 
-    def __init__(self, bulk_api_result: dict[str, Any], acknowledged: bool) -> None:
+    def __init__(
+        self,
+        bulk_api_result: dict[str, Any],
+        acknowledged: bool,
+        operation_outcomes: list[BulkWriteOperationOutcome] | None = None,
+    ) -> None:
         self.__bulk_api_result = bulk_api_result
+        self.__operation_outcomes = tuple(operation_outcomes or ())
         super().__init__(acknowledged)
 
     def __repr__(self) -> str:
@@ -230,6 +425,27 @@ class _BulkWriteResultBase(_WriteResult):
     def bulk_api_result(self) -> dict[str, Any]:
         """The raw bulk write API result."""
         return self.__bulk_api_result
+
+    @property
+    def operation_outcomes(self) -> tuple[BulkWriteOperationOutcome, ...]:
+        """What this bulk write can prove about each operation in the input.
+
+        The tuple is in the order the operations were provided, and each item's
+        :attr:`~BulkWriteOperationOutcome.index` is its position in that input.
+        This is only populated for the collection-level bulk write API.
+
+        .. versionadded:: 4.21
+        """
+        self._raise_if_unacknowledged("operation_outcomes")
+        return self.__operation_outcomes
+
+    @property
+    def operation_outcome_map(self) -> dict[int, BulkWriteOperationOutcome]:
+        """The per-operation evidence keyed by original input index.
+
+        .. versionadded:: 4.21
+        """
+        return {outcome.index: outcome for outcome in self.operation_outcomes}
 
     @property
     def inserted_count(self) -> int:
@@ -270,15 +486,22 @@ class BulkWriteResult(_BulkWriteResultBase):
 
     __slots__ = ()
 
-    def __init__(self, bulk_api_result: dict[str, Any], acknowledged: bool) -> None:
+    def __init__(
+        self,
+        bulk_api_result: dict[str, Any],
+        acknowledged: bool,
+        operation_outcomes: list[BulkWriteOperationOutcome] | None = None,
+    ) -> None:
         """Create a BulkWriteResult instance.
 
         :param bulk_api_result: A result dict from the collection-level bulk write API
         :param acknowledged: Was this write result acknowledged? If ``False``
             then all properties of this object will raise
             :exc:`~pymongo.errors.InvalidOperation`.
+        :param operation_outcomes: The per-operation evidence collected while
+            executing the bulk write.
         """
-        super().__init__(bulk_api_result, acknowledged)
+        super().__init__(bulk_api_result, acknowledged, operation_outcomes)
 
     def __repr__(self) -> str:
         return (

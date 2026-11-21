@@ -782,7 +782,7 @@ class Collection(common.BaseObject, Generic[_DocumentType]):
         write_concern = self._write_concern_for(session)
         bulk_api_result = blk.execute(write_concern, session, _Op.INSERT)
         if bulk_api_result is not None:
-            return BulkWriteResult(bulk_api_result, True)
+            return BulkWriteResult(bulk_api_result, True, blk.operation_outcomes())
         return BulkWriteResult({}, False)
 
     def _insert_one(

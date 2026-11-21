@@ -38,6 +38,19 @@ class PyMongoError(Exception):
         super().__init__(message)
         self._message = message
         self._error_labels = set(error_labels or [])
+        self._operation_outcomes: tuple[Any, ...] = ()
+
+    @property
+    def operation_outcomes(self) -> tuple[Any, ...]:
+        """What a failed bulk write can prove about each operation in the input.
+
+        This is only populated when the exception was raised while executing a
+        collection-level bulk write. Each item's ``index`` is its position in
+        the original input list. Other exceptions return an empty tuple.
+
+        .. versionadded:: 4.21
+        """
+        return self._operation_outcomes
 
     def has_error_label(self, label: str) -> bool:
         """Return True if this error contains the given label.
@@ -298,11 +311,16 @@ class BulkWriteError(OperationFailure):
 
     details: _DocumentOut
 
-    def __init__(self, results: _DocumentOut) -> None:
+    def __init__(
+        self,
+        results: _DocumentOut,
+        operation_outcomes: Sequence[Any] | None = None,
+    ) -> None:
         super().__init__("batch op errors occurred", 65, results)
+        self._operation_outcomes = tuple(operation_outcomes or ())
 
     def __reduce__(self) -> tuple[Any, Any]:
-        return self.__class__, (self.details,)
+        return self.__class__, (self.details, self._operation_outcomes)
 
     @property
     def timeout(self) -> bool:

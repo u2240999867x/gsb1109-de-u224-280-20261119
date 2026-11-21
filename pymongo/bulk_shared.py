@@ -26,7 +26,7 @@ from pymongo.common import (
     validate_ok_for_replace,
     validate_ok_for_update,
 )
-from pymongo.errors import BulkWriteError, OperationFailure
+from pymongo.errors import BulkWriteError, OperationFailure, PyMongoError
 from pymongo.helpers_shared import _get_wce_doc
 from pymongo.message import (
     _DELETE,
@@ -34,6 +34,10 @@ from pymongo.message import (
     _UPDATE,
     _BulkWriteContext,
     _EncryptedBulkWriteContext,
+)
+from pymongo.results import (
+    BulkWriteOperationOutcome,
+    BulkWriteOutcomeStatus,
 )
 
 if TYPE_CHECKING:
@@ -44,6 +48,8 @@ if TYPE_CHECKING:
 
 _DELETE_ALL: int = 0
 _DELETE_ONE: int = 1
+
+_OP_TYPE_NAMES: tuple[str, str, str] = ("insert", "update", "delete")
 
 # For backwards compatibility. See MongoDB src/mongo/base/error_codes.err
 _BAD_VALUE: int = 2
@@ -81,6 +87,130 @@ class _Run:
         self.ops.append(operation)
 
 
+class _OperationLedger:
+    """Track what each command proves about the operations it carried.
+
+    The ledger is indexed by original input position, so two commands that
+    report position ``0`` resolve to the two different input operations that
+    each command actually carried.
+    """
+
+    def __init__(self, ops: list[tuple[int, Mapping[str, Any]]]) -> None:
+        self._entries = [
+            BulkWriteOperationOutcome(index, _OP_TYPE_NAMES[op_type])
+            for index, (op_type, _) in enumerate(ops)
+        ]
+
+    def entries(self) -> list[BulkWriteOperationOutcome]:
+        return self._entries
+
+    def copies(self) -> list[BulkWriteOperationOutcome]:
+        return [entry._copy() for entry in self._entries]
+
+    def mark_attempted(self, run: _Run, offset: int, count: int) -> None:
+        """Mark the operations a new acknowledged attempt will carry as unknown."""
+        for run_idx in range(offset, offset + count):
+            self._entries[run.index(run_idx)]._mark_attempted()
+
+    def mark_not_sent(self, run: _Run, offset: int, count: int) -> None:
+        """Mark operations as provably never handed to the server."""
+        for run_idx in range(offset, offset + count):
+            self._entries[run.index(run_idx)]._set(BulkWriteOutcomeStatus.NOT_SENT)
+
+    def record(
+        self,
+        run: _Run,
+        offset: int,
+        count: int,
+        result: Mapping[str, Any],
+        ordered: bool = False,
+    ) -> None:
+        """Record per-operation evidence from one authoritative command reply.
+
+        ``run`` is the run whose operations the command carried, ``offset`` is
+        the run index of the first operation sent, and ``count`` is the number
+        of operations the command actually carried.
+        """
+        sent = [run.index(run_idx) for run_idx in range(offset, offset + count)]
+        wce = _get_wce_doc(result)
+
+        failed: dict[int, Mapping[str, Any]] = {}
+        failed_positions: list[int] = []
+        for doc in result.get("writeErrors") or ():
+            position = doc.get("index", doc.get("idx"))
+            if position is None or not (0 <= position < count):
+                continue
+            failed[sent[position]] = doc
+            failed_positions.append(position)
+
+        upserted: dict[int, Any] = {}
+        for doc in result.get("upserted") or ():
+            position = doc.get("index", doc.get("idx"))
+            if position is None or not (0 <= position < count):
+                continue
+            upserted[sent[position]] = doc.get("_id")
+
+        # Raw write command replies report counts in ``n``. ``nModified`` is
+        # only present for update commands, and ``upserted`` only for upserts.
+        affected = result.get("n", 0)
+
+        not_executed: set[int] = set()
+        if ordered and failed_positions:
+            # An ordered command stops at its first error; later operations in
+            # the same command were received but not executed.
+            first_failed = min(failed_positions)
+            for position in range(first_failed + 1, count):
+                not_executed.add(sent[position])
+
+        # An insert document carries a client-known _id. If every operation the
+        # command executed is accounted for by n, each executed insert is a
+        # proven insertion of that specific document. A partial count proves no
+        # particular document. Counts for updates and deletes never prove which
+        # record changed, so they stay ACKNOWLEDGED.
+        executed = count - len(failed) - len(not_executed)
+        proven_insert = run.op_type == _INSERT and affected == executed
+
+        for position, original_index in enumerate(sent):
+            entry = self._entries[original_index]
+            inserted_id = None
+            if original_index in failed:
+                status = BulkWriteOutcomeStatus.WRITE_ERROR
+            elif original_index in not_executed:
+                status = BulkWriteOutcomeStatus.NOT_EXECUTED
+            elif wce:
+                status = BulkWriteOutcomeStatus.WRITE_CONCERN_ERROR
+            elif original_index in upserted:
+                status = BulkWriteOutcomeStatus.PROVEN
+            elif proven_insert:
+                status = BulkWriteOutcomeStatus.PROVEN
+                inserted_id = run.ops[offset + position].get("_id")
+            else:
+                status = BulkWriteOutcomeStatus.ACKNOWLEDGED
+            entry._set(
+                status,
+                write_error=failed.get(original_index),
+                upserted_id=upserted.get(original_index),
+                inserted_id=inserted_id,
+                write_concern_error=wce,
+            )
+
+
+def _attach_operation_outcomes(
+    exc: BaseException, operation_outcomes: list[BulkWriteOperationOutcome]
+) -> None:
+    """Attach per-operation evidence to a bulk write exception, when possible.
+
+    ``BulkWriteError`` already carries outcomes from the merge path. Any other
+    exception raised while a bulk write was in flight (for example a network
+    failure before a command reached the wire) gets them attached here, so the
+    caller can still see which operations were never sent.
+    """
+    if isinstance(exc, BulkWriteError) and exc.operation_outcomes:
+        return
+    if isinstance(exc, PyMongoError):
+        exc._operation_outcomes = tuple(operation_outcomes)
+
+
 def _merge_command(
     run: _Run,
     full_result: MutableMapping[str, Any],
@@ -101,8 +231,11 @@ def _merge_command(
         if upserted:
             n_upserted = len(upserted)
             for doc in upserted:
-                doc["index"] = run.index(doc["index"] + offset)
-            full_result["upserted"].extend(upserted)
+                # Leave the server response intact for APM and for the
+                # per-operation ledger, which reads command-local positions.
+                merged = doc.copy()
+                merged["index"] = run.index(doc["index"] + offset)
+                full_result["upserted"].append(merged)
             full_result["nUpserted"] += n_upserted
             full_result["nMatched"] += affected - n_upserted
         else:
@@ -125,7 +258,10 @@ def _merge_command(
         full_result["writeConcernErrors"].append(wce)
 
 
-def _raise_bulk_write_error(full_result: _DocumentOut) -> NoReturn:
+def _raise_bulk_write_error(
+    full_result: _DocumentOut,
+    operation_outcomes: list[BulkWriteOperationOutcome] | None = None,
+) -> NoReturn:
     """Raise a BulkWriteError from the full bulk api result."""
     # retryWrites on MMAPv1 should raise an actionable error.
     if full_result["writeErrors"]:
@@ -140,7 +276,7 @@ def _raise_bulk_write_error(full_result: _DocumentOut) -> NoReturn:
                 "to your connection string."
             )
             raise OperationFailure(errmsg, code, full_result)
-    raise BulkWriteError(full_result)
+    raise BulkWriteError(full_result, operation_outcomes)
 
 
 class _AgnosticBulkBase:
@@ -178,6 +314,18 @@ class _AgnosticBulkBase:
         self.current_run = None
         self.next_run = None
         self.is_encrypted = False
+        # Per-operation evidence, keyed by original input position.
+        self.ledger: _OperationLedger | None = None
+
+    def operation_outcomes(self) -> list[BulkWriteOperationOutcome]:
+        """Return the per-operation evidence collected so far."""
+        return self.operation_outcomes_ledger().entries()
+
+    def operation_outcomes_ledger(self) -> _OperationLedger:
+        """Return the ledger tracking per-operation evidence."""
+        if self.ledger is None:
+            self.ledger = _OperationLedger(self.ops)
+        return self.ledger
 
     @property
     def bulk_ctx_class(self) -> type[_BulkWriteContext]:

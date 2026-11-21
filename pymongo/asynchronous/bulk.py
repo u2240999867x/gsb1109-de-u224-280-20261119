@@ -35,6 +35,7 @@ from pymongo.asynchronous.helpers import _handle_reauth
 from pymongo.bulk_shared import (
     _COMMANDS,
     _AgnosticBulkBase,
+    _attach_operation_outcomes,
     _merge_command,
     _raise_bulk_write_error,
 )
@@ -55,7 +56,7 @@ from pymongo.read_preferences import ReadPreference
 from pymongo.write_concern import WriteConcern
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, MutableMapping
+    from collections.abc import Callable, Iterator, Mapping, MutableMapping
 
     from pymongo.asynchronous.client_session import AsyncClientSession
     from pymongo.asynchronous.collection import AsyncCollection
@@ -152,9 +153,12 @@ class _AsyncBulk(_AgnosticBulkBase):
         cmd: dict[str, Any],
         ops: list[Mapping[str, Any]],
         client: AsyncMongoClient[Any],
+        on_send: Callable[[int], None] | None = None,
     ) -> tuple[dict[str, Any], list[Mapping[str, Any]]]:
         if self.is_encrypted:
             _, batched_cmd, to_send = bwc.batch_command(cmd, ops)
+            if on_send is not None:
+                on_send(len(to_send))
             result = await bwc.conn.command(  # type: ignore[misc]
                 bwc.db_name,
                 batched_cmd,  # type: ignore[arg-type]
@@ -164,6 +168,8 @@ class _AsyncBulk(_AgnosticBulkBase):
             )
         else:
             request_id, msg, to_send = bwc.batch_command(cmd, ops)
+            if on_send is not None:
+                on_send(len(to_send))
             result = await self.write_command(bwc, cmd, request_id, msg, to_send, client)  # type: ignore[arg-type]
 
         return result, to_send  # type: ignore[return-value]
@@ -240,7 +246,33 @@ class _AsyncBulk(_AgnosticBulkBase):
 
                 # Run as many ops as possible in one command.
                 if write_concern.acknowledged:
-                    result, to_send = await self._execute_batch(bwc, cmd, ops, client)
+                    ledger = self.operation_outcomes_ledger()
+                    run_offset = run.idx_offset
+                    batch_built = False
+
+                    def _on_send(
+                        count: int,
+                        _ledger: Any = ledger,
+                        _run: Any = run,
+                        _offset: int = run_offset,
+                    ) -> None:
+                        # The batch exists once it has been encoded. If the
+                        # send then fails, the operations may or may not have
+                        # reached the server.
+                        nonlocal batch_built
+                        batch_built = True
+                        _ledger.mark_attempted(_run, _offset, count)
+
+                    try:
+                        result, to_send = await self._execute_batch(
+                            bwc, cmd, ops, client, on_send=_on_send
+                        )
+                    except BaseException:
+                        if not batch_built:
+                            # Encoding stopped before a batch was built, so no
+                            # operation in this run was sent.
+                            ledger.mark_not_sent(run, run_offset, len(run.ops) - run_offset)
+                        raise
 
                     # Retryable writeConcernErrors halt the execution of this run.
                     wce = result.get("writeConcernError", {})
@@ -249,8 +281,14 @@ class _AsyncBulk(_AgnosticBulkBase):
                         # current one because this write operation may be retried.
                         full = copy.deepcopy(full_result)
                         _merge_command(run, full, run.idx_offset, result)
-                        _raise_bulk_write_error(full)
+                        ledger.record(
+                            run, run.idx_offset, len(to_send), result, ordered=self.ordered
+                        )
+                        _raise_bulk_write_error(full, ledger.copies())
 
+                    # Record the evidence from the raw reply before merging it,
+                    # so command-local positions are resolved against this run.
+                    ledger.record(run, run.idx_offset, len(to_send), result, ordered=self.ordered)
                     _merge_command(run, full_result, run.idx_offset, result)
 
                     # We're no longer in a retry once a command succeeds.
@@ -292,6 +330,7 @@ class _AsyncBulk(_AgnosticBulkBase):
         }
         client = self.collection.database.client
         op_id = _generate_op_id_or_none(client._event_listeners)
+        ledger = self.operation_outcomes_ledger()
 
         async def retryable_bulk(
             session: AsyncClientSession | None, conn: AsyncConnection, retryable: bool
@@ -306,17 +345,21 @@ class _AsyncBulk(_AgnosticBulkBase):
                 full_result,
             )
 
-        _ = await client._retryable_write(
-            self.is_retryable,
-            retryable_bulk,
-            session,
-            operation,
-            bulk=self,  # type: ignore[arg-type]
-            operation_id=op_id,
-        )
+        try:
+            _ = await client._retryable_write(
+                self.is_retryable,
+                retryable_bulk,
+                session,
+                operation,
+                bulk=self,  # type: ignore[arg-type]
+                operation_id=op_id,
+            )
+        except BaseException as exc:
+            _attach_operation_outcomes(exc, ledger.copies())
+            raise
 
         if full_result["writeErrors"] or full_result["writeConcernErrors"]:
-            _raise_bulk_write_error(full_result)
+            _raise_bulk_write_error(full_result, ledger.copies())
         return full_result
 
     async def execute_op_msg_no_results(

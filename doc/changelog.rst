@@ -4,6 +4,20 @@ Changelog
 Changes in Version 4.21.0 (unreleased)
 --------------------------------------
 
+Features
+........
+
+- Added per-operation outcome reporting to
+  :meth:`~pymongo.collection.Collection.bulk_write`. The new
+  :attr:`~pymongo.results.BulkWriteResult.operation_outcomes` attribute and the
+  :attr:`~pymongo.errors.BulkWriteError.operation_outcomes` attribute expose a
+  :class:`~pymongo.results.BulkWriteOperationOutcome` for every operation in the
+  original input, keyed by its original index. Each outcome distinguishes a
+  proven effect, an acknowledged command that reported only counts, a
+  per-operation write error, an unsatisfied write concern, and an operation
+  that was never sent. A count-only reply is never reported as proof that a
+  particular record changed.
+
 Bug fixes
 .........
 
