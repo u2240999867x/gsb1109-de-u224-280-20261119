@@ -1,0 +1,425 @@
+{
+  "after_restore_events": {
+    "new-filter": {
+      "_id": {
+        "_data": "event:30",
+        "pos": 30
+      },
+      "ns": {
+        "coll": "orders_v2",
+        "db": "shop"
+      },
+      "operationType": "insert"
+    },
+    "old-filter": null
+  },
+  "attempts": [
+    {
+      "batch_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "cursor_alive_at_pause": true,
+      "empty_getmore": {
+        "collection": "orders_v2",
+        "cursor_id": 102,
+        "error_code": null,
+        "filter": [
+          {
+            "$match": {
+              "ns.coll": "orders"
+            }
+          }
+        ],
+        "first_batch": [],
+        "kind": "getMore",
+        "next_batch": [],
+        "phase": "setup",
+        "post_batch_resume_token": {
+          "_data": "batch:25",
+          "pos": 25
+        },
+        "resume_parameter": null,
+        "resume_token": null
+      },
+      "filter": [
+        {
+          "$match": {
+            "ns.coll": "orders"
+          }
+        }
+      ],
+      "label": "old-filter",
+      "seen_before_pause": []
+    },
+    {
+      "batch_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "cursor_alive_at_pause": true,
+      "empty_getmore": {
+        "collection": "orders_v2",
+        "cursor_id": 103,
+        "error_code": null,
+        "filter": [
+          {
+            "$match": {
+              "ns.coll": "orders_v2"
+            }
+          }
+        ],
+        "first_batch": [],
+        "kind": "getMore",
+        "next_batch": [],
+        "phase": "setup",
+        "post_batch_resume_token": {
+          "_data": "batch:25",
+          "pos": 25
+        },
+        "resume_parameter": null,
+        "resume_token": null
+      },
+      "filter": [
+        {
+          "$match": {
+            "ns.coll": "orders_v2"
+          }
+        }
+      ],
+      "label": "new-filter",
+      "seen_before_pause": [
+        {
+          "ns": {
+            "coll": "orders_v2",
+            "db": "shop"
+          },
+          "operationType": "insert"
+        }
+      ]
+    }
+  ],
+  "command_listener_names": [
+    "aggregate",
+    "aggregate",
+    "aggregate",
+    "aggregate",
+    "getMore",
+    "getMore",
+    "getMore",
+    "getMore",
+    "aggregate",
+    "aggregate"
+  ],
+  "diagnosis": {
+    "filter_loss": {
+      "first_event_after_pause": null,
+      "lost_event": {
+        "_data": "event:20",
+        "pos": 20
+      },
+      "new_filter_first_event_after_pause": {
+        "_id": {
+          "_data": "event:30",
+          "pos": 30
+        },
+        "ns": {
+          "coll": "orders_v2",
+          "db": "shop"
+        },
+        "operationType": "insert"
+      },
+      "old_filter": [
+        {
+          "$match": {
+            "ns.coll": "orders"
+          }
+        }
+      ],
+      "verdict": "silent-loss"
+    },
+    "normal_empty_batch": {
+      "new_filter_events_before_pause": 1,
+      "old_filter_events_before_pause": 0,
+      "post_batch_resume_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "received_before_drop": true,
+      "verdict": "normal"
+    },
+    "token_legality": {
+      "invalid_attempt": {
+        "resume_parameter": "resumeAfter",
+        "resume_token": {
+          "_data": "invalidate:10",
+          "pos": 10
+        },
+        "server_error_code": 280,
+        "verdict": "illegal"
+      },
+      "legal_attempts": [
+        {
+          "label": "old-filter",
+          "resume_parameter": "startAfter",
+          "resume_token": {
+            "_data": "batch:25",
+            "pos": 25
+          },
+          "verdict": "legal"
+        },
+        {
+          "label": "new-filter",
+          "resume_parameter": "resumeAfter",
+          "resume_token": {
+            "_data": "batch:25",
+            "pos": 25
+          },
+          "verdict": "legal"
+        }
+      ]
+    },
+    "why_single_signal_is_misleading": {
+      "before_after_first_event": "The new-filter path delivered one event before the empty batch; the old-filter path delivered none. That before/after contrast, not P and not the empty batch, identifies the lost event.",
+      "empty_read_only": "Both attempts receive the same empty batch and the same P, so an empty-read-only check cannot distinguish a real gap from a normal poll.",
+      "resume_token_only": "Both legal attempts expose the identical P, so a token-only check calls the old-filter path healthy even though it never delivers the first new-collection event."
+    }
+  },
+  "first_transition": {
+    "resume_parameter": "resumeAfter",
+    "resume_token": {
+      "_data": "invalidate:10",
+      "pos": 10
+    }
+  },
+  "invalidate_event": {
+    "_id": {
+      "_data": "invalidate:10",
+      "pos": 10
+    },
+    "ns": {
+      "coll": "orders",
+      "db": "shop"
+    },
+    "operationType": "invalidate"
+  },
+  "pause_observations": {
+    "new-filter": {
+      "batch_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "cursor_alive": true,
+      "events_seen_before_pause": [
+        {
+          "ns": {
+            "coll": "orders_v2",
+            "db": "shop"
+          },
+          "operationType": "insert"
+        }
+      ],
+      "resume_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "token_matches_empty_batch": true
+    },
+    "old-filter": {
+      "batch_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "cursor_alive": true,
+      "events_seen_before_pause": [],
+      "resume_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "token_matches_empty_batch": true
+    }
+  },
+  "records": [
+    {
+      "collection": "orders",
+      "cursor_id": 101,
+      "error_code": null,
+      "filter": [],
+      "first_batch": [
+        "invalidate"
+      ],
+      "kind": "aggregate",
+      "next_batch": [],
+      "phase": "setup",
+      "post_batch_resume_token": null,
+      "resume_parameter": null,
+      "resume_token": null
+    },
+    {
+      "collection": "orders",
+      "cursor_id": null,
+      "error_code": 280,
+      "filter": [],
+      "first_batch": [],
+      "kind": "aggregate",
+      "next_batch": [],
+      "phase": "setup",
+      "post_batch_resume_token": null,
+      "resume_parameter": "resumeAfter",
+      "resume_token": {
+        "_data": "invalidate:10",
+        "pos": 10
+      }
+    },
+    {
+      "collection": "orders_v2",
+      "cursor_id": 102,
+      "error_code": null,
+      "filter": [
+        {
+          "$match": {
+            "ns.coll": "orders"
+          }
+        }
+      ],
+      "first_batch": [],
+      "kind": "aggregate",
+      "next_batch": [],
+      "phase": "setup",
+      "post_batch_resume_token": null,
+      "resume_parameter": "startAfter",
+      "resume_token": {
+        "_data": "invalidate:10",
+        "pos": 10
+      }
+    },
+    {
+      "collection": "orders_v2",
+      "cursor_id": 103,
+      "error_code": null,
+      "filter": [
+        {
+          "$match": {
+            "ns.coll": "orders_v2"
+          }
+        }
+      ],
+      "first_batch": [
+        "insert"
+      ],
+      "kind": "aggregate",
+      "next_batch": [],
+      "phase": "setup",
+      "post_batch_resume_token": null,
+      "resume_parameter": "startAfter",
+      "resume_token": {
+        "_data": "invalidate:10",
+        "pos": 10
+      }
+    },
+    {
+      "collection": "orders_v2",
+      "cursor_id": 102,
+      "error_code": null,
+      "filter": [
+        {
+          "$match": {
+            "ns.coll": "orders"
+          }
+        }
+      ],
+      "first_batch": [],
+      "kind": "getMore",
+      "next_batch": [],
+      "phase": "setup",
+      "post_batch_resume_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "resume_parameter": null,
+      "resume_token": null
+    },
+    {
+      "collection": "orders_v2",
+      "cursor_id": 103,
+      "error_code": null,
+      "filter": [
+        {
+          "$match": {
+            "ns.coll": "orders_v2"
+          }
+        }
+      ],
+      "first_batch": [],
+      "kind": "getMore",
+      "next_batch": [],
+      "phase": "setup",
+      "post_batch_resume_token": {
+        "_data": "batch:25",
+        "pos": 25
+      },
+      "resume_parameter": null,
+      "resume_token": null
+    },
+    {
+      "collection": "orders_v2",
+      "cursor_id": 104,
+      "error_code": null,
+      "filter": [
+        {
+          "$match": {
+            "ns.coll": "orders"
+          }
+        }
+      ],
+      "first_batch": [],
+      "kind": "aggregate",
+      "next_batch": [],
+      "phase": "resume",
+      "post_batch_resume_token": null,
+      "resume_parameter": "startAfter",
+      "resume_token": {
+        "_data": "batch:25",
+        "pos": 25
+      }
+    },
+    {
+      "collection": "orders_v2",
+      "cursor_id": 105,
+      "error_code": null,
+      "filter": [
+        {
+          "$match": {
+            "ns.coll": "orders_v2"
+          }
+        }
+      ],
+      "first_batch": [
+        "insert"
+      ],
+      "kind": "aggregate",
+      "next_batch": [],
+      "phase": "resume",
+      "post_batch_resume_token": null,
+      "resume_parameter": "resumeAfter",
+      "resume_token": {
+        "_data": "batch:25",
+        "pos": 25
+      }
+    }
+  ],
+  "resume_parameters": {
+    "new-filter": "resumeAfter",
+    "old-filter": "startAfter"
+  },
+  "resume_tokens": {
+    "new-filter": {
+      "_data": "batch:25",
+      "pos": 25
+    },
+    "old-filter": {
+      "_data": "batch:25",
+      "pos": 25
+    }
+  }
+}
