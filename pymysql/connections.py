@@ -1404,6 +1404,7 @@ class MySQLResult:
         # After much reading on the MySQL protocol, it appears that there is,
         # in fact, no way to stop MySQL from sending all the data after
         # executing a query, so we just spin, and wait for an EOF packet.
+        discarded = 0
         while self.unbuffered_active:
             try:
                 packet = self.connection._read_packet()
@@ -1415,13 +1416,16 @@ class MySQLResult:
                     # if the query timed out we can simply ignore this error
                     self.unbuffered_active = False
                     self.connection = None
-                    return
+                    return discarded
 
                 raise
 
             if self._check_packet_is_eof(packet):
                 self.unbuffered_active = False
                 self.connection = None  # release reference to kill cyclic reference.
+            else:
+                discarded += 1
+        return discarded
 
     def _read_rowdata_packet(self):
         """Read a rowdata packet for each data row in the result set."""

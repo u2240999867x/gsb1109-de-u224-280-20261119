@@ -12,6 +12,9 @@ Cursor Objects
 .. autoclass:: SSCursor
    :members:
 
+.. autoclass:: ResultSetRecord
+   :members:
+
 .. autoclass:: DictCursor
    :members:
 

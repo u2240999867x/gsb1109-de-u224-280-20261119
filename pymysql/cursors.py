@@ -1,7 +1,65 @@
 import re
 import warnings
+from dataclasses import dataclass
 
 from . import err
+
+#: A result set is still being read.
+RESULT_SET_READING = "reading"
+
+#: A result set reached its natural end (EOF).
+RESULT_SET_COMPLETED = "completed"
+
+#: A result set was left before EOF, e.g. by nextset() or close().
+RESULT_SET_ABANDONED = "abandoned"
+
+#: Reading a result set raised an error.
+RESULT_SET_FAILED = "failed"
+
+
+@dataclass
+class ResultSetRecord:
+    """Delivery state for one column-bearing result set.
+
+    ``delivered_rows`` counts only rows returned to the caller by
+    ``fetchone()``, ``fetchmany()``, ``fetchall()`` or iteration. Rows
+    consumed by ``scroll()`` or discarded while moving to another result
+    set are not included.
+
+    The ``status`` is one of :data:`RESULT_SET_READING`,
+    :data:`RESULT_SET_COMPLETED`, :data:`RESULT_SET_ABANDONED`, or
+    :data:`RESULT_SET_FAILED`. A failed read stays failed even if later
+    cleanup successfully drains the rest of the result set.
+    """
+
+    index: int
+    delivered_rows: int = 0
+    skipped_rows: int = 0
+    discarded_rows: int = 0
+    status: str = RESULT_SET_READING
+
+    @property
+    def rowcount(self):
+        """Alias for :attr:`delivered_rows`."""
+        return self.delivered_rows
+
+    @property
+    def end_status(self):
+        """Alias for :attr:`status`."""
+        return self.status
+
+    @property
+    def completed(self):
+        return self.status == RESULT_SET_COMPLETED
+
+    @property
+    def abandoned(self):
+        return self.status == RESULT_SET_ABANDONED
+
+    @property
+    def failed(self):
+        return self.status == RESULT_SET_FAILED
+
 
 #: Regular expression for :meth:`Cursor.executemany`.
 #: executemany only supports simple bulk insert.
@@ -414,21 +472,144 @@ class SSCursor(Cursor):
     def _conv_row(self, row):
         return row
 
+    def __init__(self, connection):
+        super().__init__(connection)
+        self._result_sets = []
+        self._current_result_set = None
+        self._record_result_sets = True
+
+    @property
+    def result_sets(self):
+        """Records for column-bearing result sets entered by this cursor.
+
+        The records are kept after :meth:`close` so that delivery and end
+        status can be inspected later.
+        """
+        return self._result_sets
+
+    @property
+    def result_set_records(self):
+        """Alias for :attr:`result_sets`."""
+        return self._result_sets
+
+    def get_result_set_records(self):
+        """Return a copy of the per-result-set delivery records."""
+        return list(self._result_sets)
+
+    def _do_get_result(self):
+        super()._do_get_result()
+        self._current_result_set = None
+        if (
+            self._record_result_sets
+            and self._result is not None
+            and self._result.description is not None
+        ):
+            self._current_result_set = ResultSetRecord(len(self._result_sets))
+            self._result_sets.append(self._current_result_set)
+
+    def _clear_result(self):
+        super()._clear_result()
+        self._current_result_set = None
+
+    def _record_delivered(self, count):
+        record = getattr(self, "_current_result_set", None)
+        if count and record is not None:
+            record.delivered_rows += count
+
+    def _record_skipped(self, count):
+        record = getattr(self, "_current_result_set", None)
+        if count and record is not None:
+            record.skipped_rows += count
+
+    def _mark_completed(self):
+        record = getattr(self, "_current_result_set", None)
+        if record is not None and record.status not in (
+            RESULT_SET_FAILED,
+            RESULT_SET_ABANDONED,
+        ):
+            record.status = RESULT_SET_COMPLETED
+
+    def _mark_failed(self):
+        record = getattr(self, "_current_result_set", None)
+        if record is not None and record.status == RESULT_SET_READING:
+            record.status = RESULT_SET_FAILED
+
+    def _mark_abandoned(self):
+        record = getattr(self, "_current_result_set", None)
+        if record is not None and record.status != RESULT_SET_FAILED:
+            record.status = RESULT_SET_ABANDONED
+
+    def _finish_current_result_set(self):
+        """Discard unread rows of the current result set.
+
+        Returns the number of row packets discarded.
+        """
+        result = self._result
+        if result is None or not result.unbuffered_active:
+            # The EOF packet was already consumed, so the result set
+            # completed naturally. Nothing was skipped by this operation.
+            self._mark_completed()
+            return 0
+
+        discarded = result._finish_unbuffered_query()
+        record = self._current_result_set
+        if record is not None:
+            record.discarded_rows += discarded
+            if discarded:
+                self._mark_abandoned()
+            else:
+                self._mark_completed()
+        return discarded
+
     def close(self):
-        conn = self.connection
+        conn = getattr(self, "connection", None)
         if conn is None:
             return
 
-        if self._result is not None and self._result is conn._result:
-            self._result._finish_unbuffered_query()
+        result = getattr(self, "_result", None)
+        if result is not None and result is getattr(conn, "_result", None):
+            if result.unbuffered_active:
+                try:
+                    self._finish_current_result_set()
+                except Exception:
+                    self._mark_failed()
+                    raise
 
+        try:
+            self._record_result_sets = False
+            while self.nextset():
+                pass
+        finally:
+            self._record_result_sets = True
+            self.connection = None
+
+    __del__ = close
+
+    def execute(self, query, args=None):
+        conn = self.connection
+        if (
+            self._result is not None
+            and conn is not None
+            and self._result is conn._result
+            and self._result.unbuffered_active
+        ):
+            warnings.warn("Previous unbuffered result was left incomplete")
+            self._finish_current_result_set()
+
+        # Remaining result sets belong to the previous execution and are
+        # drained automatically, not entered by the caller.
+        self._record_result_sets = False
         try:
             while self.nextset():
                 pass
         finally:
-            self.connection = None
+            self._record_result_sets = True
 
-    __del__ = close
+        if args is not None:
+            query = self._mogrify(query, args)
+        result = self._query(query)
+        self._executed = query
+        return result
 
     def _query(self, q):
         conn = self._get_db()
@@ -438,11 +619,38 @@ class SSCursor(Cursor):
         return self.rowcount
 
     def nextset(self):
-        return self._nextset(unbuffered=True)
+        conn = self._get_db()
+        current_result = self._result
+        if current_result is None or current_result is not conn._result:
+            return None
+
+        if current_result.unbuffered_active:
+            try:
+                self._finish_current_result_set()
+            except Exception:
+                self._mark_failed()
+                raise
+
+        if not current_result.has_next:
+            return None
+
+        self._result = None
+        self._clear_result()
+        conn.next_result(unbuffered=True)
+        self._do_get_result()
+        return True
 
     def read_next(self):
         """Read next row."""
-        return self._conv_row(self._result._read_rowdata_packet_unbuffered())
+        try:
+            row = self._result._read_rowdata_packet_unbuffered()
+            row = self._conv_row(row)
+        except Exception:
+            self._mark_failed()
+            raise
+        if row is None:
+            self._mark_completed()
+        return row
 
     def fetchone(self):
         """Fetch next row."""
@@ -452,6 +660,7 @@ class SSCursor(Cursor):
             self.warning_count = self._result.warning_count
             return None
         self.rownumber += 1
+        self._record_delivered(1)
         return row
 
     def fetchall(self):
@@ -460,7 +669,17 @@ class SSCursor(Cursor):
         it is buffered. See fetchall_unbuffered(), if you want an unbuffered
         generator version of this method.
         """
-        return list(self.fetchall_unbuffered())
+        self._check_executed()
+        rows = []
+        while True:
+            row = self.read_next()
+            if row is None:
+                self.warning_count = self._result.warning_count
+                break
+            rows.append(row)
+            self.rownumber += 1
+        self._record_delivered(len(rows))
+        return rows
 
     def fetchall_unbuffered(self):
         """
@@ -488,6 +707,7 @@ class SSCursor(Cursor):
             # Django expects () for EOF.
             # https://github.com/django/django/blob/0c1518ee429b01c145cf5b34eab01b0b92f8c246/django/db/backends/mysql/features.py#L8
             return ()
+        self._record_delivered(len(rows))
         return rows
 
     def scroll(self, value, mode="relative"):
@@ -499,21 +719,26 @@ class SSCursor(Cursor):
                     "Backwards scrolling not supported by this cursor"
                 )
 
-            for _ in range(value):
-                self.read_next()
-            self.rownumber += value
+            end = self.rownumber + value
         elif mode == "absolute":
             if value < self.rownumber:
                 raise err.NotSupportedError(
                     "Backwards scrolling not supported by this cursor"
                 )
 
-            end = value - self.rownumber
-            for _ in range(end):
-                self.read_next()
-            self.rownumber = value
+            end = value
         else:
             raise err.ProgrammingError("unknown scroll mode %s" % mode)
+
+        skipped = 0
+        while self.rownumber < end:
+            row = self.read_next()
+            if row is None:
+                break
+            skipped += 1
+            self.rownumber += 1
+        self._record_skipped(skipped)
+        self.rownumber = end
 
 
 class SSDictCursor(DictCursorMixin, SSCursor):
