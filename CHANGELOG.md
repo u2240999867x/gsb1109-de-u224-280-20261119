@@ -2,6 +2,16 @@
 
 ## Development version
 
+New features and improvements:
+
+- Added ``geopandas.assign_nearest_stations`` for capacity constrained nearest
+  station assignment.  Each sensor gets a fixed nearest-plus-tolerance
+  candidate band capped by ``max_distance``; the assignment maximises the
+  number of connected sensors and resolves ties by a stable sensor order and
+  station priority.  The result exposes matched, unmatched, candidate and
+  station-usage frames for auditing.  Regular ``sjoin_nearest`` calls are
+  unchanged.
+
 Bug fixes:
 
 - Fix the colorbar being shrunk when plotting with a ``"compressed"`` matplotlib

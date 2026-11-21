@@ -13,6 +13,8 @@ from geopandas.io.sql import _read_postgis as read_postgis
 from geopandas.tools import (
     sjoin,
     sjoin_nearest,
+    assign_nearest_stations,
+    StationAssignment,
     overlay,
     clip,
     geocode,

@@ -9,6 +9,7 @@ Tools
    make_grid
    sjoin
    sjoin_nearest
+   assign_nearest_stations
    overlay
    clip
    geocode

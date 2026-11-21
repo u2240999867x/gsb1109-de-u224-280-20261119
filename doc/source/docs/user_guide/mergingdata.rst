@@ -163,3 +163,53 @@ If you can, it is highly recommended that you use this parameter.
 **distance_col**
 
 If set, the resultant GeoDataFrame will include a column with this name containing the computed distances between an input geometry and the nearest geometry.
+
+Capacity constrained station assignment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`geopandas.assign_nearest_stations` is a batch counterpart of
+:meth:`GeoDataFrame.sjoin_nearest` for access networks, where every station can
+accept only a limited number of sensors.  It returns a
+:class:`geopandas.StationAssignment` with four frames:
+
+* ``matched`` -- one row per connected sensor in the declared stable sensor
+  order, including the selected ``station_index``, the assigned ``distance``
+  and the station geometry;
+* ``unmatched`` -- every sensor that could not be connected, with ``reason``
+  either ``"no_candidate"`` or ``"capacity_exhausted"``, plus
+  ``nearest_distance`` and ``candidate_count`` for a direct look-up;
+* ``candidates`` -- one row per sensor/station pair inside the sensor's fixed
+  candidate band, with a ``selected`` flag, so both accepted and rejected
+  alternatives can be audited;
+* ``station_usage`` -- ``capacity``, ``working``, ``assigned`` and
+  ``remaining`` slots per station.
+
+**Candidate bands**
+
+Each sensor's band is anchored at that sensor's own nearest *working* station
+inside ``max_distance`` and widened by ``tolerance``; the result is capped by
+``max_distance``.  A station belongs to the band when its distance is at most
+the anchor, or exceeds it by strictly less than ``tolerance``.  Because the
+band is fixed before capacity is considered, a busy station is never replaced
+by a more distant one, and a station outside ``max_distance`` never becomes a
+candidate -- not even a high-priority station.
+
+**Assignment order**
+
+The assignment first maximises how many sensors are connected.  Among all
+maximum assignments, sensors are fixed in the stable order given by
+``sensor_order`` (defaulting to the sensor index labels) and each sensor takes
+its most preferred station that still leaves the global maximum achievable.
+Station preference is the optional ``station_priority`` value (lower wins),
+then the stable station index label.  A sensor is therefore never allowed to
+take a station that another sensor needs as its only option when doing so
+would reduce the number of connected sensors.
+
+**Swapping the two frames**
+
+The ``sensors`` and ``stations`` arguments can be passed in either order: the
+side of the ``capacity``, ``working``, ``station_priority`` and
+``sensor_order`` columns identifies each layer.  When only scalar arguments
+are used, set ``station_side="first"`` or ``"second"`` explicitly.  Ordinary
+:func:`geopandas.sjoin_nearest` calls are unaffected and keep their current
+behaviour.
