@@ -575,6 +575,51 @@ json_stream.load(f, tokenizer=some_tokenizer, **tokenizer_kwargs)
 
 The requests methods also accept a customer tokenizer parameter.
 
+### <a id="string-budgets"></a> String budgets for streaming validation
+
+`json_stream.validate_string_budgets()` streams a JSON document (for
+example a supplier catalog) and enforces caller-declared budgets on the
+decoded length of selected string fields, without buffering the whole
+document:
+
+```python
+import json_stream
+
+# JSON: {"orders": [{"title": "...", "title": "..."}, {"title": "..."}]}
+report = json_stream.validate_string_budgets(
+    f,
+    orders_path=("orders",),  # each element of this array is an "order"
+    field="title",            # budget every (decoded) "title" key in an order
+    field_limit=100,          # max decoded characters per title
+    order_quota=250,          # max combined decoded characters per order
+)
+```
+
+* Lengths are measured in decoded Unicode code points: a surrogate pair
+  escape (`\ud83d\ude00`), the same character written directly as UTF-8 and
+  an escaped control character (`\n`) each count as one character.
+* Keys are matched after decoding, so a key written as `\u0074itle`
+  matches the field name `title`.
+* The per-order quota only counts the declared field; repeated
+  occurrences of the field within an order each count, and the total
+  resets when the next order starts.
+* Validation stops at the first confirmable failure: an over-budget
+  value is rejected as soon as the first over-budget character has been
+  decoded, without waiting for the end of the string, and no further
+  data is pulled from the underlying stream. A value containing an
+  invalid escape is reported as an escape error, never as a budget
+  violation.
+
+On success the function returns a list of `OrderReport` tuples
+(`order_index`, `fields`, `total`) accounting for every budgeted field
+occurrence. On failure it raises `StringBudgetError` (a `ValueError`)
+whose `kind` attribute is `"field_limit"`, `"order_quota"` or
+`"escape"`, and whose `path`, `order_index` and `occurrence` attributes
+identify the offending value.
+
+Budget enforcement uses the pure-python tokenizer, so it works even when
+the Rust tokenizer extension is installed.
+
 
 # Writing
 

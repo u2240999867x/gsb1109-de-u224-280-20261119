@@ -87,7 +87,7 @@ def _ensure_text(stream):
     return stream
 
 
-def tokenize(stream):
+def tokenize(stream, string_hook=None):
     stream = _ensure_text(stream)
 
     def is_delimiter(char):
@@ -97,9 +97,10 @@ def tokenize(stream):
     unicode_buffer = ""
     completed = False
     now_token = ""
+    in_string_token = False
 
     def process_char(char):
-        nonlocal completed, now_token, unicode_buffer
+        nonlocal completed, now_token, unicode_buffer, in_string_token
         advance = True
         add_char = False
         next_state = state
@@ -124,6 +125,7 @@ def tokenize(stream):
                 now_token = (TokenType.OPERATOR, ":")
             elif char == "\"":
                 next_state = State.STRING
+                in_string_token = True
             elif char in "123456789":
                 next_state = State.INTEGER
                 add_char = True
@@ -426,6 +428,8 @@ def tokenize(stream):
 
         if add_char:
             token.append(char)
+            if string_hook is not None and in_string_token:
+                string_hook(char)
 
         return advance, next_state
     state = State.WHITESPACE
@@ -435,10 +439,15 @@ def tokenize(stream):
         try:
             advance, state = process_char(c)
         except ValueError as e:
+            if type(e) is not ValueError:
+                # an exception raised by string_hook (or any other ValueError
+                # subclass) propagates unchanged
+                raise
             raise ValueError("".join([e.args[0], " at index {}".format(index)]))
         if completed:
             completed = False
             token = []
+            in_string_token = False
             yield now_token
         if advance:
             c = stream.read(1)
