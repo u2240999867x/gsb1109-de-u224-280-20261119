@@ -65,3 +65,9 @@ JSON specification in ``model.json``.
 .. note::
 
     For a more detailed example, please refer to the Tutorial: :doc:`/examples/statsmodels_tutorial`
+
+.. toctree::
+    :maxdepth: 1
+    :hidden:
+
+    /variables/timebase

@@ -69,7 +69,14 @@ API Reference
    bids.variables.merge_collections
    bids.variables.load_variables
    bids.variables.merge_variables
+   bids.variables.TimeBaseContract
+   bids.variables.TimeBaseHandoff
+   bids.variables.TimeBaseImportResult
+   bids.variables.convert_event_table
+   bids.variables.import_timebase_handoff
+   bids.variables.merge_handoff_table
    bids.variables.io
+   bids.variables.timebase
    bids.variables.entities
    bids.variables.collections
    bids.variables.variables

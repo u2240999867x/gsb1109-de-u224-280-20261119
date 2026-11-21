@@ -1,6 +1,28 @@
 # ruff: noqa: D104
 from .collections import BIDSRunVariableCollection, BIDSVariableCollection, merge_collections
 from .io import load_variables
+from .timebase import (
+    STATUS_CONVERTED,
+    STATUS_KEPT,
+    STATUS_MISSING,
+    STATUS_NATIVE,
+    STATUS_OTHER_RUN,
+    STATUS_QUARANTINED,
+    STATUS_RECOMPUTED,
+    TimeBaseContract,
+    TimeBaseContractError,
+    TimeBaseError,
+    TimeBaseHandoff,
+    TimeBaseHandoffError,
+    TimeBaseImportResult,
+    convert_event_table,
+    convert_events,
+    import_handoff,
+    import_timebase_handoff,
+    merge_handoff_table,
+    read_handoff,
+    write_handoff,
+)
 from .variables import DenseRunVariable, SimpleVariable, SparseRunVariable, merge_variables
 
 __all__ = [
@@ -12,4 +34,24 @@ __all__ = [
     'merge_collections',
     'load_variables',
     'merge_variables',
+    'TimeBaseContract',
+    'TimeBaseError',
+    'TimeBaseContractError',
+    'TimeBaseHandoff',
+    'TimeBaseHandoffError',
+    'TimeBaseImportResult',
+    'STATUS_CONVERTED',
+    'STATUS_KEPT',
+    'STATUS_MISSING',
+    'STATUS_NATIVE',
+    'STATUS_OTHER_RUN',
+    'STATUS_QUARANTINED',
+    'STATUS_RECOMPUTED',
+    'convert_event_table',
+    'convert_events',
+    'import_timebase_handoff',
+    'import_handoff',
+    'merge_handoff_table',
+    'read_handoff',
+    'write_handoff',
 ]

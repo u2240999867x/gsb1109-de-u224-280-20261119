@@ -1,6 +1,16 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+* ENH: Add center time-base contracts for event imports.  ``BIDSDataFile.get_df``
+  and ``load_variables`` accept a ``timebase`` contract and share the same
+  conversion from the scanner-room clock to run-relative onsets.  Conversion
+  handoffs carry per-row evidence, keep unchanged converted rows, recompute
+  corrected runs from their original onsets, and list cross-run or
+  insufficient-evidence rows separately.
+
 Version 0.22.0 (April 22, 2026)
 -------------------------------
 

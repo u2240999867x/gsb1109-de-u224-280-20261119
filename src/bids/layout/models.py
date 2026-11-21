@@ -634,7 +634,15 @@ class BIDSDataFile(BIDSFile):
 
     __mapper_args__ = {'polymorphic_identity': 'data_file'}
 
-    def get_df(self, include_timing=True, adjust_onset=False, enforce_dtypes=True, **pd_args):
+    def get_df(
+        self,
+        include_timing=True,
+        adjust_onset=False,
+        enforce_dtypes=True,
+        timebase=None,
+        target=None,
+        **pd_args,
+    ):
         """Return the contents of a tsv file as a pandas DataFrame.
 
         Parameters
@@ -651,6 +659,15 @@ class BIDSDataFile(BIDSFile):
             If True, enforces the data types defined in
             the BIDS spec on core columns (e.g., subject_id and session_id
             must be represented as strings).
+        timebase : :obj:`bids.variables.TimeBaseContract` or dict or str, optional
+            A center time-base contract.  If provided, event onsets are
+            converted from the center's room clock to run-relative onsets
+            before the DataFrame is returned.  The same conversion is used
+            by :func:`bids.variables.load_variables`, so a table read and
+            the model event variables always agree.
+        target : dict or int or str, optional
+            The run this table is being read for, used when resolving the
+            contract's per-run offset.  Defaults to the file's own entities.
         pd_args : dict
             Optional keyword arguments to pass onto pd.read_csv().
 
@@ -689,6 +706,16 @@ class BIDSDataFile(BIDSFile):
                 if adjust_onset:
                     onsets += md['StartTime']
                 data.insert(0, 'onset', onsets)
+
+        if timebase is not None:
+            from ..variables.timebase import convert_event_table
+
+            target = self.entities if target is None else target
+            result = convert_event_table(data, timebase, target=target, source=self.path)
+            # Keep the reconciliation table available for callers that need
+            # to audit a conversion.  The source file is never modified.
+            self.timebase_result = result
+            data = result.rows.reset_index(drop=True)
 
         return data
 

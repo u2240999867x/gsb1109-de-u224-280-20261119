@@ -23,6 +23,7 @@ def load_variables(  # noqa: D417
     dataset=None,
     scope='all',
     regex_search=None,
+    timebase=None,
     **kwargs,
 ):
     """A convenience wrapper for one or more load_*_variables() calls.
@@ -53,6 +54,11 @@ def load_variables(  # noqa: D417
     scope : str or list
         The scope of the space to search for variables. See
         docstring for BIDSLayout for details and valid predefined values.
+    timebase : :obj:`bids.variables.TimeBaseContract` or dict or str, optional
+        A center time-base contract.  When provided, event onsets are
+        converted from the center's room clock to run-relative onsets using
+        the same implementation as :meth:`bids.layout.BIDSDataFile.get_df`.
+        When omitted, event files are read exactly as before.
     kwargs : dict
         Optional keyword arguments to pass onto the individual
         load_*_variables() calls.
@@ -96,6 +102,7 @@ def load_variables(  # noqa: D417
     if len(type_flags) < 4:
         _kwargs = kwargs.copy()
         _kwargs.update(type_flags)
+        _kwargs['timebase'] = timebase
         dataset = _load_time_variables(layout, dataset, scope=scope, **_kwargs)
 
     for t in {'scans', 'sessions', 'participants'} & set(types):
@@ -141,6 +148,7 @@ def _load_time_variables(  # noqa: D417
     regressors=True,
     skip_empty=True,
     scope='all',
+    timebase=None,
     **selectors,
 ):
     """Loads all variables found in *_events.tsv files and returns them as a
@@ -179,6 +187,11 @@ def _load_time_variables(  # noqa: D417
     scope : str or list
         The scope of the space to search for variables. See
         docstring for BIDSLayout for details and valid predefined values.
+    timebase : :obj:`bids.variables.TimeBaseContract` or dict or str, optional
+        A center time-base contract.  When provided, event onsets are
+        converted with the same implementation used by
+        :meth:`bids.layout.BIDSDataFile.get_df`.  When omitted, event files
+        are read exactly as before.
     selectors : dict
         Optional keyword arguments passed on to the
         BIDSLayout instance's get() method; can be used to constrain
@@ -290,8 +303,31 @@ def _load_time_variables(  # noqa: D417
                 full_search=True,
                 ignore_strict_entities=['suffix', 'extension'],
             )
-            for _data in dfs:
-                _data = pd.read_csv(_data, sep='\t')
+            for events_path in dfs:
+                _data = pd.read_csv(events_path, sep='\t')
+                reserved_columns = set()
+                if timebase is not None:
+                    from .timebase import coerce_contract, convert_event_table
+
+                    contract = coerce_contract(timebase)
+                    reserved_columns = contract.reserved_columns
+                    # The run's entities are the target; a per-file contract
+                    # entry or a target column can override it.  The same
+                    # converter is used by BIDSDataFile.get_df.
+                    timebase_result = convert_event_table(
+                        _data,
+                        contract,
+                        target=entities,
+                        source=events_path,
+                    )
+                    _data = timebase_result.rows
+                    # Keep the audit trail on the run node for callers that
+                    # need to reconcile or report on the conversion.  A run
+                    # can match more than one events file, so combine them.
+                    existing = getattr(run, 'timebase_results', None) or []
+                    existing.append(timebase_result)
+                    run.timebase_results = existing
+                    run.timebase_result = existing[0] if len(existing) == 1 else None
                 if 'amplitude' in _data.columns:
                     if (
                         _data['amplitude'].astype(int) == 1
@@ -310,7 +346,12 @@ def _load_time_variables(  # noqa: D417
                 # because we used to do it manually here.
                 # We also converted to numeric, but this is now irrelevant.
 
-                _cols = columns or list(set(_data.columns.tolist()) - {'onset', 'duration'})
+                _cols = columns or list(
+                    set(_data.columns.tolist())
+                    - {'onset', 'duration'}
+                    - reserved_columns
+                    - {'timebase_status', 'timebase_reason', 'timebase_source_row'}
+                )
 
                 # Construct a DataFrame for each extra column
                 for col in _cols:
