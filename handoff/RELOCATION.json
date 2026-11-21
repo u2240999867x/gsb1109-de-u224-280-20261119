@@ -1,0 +1,168 @@
+{
+  "db_copied_root_unchanged": {
+    "reported_root": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root",
+    "first_file": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+    "first_files": [
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json"
+    ],
+    "relpaths": {
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json": "configs/incoming_entities.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json": "dataset_description.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json": "dataset_description.json"
+    },
+    "get_file_relative": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/sub-01/anat/sub-01_T1w.nii.gz",
+    "derivatives": [
+      "derivatives/deriv_legacy",
+      "derivatives/deriv_modern"
+    ]
+  },
+  "db_copied_root_unchanged_warnings": [],
+  "moved_root_stale_db_root": {
+    "reported_root": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root",
+    "first_file": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+    "first_files": [
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json"
+    ],
+    "relpaths": {
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json": "configs/incoming_entities.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json": "dataset_description.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json": "dataset_description.json"
+    },
+    "get_file_relative": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/sub-01/anat/sub-01_T1w.nii.gz",
+    "derivatives": [
+      "derivatives/deriv_legacy",
+      "derivatives/deriv_modern"
+    ]
+  },
+  "moved_root_stale_db_root_warnings": [],
+  "moved_root_rewritten_layout_info": {
+    "reported_root": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/moved_root",
+    "first_file": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+    "first_files": [
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json"
+    ],
+    "relpaths": {
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/moved_root'"
+      },
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/moved_root'"
+      },
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/moved_root/derivatives/deriv_legacy'"
+      }
+    },
+    "get_file_relative": null,
+    "derivatives": [
+      "derivatives/deriv_legacy",
+      "derivatives/deriv_modern"
+    ]
+  },
+  "moved_root_rewritten_layout_info_warnings": [],
+  "missing_root_description_validate_true": {
+    "error": "BIDSValidationError",
+    "message": "'dataset_description.json' is missing from project root. Every valid BIDS dataset must have this file.\nExample contents of 'dataset_description.json': \n{\"Name\": \"Example dataset\", \"BIDSVersion\": \"1.0.2\"}"
+  },
+  "missing_root_description_validate_true_warnings": [],
+  "missing_root_description_validate_false": {
+    "reported_root": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_description",
+    "first_file": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+    "first_files": [
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json"
+    ],
+    "relpaths": {
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_description'"
+      },
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_description'"
+      },
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json": "dataset_description.json"
+    },
+    "get_file_relative": null,
+    "derivatives": [
+      "derivatives/deriv_legacy",
+      "derivatives/deriv_modern"
+    ]
+  },
+  "missing_root_description_validate_false_warnings": [],
+  "missing_derivative_description": {
+    "reported_root": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_deriv_description",
+    "first_file": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+    "first_files": [
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_modern/dataset_description.json"
+    ],
+    "relpaths": {
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_deriv_description'"
+      },
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_deriv_description'"
+      },
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_modern/dataset_description.json": "dataset_description.json"
+    },
+    "get_file_relative": null,
+    "derivatives": [
+      "derivatives/deriv_modern"
+    ]
+  },
+  "missing_derivative_description_warnings": [],
+  "missing_derivative_description_child_db_still_present": true,
+  "missing_config_file": {
+    "reported_root": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_config",
+    "first_file": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+    "first_files": [
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json",
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json"
+    ],
+    "relpaths": {
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/configs/incoming_entities.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_config'"
+      },
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json": {
+        "error": "ValueError",
+        "message": "'/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/dataset_description.json' is not in the subpath of '/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/_relocation_scratch/root_no_config'"
+      },
+      "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root/derivatives/deriv_legacy/dataset_description.json": "dataset_description.json"
+    },
+    "get_file_relative": null,
+    "derivatives": [
+      "derivatives/deriv_legacy",
+      "derivatives/deriv_modern"
+    ]
+  },
+  "missing_config_file_warnings": [],
+  "current_root_validate_true": {
+    "files": [
+      "dataset_description.json",
+      "sub-01/anat/sub-01_T1w.nii.gz",
+      "sub-01/micr/sub-01_sample-A_stain-HE_TEM.png"
+    ],
+    "orphan_included": false
+  },
+  "original_root": "/Users/guo/Documents/GSB/1109/batches/accounts70-u224-20261122/control/questions/GSB1109-20261119-U224-DE-PY-170/workspace/handoff/.work/archive_root",
+  "interpretation": {
+    "absolute_paths": "files.path / tags.file_path / associations store absolute build-time paths. Copying or moving the archive without rewriting every row makes the index report files from the old machine, even after layout_info.root is edited.",
+    "root_binding": "layout_info.root is the only location field, and it is authoritative on reopen: the root argument is ignored.",
+    "descriptions_are_external": "dataset_description.json is read live on every open and is never stored in the DB; deleting it breaks reopen under the default validate=True and silently removes a derivative child under derivatives/."
+  }
+}
