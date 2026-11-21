@@ -1,5 +1,7 @@
 import argparse
 from parquet_tools.commands import show, csv, inspect
+from parquet_tools.commands.partitioned_cli import (
+    configure_receipt_parser, configure_report_parser)
 
 
 def main() -> None:
@@ -20,6 +22,16 @@ def main() -> None:
         'inspect',
         help='Inspect parquet file. see `inspect -h`',
         description='Inspect parquet file.'))
+    configure_report_parser(subparsers.add_parser(
+        'report',
+        help='Project measurement rows from a declared-partition archive.',
+        description='Read measurement rows from a partitioned archive with '
+                    'region reconciliation.'))
+    configure_receipt_parser(subparsers.add_parser(
+        'receipt',
+        help='Emit a region reconciliation receipt for a partitioned archive.',
+        description='Reconcile physical region values against the path '
+                    'declaration across all row groups.'))
 
     args = parser.parse_args()
     if hasattr(args, 'handler'):

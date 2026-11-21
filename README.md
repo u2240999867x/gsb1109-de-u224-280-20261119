@@ -131,3 +131,41 @@ $ parquet-tools csv s3://bucket-name/test.parquet |csvq "select one, three where
 | 2.5   | True  |
 +-------+-------+
 ```
+
+## Declared-partition archives
+
+Archives often embed partition columns such as `date` and `region` in the
+directory layout (e.g. `archive/region=us+east/date=2026-01-01/part.parquet`),
+while files may also carry their own physical `region` column. The `report`
+and `receipt` commands understand a declared business root and reconcile both
+sources. Paths outside the business root are ignored, and each directory
+segment is percent-decoded exactly once.
+
+```bash
+# Measurement projection with ordinary region/date filtering.
+$ parquet-tools report ./archive \
+    --partition-columns date,region \
+    --columns measurement \
+    --filter date==2026-01-01 --filter region==us+east \
+    --head 100
+
+# Full region reconciliation across every row group (local or S3).
+$ parquet-tools receipt s3://bucket-name/archive \
+    --filter date==2026-01-02
+```
+
+Reconciliation rules:
+
+- A completely missing physical `region` column is filled from the path; a
+  physical null is reported separately instead.
+- A row group whose trusted statistics prove one non-null region equal to the
+  path is accepted without decoding the region column. Missing, mixed or
+  null-bearing groups are decoded and checked row by row.
+- Report filters only annotate filtered rows; contradictions are never hidden,
+  and receipts are never truncated because the caller already sampled enough
+  rows. Unfinished (`_incomplete`) and failing files contribute no formal
+  report rows, even when their earlier groups matched.
+- Repeated partition layers with different values fail with the concrete
+  offending path. Reads that declare no partition columns still use the
+  original `show`/`csv`/`inspect` behavior unchanged.
+
