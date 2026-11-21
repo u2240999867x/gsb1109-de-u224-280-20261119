@@ -72,6 +72,32 @@ $ parquet-tools show s3://bucket-name/prefix/*
 $ parquet-tools inspect /path/to/parquet
 ```
 
+For `s3://` inputs, `inspect` reads only the object's trailer and footer by
+byte ranges; it never downloads data pages or the whole object.
+
+The simple report needs only the leading footer fields through `created_by`.
+A later `--detail` run can finish the report from a saved credential:
+
+```bash
+# first pass: simple structure for scheduling, save the check credential
+$ parquet-tools inspect --save-credential check.json s3://bucket/archive.parquet
+
+# later: detailed report; reads only the footer bytes still missing
+$ parquet-tools inspect --detail --credential check.json \
+    --save-credential check.json s3://bucket/archive.parquet
+```
+
+A credential records the checked endpoint, bucket, key, object size, ETag and
+(when available) `VersionId`, plus the exact footer ranges that were verified.
+It is tied to that one object version and is rejected for another endpoint or
+key.  If the object was replaced, a service that can serve the original
+version's ranges resumes against the original; a service that only offers
+reliable conditional reads keeps the original simple report's attribution and
+marks the detail as unavailable rather than mixing in the new version.
+
+Use `--full-download` to opt out and download the object as before.
+Local files are always read normally.
+
 <details>
 
 <summary>Inspect output</summary>

@@ -1,17 +1,25 @@
 import os
 import sys
 from argparse import ArgumentParser, Namespace
-from typing import List
 
-import pyarrow.parquet as pq
-from colorama import Fore, Style
-from parquet_tools.parquet.reader import get_filemetadata
+from parquet_tools.parquet.credential import (
+    CredentialError,
+    InspectionCredential,
+)
+from parquet_tools.parquet.remote import S3Store
+from parquet_tools.parquet.report import (
+    obj_to_string,
+    render_detail_from_file,
+    render_simple_from_file,
+)
+from parquet_tools.parquet.tail import InspectionError, inspect_tail
 
-from .utils import FileNotFoundException, ParquetFile, to_parquet_file
-
-
-def dedent(text: str) -> str:
-    return '\n'.join(map(lambda x: x.strip(), text.split('\n')))
+from .utils import (
+    FileNotFoundException,
+    ParquetFile,
+    S3ParquetFile,
+    to_parquet_file,
+)
 
 
 def configure_parser(paser: ArgumentParser) -> ArgumentParser:
@@ -35,6 +43,21 @@ def configure_parser(paser: ArgumentParser) -> ArgumentParser:
                        required=False,
                        default=os.environ.get('ENDPOINT_URL'),
                        help='A custom S3 endpoint URL')
+    paser.add_argument('--credential',
+                       type=str,
+                       required=False,
+                       default=None,
+                       help='Path to a saved inspection credential to resume from')
+    paser.add_argument('--save-credential',
+                       type=str,
+                       required=False,
+                       default=None,
+                       help='Path to write the inspection credential after this run')
+    paser.add_argument('--full-download',
+                       action='store_true',
+                       required=False,
+                       default=False,
+                       help='Explicitly download the whole S3 object instead of reading only its footer')
 
     paser.set_defaults(handler=_cli)
     return paser
@@ -44,106 +67,97 @@ def _cli(args: Namespace) -> None:
     pf: ParquetFile = to_parquet_file(file_exp=args.file, awsprofile=args.awsprofile, endpoint_url=args.endpoint_url)
     if pf.is_wildcard():
         print('Cannot use wildcard for inspection.', file=sys.stderr)
-    else:
-        try:
-            with pf.get_local_path() as local_path:
-                if args.detail:
-                    _execute_detail(
-                        filename=local_path,
-                    )
-                else:
-                    _execute_simple(
-                        filename=local_path,
-                    )
-        except FileNotFoundException as e:
-            print(str(e), file=sys.stderr)
-
-
-def _execute_simple(filename: str) -> None:
-    pq_file: pq.ParquetFile = pq.ParquetFile(filename)
-    file_meta: pq.FileMetaData = pq_file.metadata
-    print(_simple_meta_expression(file_meta))
-    file_schema: pq.ParquetSchema = pq_file.schema
-    print(_simple_schema_expression(file_meta, file_schema))
-
-
-def _simple_meta_expression(file_meta: pq.FileMetaData) -> str:
-    return dedent(f'''
-    ############ file meta data ############
-    created_by: {file_meta.created_by}
-    num_columns: {file_meta.num_columns}
-    num_rows: {file_meta.num_rows}
-    num_row_groups: {file_meta.num_row_groups}
-    format_version: {file_meta.format_version}
-    serialized_size: {file_meta.serialized_size}
-    ''')
-
-
-def _simple_schema_expression(file_meta, schema) -> str:
-    columns: List[str] = schema.names
-    columns_exp = '\n'.join(columns)
-
-    exp = dedent(f'''
-    ############ Columns ############
-    {columns_exp}
-    ''')
-    for i, column in enumerate(columns):
-        col = schema.column(i)
-        col_meta = file_meta.row_group(0).column(i)
-        if col_meta.total_uncompressed_size:
-            col_compression_space_saving_ratio = 1 - (col_meta.total_compressed_size / col_meta.total_uncompressed_size)
-            col_compression_space_saving_pct = col_compression_space_saving_ratio * 100
-            col_compression_space_saving_pct_str = f"{col_compression_space_saving_pct:.0f}%"
+        return
+    if isinstance(pf, S3ParquetFile) and not args.full_download:
+        _cli_s3_tail(pf, args)
+        return
+    try:
+        if isinstance(pf, S3ParquetFile):
+            with pf.get_local_path_with_version() as (local_path, version):
+                _write_report(local_path, args)
+                if args.save_credential:
+                    _save_download_credential(pf, version, args.save_credential, args.detail)
         else:
-            col_compression_space_saving_pct_str = 'N/A'
-        col_compression = f"{col_meta.compression} (space_saved: {col_compression_space_saving_pct_str})"
-        exp += dedent(f'''
-        ############ Column({column}) ############
-        name: {col.name}
-        path: {col.path}
-        max_definition_level: {col.max_definition_level}
-        max_repetition_level: {col.max_repetition_level}
-        physical_type: {col.physical_type}
-        logical_type: {col.logical_type}
-        converted_type (legacy): {col.converted_type}
-        compression: {col_compression}
-        ''')
-
-    return exp
+            with pf.get_local_path() as local_path:
+                _write_report(local_path, args)
+    except FileNotFoundException as e:
+        print(str(e), file=sys.stderr)
 
 
-def _execute_detail(filename: str) -> None:
-    print(_obj_to_string(get_filemetadata(filename), sys.stdout.isatty()))
+def _write_report(local_path: str, args: Namespace) -> None:
+    if args.detail:
+        _execute_detail(filename=local_path)
+    else:
+        _execute_simple(filename=local_path)
+
+
+def _save_download_credential(pf: S3ParquetFile, version: dict, path: str, detail: bool) -> None:
+    """Record the identity of an explicit full download for later tail reads.
+
+    Only object identity and the checked key/endpoint are recorded; the
+    downloaded bytes themselves are not persisted.
+    """
+    from parquet_tools.parquet.credential import EndpointRef, ObjectIdentity
+
+    identity = ObjectIdentity(
+        size=int(version['size']),
+        etag=version.get('etag'),
+        version_id=version.get('version_id'),
+    )
+    credential = InspectionCredential(
+        endpoint=EndpointRef.for_client(pf.endpoint_url, None),
+        bucket=pf.bucket,
+        key=pf.key,
+        identity=identity,
+    )
+    credential.save(path)
+
+
+def _cli_s3_tail(pf: S3ParquetFile, args: Namespace) -> None:
+    credential = None
+    if args.credential:
+        try:
+            credential = InspectionCredential.load(args.credential)
+        except (OSError, ValueError, CredentialError) as exc:
+            print(f'Cannot load credential {args.credential}: {exc}', file=sys.stderr)
+            return
+    try:
+        store = S3Store(
+            session=pf.aws_session,
+            endpoint_url=pf.endpoint_url,
+        )
+    except Exception as exc:
+        print(f's3://{pf.bucket}/{pf.key} not found or cannot access: {exc}', file=sys.stderr)
+        return
+    try:
+        result = inspect_tail(
+            store,
+            pf.bucket,
+            pf.key,
+            detail=args.detail,
+            credential=credential,
+        )
+    except FileNotFoundException as e:
+        print(str(e), file=sys.stderr)
+        return
+    except InspectionError as e:
+        print(str(e), file=sys.stderr)
+        return
+    print(result.report)
+    if args.save_credential:
+        try:
+            result.credential.save(args.save_credential)
+        except OSError as exc:
+            print(f'Cannot save credential {args.save_credential}: {exc}', file=sys.stderr)
+
+
+def _execute_simple(filename) -> None:
+    print(render_simple_from_file(filename))
+
+
+def _execute_detail(filename) -> None:
+    print(render_detail_from_file(filename))
 
 
 def _obj_to_string(obj, toatty: bool, level: int = 1) -> str:
-    color = [
-        Fore.RED,
-        Fore.YELLOW,
-        Fore.GREEN,
-        Fore.BLUE
-    ]
-
-    extra = ''
-    for i in range(level):
-        extra += color[i % 4] + '■■■■' + Style.RESET_ALL if toatty else '    '
-    ret = ''
-    if isinstance(obj, str) or isinstance(obj, int) or isinstance(obj, bytes):
-        ret += str(obj)
-    else:
-        ret += str(obj.__class__.__name__)
-        ret += '\n'
-        if isinstance(obj, list):
-            for e in obj:
-                add = extra + _obj_to_string(e, toatty, level + 1)
-                if add:
-                    ret += add + '\n'
-            ret = ret[:-1]
-        else:
-            for item in obj.__dict__:
-                if obj.__dict__[item]:
-                    ret += extra
-                    ret += str(item) + ' = ' + _obj_to_string(obj.__dict__[item], toatty, level + 1)
-                    ret += '\n'
-            ret = ret[:-1]
-    return ret
+    return obj_to_string(obj, toatty, level)

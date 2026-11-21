@@ -150,6 +150,29 @@ class S3ParquetFile(ParquetFile):
             else:
                 yield localfile
 
+    @contextmanager
+    def get_local_path_with_version(self) -> Iterator[tuple]:
+        '''Explicit full download that also returns the downloaded version.'''
+        if self.is_wildcard():
+            raise Exception('Please resolve first.')
+        with TemporaryDirectory() as tmp_path:
+            localfile = f'{tmp_path}/{uuid4()}.parquet'
+            logger.info(f'Download stat parquet file on s3://{self.bucket}/{self.key} -> {localfile}')
+            try:
+                with Halo(text='Downloading from s3', spinner='dots', stream=stderr) as spinner:
+                    client = self.aws_session.client('s3', endpoint_url=self.endpoint_url)
+                    head = client.head_object(Bucket=self.bucket, Key=self.key)
+                    client.download_file(self.bucket, self.key, localfile)
+                    spinner.info(f's3://{self.bucket}/{self.key} => {localfile}')
+            except Exception:
+                raise FileNotFoundException(f's3://{self.bucket}/{self.key} not found or cannot access')
+            else:
+                yield localfile, {
+                    'size': head.get('ContentLength'),
+                    'etag': head.get('ETag'),
+                    'version_id': head.get('VersionId'),
+                }
+
 
 def get_aws_session(profile_name: Optional[str]) -> boto3.Session:
     return boto3.Session(profile_name=profile_name)
