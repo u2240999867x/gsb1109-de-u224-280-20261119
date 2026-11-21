@@ -13,6 +13,30 @@ It is incompatible with original parquet-tools.
 - Read Parquet data (local file or file on S3)
 - Read Parquet metadata/schema (local file or file on S3)
 
+## S3 local-copy reuse
+
+Within a single CLI invocation (one archive task), parquet-tools keeps the
+downloaded copy of each S3 object in a task-scoped local cache so that the
+schema/inspect read and the data read share one download, and concurrent
+processing units reading the same object reuse the same complete copy.
+
+- Versions are identified only by S3-owned evidence: `VersionId` when bucket
+  versioning is enabled, otherwise `ETag`. The object key and byte length are
+  never treated as version identifiers, so an object replaced under the same
+  path with the same length is fetched again as a distinct version.
+- A unit that confirmed a version keeps reading its local copy even if the
+  background object is replaced later; a new reader picks up the new version.
+- Concurrent readers that confirm the same version share a single in-flight
+  download. A partial or failed download is never shared and is removed
+  immediately; the next read retries cleanly.
+- Copies are keyed by `(endpoint, bucket, key)`, so the same bucket/key on a
+  different endpoint is downloaded independently.
+- The cache lives only for the task and is released when the command ends; it
+  is never persisted across tasks.
+- When S3 returns no usable version evidence (missing `VersionId`/`ETag`),
+  parquet-tools logs why it cannot reuse and downloads without caching rather
+  than guessing the version from the name or length.
+
 ## Installation
 
 ```bash

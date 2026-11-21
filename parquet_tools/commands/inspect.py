@@ -7,7 +7,8 @@ import pyarrow.parquet as pq
 from colorama import Fore, Style
 from parquet_tools.parquet.reader import get_filemetadata
 
-from .utils import FileNotFoundException, ParquetFile, to_parquet_file
+from .utils import (FileNotFoundException, ParquetFile,
+                    task_object_cache, to_parquet_file)
 
 
 def dedent(text: str) -> str:
@@ -41,22 +42,25 @@ def configure_parser(paser: ArgumentParser) -> ArgumentParser:
 
 
 def _cli(args: Namespace) -> None:
-    pf: ParquetFile = to_parquet_file(file_exp=args.file, awsprofile=args.awsprofile, endpoint_url=args.endpoint_url)
-    if pf.is_wildcard():
-        print('Cannot use wildcard for inspection.', file=sys.stderr)
-    else:
-        try:
-            with pf.get_local_path() as local_path:
-                if args.detail:
-                    _execute_detail(
-                        filename=local_path,
-                    )
-                else:
-                    _execute_simple(
-                        filename=local_path,
-                    )
-        except FileNotFoundException as e:
-            print(str(e), file=sys.stderr)
+    with task_object_cache() as cache:
+        pf: ParquetFile = to_parquet_file(
+            file_exp=args.file, awsprofile=args.awsprofile,
+            endpoint_url=args.endpoint_url, cache=cache)
+        if pf.is_wildcard():
+            print('Cannot use wildcard for inspection.', file=sys.stderr)
+        else:
+            try:
+                with pf.get_local_path() as local_path:
+                    if args.detail:
+                        _execute_detail(
+                            filename=local_path,
+                        )
+                    else:
+                        _execute_simple(
+                            filename=local_path,
+                        )
+            except FileNotFoundException as e:
+                print(str(e), file=sys.stderr)
 
 
 def _execute_simple(filename: str) -> None:

@@ -7,7 +7,7 @@ import pandas as pd
 
 from .utils import (FileNotFoundException, InvalidCommandExcpetion,
                     ParquetFile, get_datafame_from_objs,
-                    to_parquet_file)
+                    task_object_cache, to_parquet_file)
 
 
 def configure_parser(paser: ArgumentParser) -> ArgumentParser:
@@ -43,17 +43,19 @@ def configure_parser(paser: ArgumentParser) -> ArgumentParser:
 
 def _cli(args: Namespace) -> None:
     try:
-        pfs: List[ParquetFile] = [
-            to_parquet_file(file_exp=f, awsprofile=args.awsprofile, endpoint_url=args.endpoint_url)
-            for f in args.file]
-        with get_datafame_from_objs(pfs, args.head) as df:
-            if df is None:
-                raise FileNotFoundException('File matching that expression not found.')
-            _execute(
-                df=df,
-                head=args.head,
-                columns=args.columns
-            )
+        with task_object_cache() as cache:
+            pfs: List[ParquetFile] = [
+                to_parquet_file(file_exp=f, awsprofile=args.awsprofile,
+                                endpoint_url=args.endpoint_url, cache=cache)
+                for f in args.file]
+            with get_datafame_from_objs(pfs, args.head) as df:
+                if df is None:
+                    raise FileNotFoundException('File matching that expression not found.')
+                _execute(
+                    df=df,
+                    head=args.head,
+                    columns=args.columns
+                )
     except InvalidCommandExcpetion as e:
         print(str(e), file=sys.stderr)
     except FileNotFoundException as e:
