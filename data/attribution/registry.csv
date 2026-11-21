@@ -1,0 +1,6 @@
+entry_id,icao24,registration,source,valid_from,valid_to,published_at,supersedes
+r-a,abc123,A,regulator,2026-05-15T00:00:00Z,2026-05-15T12:00:00Z,2026-05-14T18:00:00Z,
+r-b1,abc123,B,regulator,2026-05-15T12:00:00Z,,2026-05-15T06:00:00Z,
+r-b2,abc123,B,foreign-caa,2026-05-15T12:00:00Z,,2026-05-15T07:00:00Z,
+r-c1,abc123,C,regulator,2026-05-15T12:00:00Z,,2026-05-16T09:00:00Z,r-b1
+r-b3,abc123,B,foreign-caa,2026-05-15T12:01:00Z,,2026-05-16T15:00:00Z,r-b2
