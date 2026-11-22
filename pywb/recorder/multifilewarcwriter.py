@@ -8,6 +8,7 @@ import portalocker
 from warcio.timeutils import timestamp20_now
 from warcio.warcwriter import BaseWARCWriter
 
+from pywb.recorder.volumemanager import VolumeWithdrawn
 from pywb.utils.format import res_template
 from pywb.utils.io import no_except_close
 
@@ -42,7 +43,7 @@ class MultiFileWARCWriter(BaseWARCWriter):
 
     def _check_revisit(self, record, params):
         if not self.dedup_index or record.rec_type != 'response':
-            return record
+            return record, None
 
         # ensure payload digest is computed at this point
         self.ensure_digest(record, block=False, payload=True)
@@ -57,13 +58,20 @@ class MultiFileWARCWriter(BaseWARCWriter):
             result = None
 
         if result == 'skip':
-            return None
+            return None, None
 
         if isinstance(result, tuple) and result[0] == 'revisit':
+            # keep the full response around so the capture can still be
+            # written self contained if the original volume is withdrawn
+            params['_full_response'] = record
+            # retention aware indexes return the concrete original CDX as a
+            # fourth element so the payload provenance can be recorded
+            orig_cdx = result[3] if len(result) > 3 else None
             record = self.create_revisit_record(url, digest, result[1], result[2],
                                                 http_headers=record.http_headers)
+            return record, orig_cdx
 
-        return record
+        return record, None
 
     def get_new_filename(self, dir_, params):
         timestamp = timestamp20_now()
@@ -98,7 +106,10 @@ class MultiFileWARCWriter(BaseWARCWriter):
     def _close_file(self, fh):
         try:
             if os.name != 'nt':
-                portalocker.lock(fh, portalocker.LOCK_UN)
+                if hasattr(portalocker, 'unlock'):
+                    portalocker.unlock(fh)
+                else:  # pragma: no cover - older portalocker
+                    portalocker.lock(fh, portalocker.LOCK_UN)
             return True
         except Exception as e:
             print(e)
@@ -145,13 +156,127 @@ class MultiFileWARCWriter(BaseWARCWriter):
         self._copy_header(resp, req, 'WARC-Source-URI')
         self._copy_header(resp, req, 'WARC-Creation-Date')
 
-        resp = self._check_revisit(resp, params)
+        resp, orig_cdx = self._check_revisit(resp, params)
         if not resp:
             return
 
         if not self._is_write_resp(resp, params):
             return
 
+        params.setdefault('_revisit_orig', orig_cdx)
+
+        return self._write_with_retention(req, resp, params, orig_cdx)
+
+    def _write_with_retention(self, req, resp, params, orig_cdx):
+        """Write a capture while keeping its payload volume retained.
+
+        The retention ledger makes the ordering with rotation safe:
+
+        * a payload original is pinned before the new WARC is written, so a
+          committed revisit can never be left pointing at a withdrawn volume;
+        * if the chosen original becomes unavailable in the window between
+          verification and commit, another verified candidate is selected, or
+          the full response is written instead;
+        * an interrupted attempt aborts its reference, so uncommitted work
+          never pins a volume permanently.
+        """
+        if not (self.dedup_index and hasattr(self.dedup_index, 'ledger')):
+            return self._write_pair_once(req, resp, params)
+
+        ledger = self.dedup_index.ledger
+        ref_id = self.dedup_index.new_reference_id()
+        params['_retention_ref'] = ref_id
+
+        try:
+            return self._write_revisit_or_fallback(req, resp, params,
+                                                   orig_cdx, ref_id, ledger)
+        except Exception:
+            ledger.abort_reference(ref_id)
+            params.pop('_retention_ref', None)
+            raise
+
+    def _write_revisit_or_fallback(self, req, resp, params,
+                                   orig_cdx, ref_id, ledger):
+        candidate_cdx = orig_cdx
+
+        # first attempt with the already verified candidate, then re-lookup
+        # further eligible originals if rotation wins the race
+        while True:
+            if candidate_cdx:
+                volume_name = candidate_cdx['filename']
+
+                try:
+                    ledger.begin_reference(ref_id, [volume_name])
+                except VolumeWithdrawn:
+                    self.dedup_index.exclude_volume(volume_name)
+                    candidate_cdx = None
+                    continue
+
+                # inter-process barrier: the preferred original was verified
+                # readable and its retention claim is open, but the new
+                # capture is not committed yet.  A rotation process can try to
+                # withdraw the volume here; a cooperative withdraw is blocked
+                # by the open claim, an irreversible one is detected below.
+                self._retention_barrier('after_verify', volume_name)
+
+                digest = resp.rec_headers.get_header('WARC-Payload-Digest')
+                if not self.dedup_index.verify_candidate(candidate_cdx,
+                                                         digest):
+                    # rotation removed the volume irreversibly while we waited
+                    ledger.abort_reference(ref_id)
+                    self.dedup_index.exclude_volume(volume_name)
+                    candidate_cdx = None
+                    continue
+
+                params['_revisit_orig'] = candidate_cdx
+                if self._write_pair_once(req, resp, params, ref_id, ledger):
+                    return True
+
+                # write failed: volume may have just been withdrawn
+                ledger.abort_reference(ref_id)
+                if not ledger.is_available(volume_name):
+                    self.dedup_index.exclude_volume(volume_name)
+                    candidate_cdx = None
+                    continue
+
+                return False
+            # pick another still available qualified original
+            result = self._relookup_revisit(resp, params)
+            if result:
+                candidate_cdx = result[3]
+                continue
+
+            # no usable original left: keep the capture self contained
+            full_resp = self._reload_full_response(resp, params)
+            params['_revisit_orig'] = None
+            ledger.begin_reference(ref_id, [])
+            return self._write_pair_once(req, full_resp, params,
+                                         ref_id, ledger)
+
+    @staticmethod
+    def _retention_barrier(stage, volume_name):
+        hook = os.environ.get('PYWB_RETENTION_BARRIER')
+        if not hook:
+            return
+        module_name, func_name = hook.rsplit(':', 1)
+        import importlib
+        func = getattr(importlib.import_module(module_name), func_name)
+        func(stage, volume_name)
+
+    def _relookup_revisit(self, resp, params):
+        url = resp.rec_headers.get_header('WARC-Target-URI')
+        digest = resp.rec_headers.get_header('WARC-Payload-Digest')
+        iso_dt = resp.rec_headers.get_header('WARC-Date')
+        return self.dedup_index.lookup_revisit(params, digest, url, iso_dt)
+
+    def _reload_full_response(self, resp, params):
+        if resp.rec_type != 'revisit':
+            return resp
+        # the buffered payload of the original response is kept by the
+        # recorder under '_full_response' before revisit conversion
+        return params.get('_full_response', resp)
+
+    def _write_pair_once(self, req, resp, params, ref_id=None, ledger=None):
         def write_callback(out, filename):
             #url = resp.rec_headers.get_header('WARC-Target-URI')
             #print('Writing req/resp {0} to {1} '.format(url, filename))
@@ -160,7 +285,7 @@ class MultiFileWARCWriter(BaseWARCWriter):
             if req and self._is_write_req(req, params):
                 self._write_warc_record(out, req)
 
-        return self._write_to_file(params, write_callback)
+        return self._write_to_file(params, write_callback, ref_id, ledger)
 
     def write_stream_to_file(self, params, stream):
         def write_callback(out, filename):
@@ -169,7 +294,7 @@ class MultiFileWARCWriter(BaseWARCWriter):
 
         return self._write_to_file(params, write_callback)
 
-    def _write_to_file(self, params, write_callback):
+    def _write_to_file(self, params, write_callback, ref_id=None, ledger=None):
         full_dir = res_template(self.dir_template, params)
         dir_key = self.get_dir_key(params)
 
@@ -192,6 +317,10 @@ class MultiFileWARCWriter(BaseWARCWriter):
 
             is_new = True
 
+        if ref_id and ledger:
+            # the WARC being written is itself a volume this capture depends on
+            ledger.add_claim_volume(ref_id, os.path.basename(filename))
+
         try:
             start = out.tell()
 
@@ -207,6 +336,15 @@ class MultiFileWARCWriter(BaseWARCWriter):
                 self.dedup_index.add_urls_to_index(out, params,
                                                    filename,
                                                    new_size - start)
+
+            # crash injection: retention evidence is registered and the new
+            # WARC is on disk, but the reference is not committed.  Used to
+            # prove restart recovery releases only uncommitted claims.
+            if ref_id and os.environ.get('PYWB_CRASH_BEFORE_COMMIT'):
+                os._exit(101)
+
+            if ref_id and ledger:
+                ledger.commit_reference(ref_id)
 
             return True
 
