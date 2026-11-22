@@ -1,0 +1,575 @@
+{
+ "data": {
+  "deposit_record": {
+   "submission_id": "SUB-0001",
+   "payload": {
+    "a_cleaned": {
+     "branch": "A",
+     "rows": [
+      "a1",
+      "a2"
+     ]
+    },
+    "b_cleaned": {
+     "branch": "B",
+     "rows": [
+      "b1",
+      "b2",
+      "b3"
+     ]
+    },
+    "approval_evidence": {
+     "decision_id": "DEC-APPROVAL-1",
+     "approver": "approver-1"
+    }
+   },
+   "status": "in_flight",
+   "publication_id": null,
+   "receipt": null,
+   "revocation_note_id": null,
+   "decisions": [
+    {
+     "id": "DEC-APPROVAL-1",
+     "kind": "approval",
+     "decided_at": 5,
+     "evidence": {
+      "approver": "approver-1",
+      "comment": "cleansing approved"
+     }
+    }
+   ],
+   "output": null,
+   "audit": [
+    {
+     "event": "decision_applied",
+     "decision_id": "DEC-APPROVAL-1",
+     "kind": "approval"
+    },
+    {
+     "event": "submission_prepared",
+     "submission_id": "SUB-0001"
+    }
+   ]
+  }
+ },
+ "correlations": {},
+ "last_task": "2d55b3ca-75a2-4dd7-9c0c-f092fa6f072b",
+ "success": true,
+ "completed": false,
+ "tasks": {
+  "9b23026a-d579-4305-858c-2495d9db14e5": {
+   "id": "9b23026a-d579-4305-858c-2495d9db14e5",
+   "parent": null,
+   "children": [
+    "d7c6748d-6e23-409f-8fe5-3bbcebc499e1"
+   ],
+   "last_state_change": 1795378930.805241,
+   "state": 64,
+   "task_spec": "Start",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {},
+   "typename": "Task"
+  },
+  "d7c6748d-6e23-409f-8fe5-3bbcebc499e1": {
+   "id": "d7c6748d-6e23-409f-8fe5-3bbcebc499e1",
+   "parent": "9b23026a-d579-4305-858c-2495d9db14e5",
+   "children": [
+    "217824d3-ad55-4f0f-9217-6dd42a14bfdc"
+   ],
+   "last_state_change": 1795378930.805299,
+   "state": 64,
+   "task_spec": "StartEvent_1",
+   "triggered": false,
+   "internal_data": {
+    "event_fired": true
+   },
+   "data": {},
+   "delta": {
+    "updates": {},
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "217824d3-ad55-4f0f-9217-6dd42a14bfdc": {
+   "id": "217824d3-ad55-4f0f-9217-6dd42a14bfdc",
+   "parent": "d7c6748d-6e23-409f-8fe5-3bbcebc499e1",
+   "children": [
+    "74d12708-be47-4f95-abc0-345224205d15",
+    "5e9ce7aa-efd8-4f52-b00c-83c6083abee7"
+   ],
+   "last_state_change": 1795378930.805353,
+   "state": 64,
+   "task_spec": "Gateway_split",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {},
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "74d12708-be47-4f95-abc0-345224205d15": {
+   "id": "74d12708-be47-4f95-abc0-345224205d15",
+   "parent": "217824d3-ad55-4f0f-9217-6dd42a14bfdc",
+   "children": [
+    "d2ca5db8-2d36-450f-8728-ae2918ae6336"
+   ],
+   "last_state_change": 1795378930.8054368,
+   "state": 64,
+   "task_spec": "Activity_clean_a",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {
+     "a_cleaned": {
+      "branch": "A",
+      "rows": [
+       "a1",
+       "a2"
+      ]
+     }
+    },
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "5e9ce7aa-efd8-4f52-b00c-83c6083abee7": {
+   "id": "5e9ce7aa-efd8-4f52-b00c-83c6083abee7",
+   "parent": "217824d3-ad55-4f0f-9217-6dd42a14bfdc",
+   "children": [
+    "33e03156-6320-40f1-8e97-ca9f070e6e15"
+   ],
+   "last_state_change": 1795378930.805474,
+   "state": 64,
+   "task_spec": "Activity_clean_b",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {
+     "b_cleaned": {
+      "branch": "B",
+      "rows": [
+       "b1",
+       "b2",
+       "b3"
+      ]
+     }
+    },
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "d2ca5db8-2d36-450f-8728-ae2918ae6336": {
+   "id": "d2ca5db8-2d36-450f-8728-ae2918ae6336",
+   "parent": "74d12708-be47-4f95-abc0-345224205d15",
+   "children": [
+    "2d55b3ca-75a2-4dd7-9c0c-f092fa6f072b"
+   ],
+   "last_state_change": 1795378930.805562,
+   "state": 64,
+   "task_spec": "Activity_approve_a",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {
+     "decision": "approved",
+     "approver": "approver-1",
+     "decision_id": "DEC-APPROVAL-1"
+    },
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "2d55b3ca-75a2-4dd7-9c0c-f092fa6f072b": {
+   "id": "2d55b3ca-75a2-4dd7-9c0c-f092fa6f072b",
+   "parent": "d2ca5db8-2d36-450f-8728-ae2918ae6336",
+   "children": [
+    "2e5525a7-cb99-4100-b37a-57db9e7378eb"
+   ],
+   "last_state_change": 1795378930.805622,
+   "state": 64,
+   "task_spec": "Gateway_join",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {
+     "b_cleaned": {
+      "branch": "B",
+      "rows": [
+       "b1",
+       "b2",
+       "b3"
+      ]
+     }
+    },
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "2e5525a7-cb99-4100-b37a-57db9e7378eb": {
+   "id": "2e5525a7-cb99-4100-b37a-57db9e7378eb",
+   "parent": "2d55b3ca-75a2-4dd7-9c0c-f092fa6f072b",
+   "children": [
+    "9e3599c1-1ed0-45ca-b7bf-90740fec73e7"
+   ],
+   "last_state_change": 1795378930.8056269,
+   "state": 16,
+   "task_spec": "Activity_deposit",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {},
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "9e3599c1-1ed0-45ca-b7bf-90740fec73e7": {
+   "id": "9e3599c1-1ed0-45ca-b7bf-90740fec73e7",
+   "parent": "2e5525a7-cb99-4100-b37a-57db9e7378eb",
+   "children": [
+    "236a8ed4-62f1-449e-ac59-aed43bf79202"
+   ],
+   "last_state_change": 1795378930.805136,
+   "state": 4,
+   "task_spec": "EndEvent_1",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {},
+    "deletions": [
+     "a_cleaned",
+     "decision",
+     "approver",
+     "decision_id",
+     "b_cleaned"
+    ]
+   },
+   "typename": "Task"
+  },
+  "236a8ed4-62f1-449e-ac59-aed43bf79202": {
+   "id": "236a8ed4-62f1-449e-ac59-aed43bf79202",
+   "parent": "9e3599c1-1ed0-45ca-b7bf-90740fec73e7",
+   "children": [
+    "a7518670-2a21-4c30-b9a0-1f8845c2a484"
+   ],
+   "last_state_change": 1795378930.8051388,
+   "state": 4,
+   "task_spec": "RecoveryDeposit.EndJoin",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {},
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "a7518670-2a21-4c30-b9a0-1f8845c2a484": {
+   "id": "a7518670-2a21-4c30-b9a0-1f8845c2a484",
+   "parent": "236a8ed4-62f1-449e-ac59-aed43bf79202",
+   "children": [],
+   "last_state_change": 1795378930.805142,
+   "state": 4,
+   "task_spec": "End",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {},
+    "deletions": []
+   },
+   "typename": "Task"
+  },
+  "33e03156-6320-40f1-8e97-ca9f070e6e15": {
+   "id": "33e03156-6320-40f1-8e97-ca9f070e6e15",
+   "parent": "5e9ce7aa-efd8-4f52-b00c-83c6083abee7",
+   "children": [],
+   "last_state_change": 1795378930.8055859,
+   "state": 256,
+   "task_spec": "Gateway_join",
+   "triggered": false,
+   "internal_data": {},
+   "data": {},
+   "delta": {
+    "updates": {},
+    "deletions": [
+     "b_cleaned"
+    ]
+   },
+   "typename": "Task"
+  }
+ },
+ "root": "9b23026a-d579-4305-858c-2495d9db14e5",
+ "spec": {
+  "name": "RecoveryDeposit",
+  "description": "RecoveryDeposit",
+  "file": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-238/workspace/tests/SpiffWorkflow/bpmn/data/recovery_deposit.bpmn",
+  "task_specs": {
+   "Start": {
+    "name": "Start",
+    "description": "BPMN Task",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [],
+    "outputs": [
+     "StartEvent_1"
+    ],
+    "bpmn_id": null,
+    "bpmn_name": null,
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "trigger_specs": [],
+    "typename": "BpmnStartTask"
+   },
+   "RecoveryDeposit.EndJoin": {
+    "name": "RecoveryDeposit.EndJoin",
+    "description": "BPMN Task",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [
+     "EndEvent_1"
+    ],
+    "outputs": [
+     "End"
+    ],
+    "bpmn_id": null,
+    "bpmn_name": null,
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "typename": "_EndJoin"
+   },
+   "End": {
+    "name": "End",
+    "description": "BPMN Task",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [
+     "RecoveryDeposit.EndJoin"
+    ],
+    "outputs": [],
+    "bpmn_id": null,
+    "bpmn_name": null,
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "typename": "SimpleBpmnTask"
+   },
+   "StartEvent_1": {
+    "name": "StartEvent_1",
+    "description": "Default Start Event",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [
+     "Start"
+    ],
+    "outputs": [
+     "Gateway_split"
+    ],
+    "bpmn_id": "StartEvent_1",
+    "bpmn_name": "start",
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "extensions": {},
+    "event_definition": {
+     "description": "Default",
+     "name": null,
+     "typename": "NoneEventDefinition"
+    },
+    "typename": "StartEvent"
+   },
+   "Gateway_split": {
+    "name": "Gateway_split",
+    "description": "Parallel Gateway",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [
+     "StartEvent_1"
+    ],
+    "outputs": [
+     "Activity_clean_a",
+     "Activity_clean_b"
+    ],
+    "bpmn_id": "Gateway_split",
+    "bpmn_name": "split",
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "extensions": {},
+    "split_task": null,
+    "threshold": null,
+    "cancel": false,
+    "typename": "ParallelGateway"
+   },
+   "Activity_clean_a": {
+    "name": "Activity_clean_a",
+    "description": "Script Task",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [
+     "Gateway_split"
+    ],
+    "outputs": [
+     "Activity_approve_a"
+    ],
+    "bpmn_id": "Activity_clean_a",
+    "bpmn_name": "clean_a",
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "extensions": {},
+    "script": "a_cleaned = {'branch': 'A', 'rows': ['a1', 'a2']}",
+    "typename": "ScriptTask"
+   },
+   "Activity_approve_a": {
+    "name": "Activity_approve_a",
+    "description": "User Task",
+    "manual": true,
+    "lookahead": 2,
+    "inputs": [
+     "Activity_clean_a"
+    ],
+    "outputs": [
+     "Gateway_join"
+    ],
+    "bpmn_id": "Activity_approve_a",
+    "bpmn_name": "approve_a",
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "extensions": {},
+    "typename": "TestUserTask"
+   },
+   "Gateway_join": {
+    "name": "Gateway_join",
+    "description": "Parallel Gateway",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [
+     "Activity_approve_a",
+     "Activity_clean_b"
+    ],
+    "outputs": [
+     "Activity_deposit"
+    ],
+    "bpmn_id": "Gateway_join",
+    "bpmn_name": "join",
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "extensions": {},
+    "split_task": null,
+    "threshold": null,
+    "cancel": false,
+    "typename": "ParallelGateway"
+   },
+   "Activity_deposit": {
+    "name": "Activity_deposit",
+    "description": "User Task",
+    "manual": true,
+    "lookahead": 2,
+    "inputs": [
+     "Gateway_join"
+    ],
+    "outputs": [
+     "EndEvent_1"
+    ],
+    "bpmn_id": "Activity_deposit",
+    "bpmn_name": "deposit_to_repository",
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "extensions": {},
+    "typename": "TestUserTask"
+   },
+   "EndEvent_1": {
+    "name": "EndEvent_1",
+    "description": "Default End Event",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [
+     "Activity_deposit"
+    ],
+    "outputs": [
+     "RecoveryDeposit.EndJoin"
+    ],
+    "bpmn_id": "EndEvent_1",
+    "bpmn_name": "done",
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "extensions": {},
+    "event_definition": {
+     "description": "Default",
+     "name": null,
+     "typename": "NoneEventDefinition"
+    },
+    "typename": "EndEvent"
+   },
+   "Activity_clean_b": {
+    "name": "Activity_clean_b",
+    "description": "Script Task",
+    "manual": false,
+    "lookahead": 2,
+    "inputs": [
+     "Gateway_split"
+    ],
+    "outputs": [
+     "Gateway_join"
+    ],
+    "bpmn_id": "Activity_clean_b",
+    "bpmn_name": "clean_b",
+    "lane": null,
+    "documentation": null,
+    "data_input_associations": [],
+    "data_output_associations": [],
+    "io_specification": null,
+    "extensions": {},
+    "script": "b_cleaned = {'branch': 'B', 'rows': ['b1', 'b2', 'b3']}",
+    "typename": "ScriptTask"
+   }
+  },
+  "io_specification": null,
+  "data_objects": {},
+  "correlation_keys": {},
+  "bpmn_start_events": [
+   "StartEvent_1"
+  ],
+  "typename": "BpmnProcessSpec"
+ },
+ "subprocess_specs": {},
+ "subprocesses": {},
+ "bpmn_events": [],
+ "typename": "BpmnWorkflow"
+}

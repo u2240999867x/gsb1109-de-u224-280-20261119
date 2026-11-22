@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="Definitions_recovery_deposit" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="RecoveryDeposit" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1" name="start">
+      <bpmn:outgoing>Flow_start_split</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:parallelGateway id="Gateway_split" name="split">
+      <bpmn:incoming>Flow_start_split</bpmn:incoming>
+      <bpmn:outgoing>Flow_split_clean_a</bpmn:outgoing>
+      <bpmn:outgoing>Flow_split_clean_b</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:scriptTask id="Activity_clean_a" name="clean_a">
+      <bpmn:incoming>Flow_split_clean_a</bpmn:incoming>
+      <bpmn:outgoing>Flow_clean_a_approve</bpmn:outgoing>
+      <bpmn:script>a_cleaned = {'branch': 'A', 'rows': ['a1', 'a2']}</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:userTask id="Activity_approve_a" name="approve_a">
+      <bpmn:incoming>Flow_clean_a_approve</bpmn:incoming>
+      <bpmn:outgoing>Flow_approve_join</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:scriptTask id="Activity_clean_b" name="clean_b">
+      <bpmn:incoming>Flow_split_clean_b</bpmn:incoming>
+      <bpmn:outgoing>Flow_clean_b_join</bpmn:outgoing>
+      <bpmn:script>b_cleaned = {'branch': 'B', 'rows': ['b1', 'b2', 'b3']}</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:parallelGateway id="Gateway_join" name="join">
+      <bpmn:incoming>Flow_approve_join</bpmn:incoming>
+      <bpmn:incoming>Flow_clean_b_join</bpmn:incoming>
+      <bpmn:outgoing>Flow_join_deposit</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:userTask id="Activity_deposit" name="deposit_to_repository">
+      <bpmn:incoming>Flow_join_deposit</bpmn:incoming>
+      <bpmn:outgoing>Flow_deposit_end</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="EndEvent_1" name="done">
+      <bpmn:incoming>Flow_deposit_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_start_split" sourceRef="StartEvent_1" targetRef="Gateway_split" />
+    <bpmn:sequenceFlow id="Flow_split_clean_a" sourceRef="Gateway_split" targetRef="Activity_clean_a" />
+    <bpmn:sequenceFlow id="Flow_split_clean_b" sourceRef="Gateway_split" targetRef="Activity_clean_b" />
+    <bpmn:sequenceFlow id="Flow_clean_a_approve" sourceRef="Activity_clean_a" targetRef="Activity_approve_a" />
+    <bpmn:sequenceFlow id="Flow_approve_join" sourceRef="Activity_approve_a" targetRef="Gateway_join" />
+    <bpmn:sequenceFlow id="Flow_clean_b_join" sourceRef="Activity_clean_b" targetRef="Gateway_join" />
+    <bpmn:sequenceFlow id="Flow_join_deposit" sourceRef="Gateway_join" targetRef="Activity_deposit" />
+    <bpmn:sequenceFlow id="Flow_deposit_end" sourceRef="Activity_deposit" targetRef="EndEvent_1" />
+  </bpmn:process>
+  <bpmn:process id="RecoveryDepositNoApproval" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_na" name="start">
+      <bpmn:outgoing>Flow_na_start_split</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:parallelGateway id="Gateway_split_na" name="split">
+      <bpmn:incoming>Flow_na_start_split</bpmn:incoming>
+      <bpmn:outgoing>Flow_na_split_clean_a</bpmn:outgoing>
+      <bpmn:outgoing>Flow_na_split_clean_b</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:scriptTask id="Activity_clean_a_na" name="clean_a">
+      <bpmn:incoming>Flow_na_split_clean_a</bpmn:incoming>
+      <bpmn:outgoing>Flow_na_clean_a_join</bpmn:outgoing>
+      <bpmn:script>a_cleaned = {'branch': 'A', 'rows': ['a1', 'a2']}</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:scriptTask id="Activity_clean_b_na" name="clean_b">
+      <bpmn:incoming>Flow_na_split_clean_b</bpmn:incoming>
+      <bpmn:outgoing>Flow_na_clean_b_join</bpmn:outgoing>
+      <bpmn:script>b_cleaned = {'branch': 'B', 'rows': ['b1', 'b2', 'b3']}</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:parallelGateway id="Gateway_join_na" name="join">
+      <bpmn:incoming>Flow_na_clean_a_join</bpmn:incoming>
+      <bpmn:incoming>Flow_na_clean_b_join</bpmn:incoming>
+      <bpmn:outgoing>Flow_na_join_deposit</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:userTask id="Activity_deposit_na" name="deposit_to_repository">
+      <bpmn:incoming>Flow_na_join_deposit</bpmn:incoming>
+      <bpmn:outgoing>Flow_na_deposit_end</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="EndEvent_na" name="done">
+      <bpmn:incoming>Flow_na_deposit_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_na_start_split" sourceRef="StartEvent_na" targetRef="Gateway_split_na" />
+    <bpmn:sequenceFlow id="Flow_na_split_clean_a" sourceRef="Gateway_split_na" targetRef="Activity_clean_a_na" />
+    <bpmn:sequenceFlow id="Flow_na_split_clean_b" sourceRef="Gateway_split_na" targetRef="Activity_clean_b_na" />
+    <bpmn:sequenceFlow id="Flow_na_clean_a_join" sourceRef="Activity_clean_a_na" targetRef="Gateway_join_na" />
+    <bpmn:sequenceFlow id="Flow_na_clean_b_join" sourceRef="Activity_clean_b_na" targetRef="Gateway_join_na" />
+    <bpmn:sequenceFlow id="Flow_na_join_deposit" sourceRef="Gateway_join_na" targetRef="Activity_deposit_na" />
+    <bpmn:sequenceFlow id="Flow_na_deposit_end" sourceRef="Activity_deposit_na" targetRef="EndEvent_na" />
+  </bpmn:process>
+</bpmn:definitions>
