@@ -39,6 +39,7 @@ from .issues import *
 from .parser import *
 from .parser_tables import *
 from .parser_utilities import *
+from .payment_chain import *
 from .sqlalchemy import *
 from .suggestions import *
 from .suite import *
