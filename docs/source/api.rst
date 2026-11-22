@@ -19,6 +19,7 @@ Stream
    collect
    combine_latest
    delay
+   durable_dispatch
    filter
    flatten
    map
@@ -41,6 +42,7 @@ Stream
 .. automethod:: Stream.connect
 .. automethod:: Stream.disconnect
 .. automethod:: Stream.destroy
+.. automethod:: Stream.durable_dispatch
 .. automethod:: Stream.emit
 .. automethod:: Stream.frequencies
 .. automethod:: Stream.register_api
@@ -87,6 +89,7 @@ Definitions
 .. autofunction:: collect
 .. autofunction:: combine_latest
 .. autofunction:: delay
+.. autofunction:: durable_dispatch
 .. autofunction:: filter
 .. autofunction:: flatten
 .. autofunction:: map
