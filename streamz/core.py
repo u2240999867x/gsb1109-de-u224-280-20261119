@@ -1,4 +1,5 @@
 import asyncio
+from asyncio import Event
 import concurrent.futures
 from collections import deque, defaultdict
 from datetime import timedelta
@@ -115,6 +116,44 @@ class RefCounter:
         return '<RefCounter count={}>'.format(self.count)
 
     __repr__ = __str__
+
+
+class Signal:
+    """ A simple synchronous publish/subscribe notification point
+
+    Every emission is delivered synchronously to all subscribers in the order
+    in which they subscribed. Subscribers are plain callables that receive the
+    positional and keyword arguments passed to :meth:`emit`. A subscriber may
+    itself (un)subscribe, but such changes only take effect from the next
+    emission, so a single emission never reaches a subscriber more than once
+    and never reaches a subscriber that had already been removed.
+
+    This is used by :class:`map_async` to expose the lifecycle of each element
+    (function start, function return, downstream hand-off and final
+    acknowledgement) so that callers can verify that every identifier is
+    reported exactly once on both the success and the exception paths.
+    """
+    def __init__(self):
+        self._subscribers = []
+
+    def connect(self, callback):
+        """ Register ``callback`` to be called on every emission """
+        if callback not in self._subscribers:
+            self._subscribers.append(callback)
+        return callback
+
+    def disconnect(self, callback):
+        """ Stop delivering emissions to ``callback`` """
+        if callback in self._subscribers:
+            self._subscribers.remove(callback)
+
+    def emit(self, *args, **kwargs):
+        """ Deliver one notification to every current subscriber exactly once """
+        for callback in list(self._subscribers):
+            callback(*args, **kwargs)
+
+    def __len__(self):
+        return len(self._subscribers)
 
 
 class APIRegisterMixin(object):
@@ -721,8 +760,38 @@ class map(Stream):
 
 @Stream.register_api()
 class map_async(Stream):
-    """ Apply an async function to every element in the stream, preserving order
-    even when evaluating multiple inputs in parallel.
+    """ Apply an async function to every element in the stream.
+
+    Two ordering modes are available:
+
+    * ``order="stream"`` (the default): the original, fully ordered behaviour.
+      Results are delivered downstream in the exact input order and at most
+      ``parallelism`` function evaluations run at once.
+    * ``order="key"``: preserve order only between elements that share the same
+      key, while different keys run independently. For a given key the second
+      function does not start until the first one has returned, and its result
+      is not delivered downstream until the previous element of that key has
+      been fully acknowledged downstream.
+
+    In ``order="key"`` mode at most ``parallelism`` function evaluations run at
+    once and at most ``max_in_flight`` results may be handed to downstream
+    without yet having been acknowledged. When the in-flight limit is reached
+    no new function is started; a function that returns while the limit is
+    reached simply keeps its own work slot until a result is acknowledged, it
+    can never take another element's slot nor free room for further functions.
+    The default ``order="stream"`` mode keeps its original single work-queue
+    bound of ``parallelism`` (``max_in_flight`` defaults to that value and only
+    governs the key-ordered mode).
+
+    Four :class:`Signal` objects expose the asynchronous lifecycle of every
+    element so that identifiers can be audited on both the success and the
+    exception paths (each identifier fires each relevant signal exactly once):
+
+    * ``start_signal``: the function evaluation has just started.
+    * ``return_signal``: the function evaluation has returned (or raised).
+    * ``delivered_signal``: the result has been handed downstream.
+    * ``ack_signal``: downstream has acknowledged the element (or the element
+      finished via the exception path).
 
     Parameters
     ----------
@@ -731,6 +800,15 @@ class map_async(Stream):
         The arguments to pass to the function.
     parallelism:
         The maximum number of parallel Tasks for evaluating func, default value is 1
+    max_in_flight:
+        The maximum number of results handed downstream but not yet
+        acknowledged. Defaults to ``parallelism``.
+    order:
+        ``"stream"`` for full stream ordering (default) or ``"key"`` to order
+        only within a key.
+    key:
+        Callable mapping an element to its ordering key. Required (and only
+        used) when ``order="key"``.
     stop_on_exception:
          If the mapped func raises an exception, should the stream stop or not. Default value is False.
     **kwargs:
@@ -752,13 +830,48 @@ class map_async(Stream):
     6
     8
     """
-    def __init__(self, upstream, func, *args, parallelism=1, stop_on_exception=False, **kwargs):
+    def __init__(self, upstream, func, *args, parallelism=1, max_in_flight=None,
+                 order="stream", key=None, stop_on_exception=False, **kwargs):
+        if order not in ("stream", "key"):
+            raise ValueError(
+                "order must be 'stream' or 'key', got {!r}".format(order))
+        if order == "key" and key is None:
+            raise ValueError("a key callable is required when order='key'")
         self.func = func
         stream_name = kwargs.pop('stream_name', None)
         self.kwargs = kwargs
         self.args = args
+        self.parallelism = parallelism
+        self.max_in_flight = (parallelism if max_in_flight is None
+                              else max_in_flight)
+        self.order = order
+        self.key = key
         self.stop_on_exception = stop_on_exception
-        self.work_queue = asyncio.Queue(maxsize=parallelism)
+        self._key_mode = order == "key"
+
+        if self._key_mode:
+            # All bookkeeping is mutated only on the IOLoop, so the counters
+            # need no locks. Jobs stay in global arrival order; per-key order is
+            # enforced through the per-key ordinal and the two cursors below.
+            self._jobs = deque()
+            self._running = 0
+            self._in_flight = 0
+            self._key_ordinal = defaultdict(int)
+            self._key_next_run = defaultdict(int)
+            self._key_next_deliver = defaultdict(int)
+            self._key_busy = defaultdict(int)
+            self._wakeup = Event()
+        else:
+            # The original, fully ordered implementation.
+            self.work_queue = asyncio.Queue(maxsize=parallelism)
+
+        # Lifecycle signals. Every element fires ``start``, ``return`` and
+        # ``ack`` exactly once; ``delivered`` fires exactly once only on the
+        # success path (there is no downstream hand-off on the exception path).
+        self.start_signal = Signal()
+        self.return_signal = Signal()
+        self.delivered_signal = Signal()
+        self.ack_signal = Signal()
 
         Stream.__init__(self, upstream, stream_name=stream_name, ensure_io_loop=True)
         self.work_task = None
@@ -773,17 +886,26 @@ class map_async(Stream):
             stop_work, _ = self.work_task
             stop_work.set()
         self.work_task = self._create_work_task()
+        if self._key_mode:
+            # Re-drive any jobs that were left waiting across a restart.
+            self._wakeup.set()
         super().start()
 
     def stop(self):
         stop_work, _ = self.work_task
         stop_work.set()
+        if self._key_mode:
+            # Wake a worker that is currently blocked waiting for progress.
+            self._wakeup.set()
         self.work_task = None
         super().stop()
 
     def update(self, x, who=None, metadata=None):
         if not self.work_task:
             self.work_task = self._create_work_task()
+        # Retain synchronously so this node holds the element for its whole
+        # lifetime, even before the admission coroutine gets to run.
+        self._retain_refs(metadata)
         return self._create_task(self._insert_job(x, metadata))
 
     @overload
@@ -803,36 +925,218 @@ class map_async(Stream):
             return coro
         return self.loop.asyncio_loop.create_task(coro)
 
-    async def work_callback(self, stop_work: asyncio.Event):
-        while not stop_work.is_set():
-            task, metadata = await self.work_queue.get()
-            self.work_queue.task_done()
-            try:
-                result = await task
-            except Exception as e:
-                logger.exception(e)
-                if self.stop_on_exception:
-                    self.stop()
-            else:
-                results = self._emit(result, metadata=metadata)
-                if results:
-                    await asyncio.gather(*results)
+    # ------------------------------------------------------------------
+    # Admission
+    # ------------------------------------------------------------------
+    async def _insert_job(self, x, metadata):
+        if not self._key_mode:
+            await self._insert_job_stream(x, metadata)
+            return
+        try:
+            key_value = self.key(x)
+        except Exception:
             self._release_refs(metadata)
+            raise
+        ordinal = self._key_ordinal[key_value]
+        self._key_ordinal[key_value] += 1
+        self._jobs.append({
+            "ident": x,
+            "x": x,
+            "metadata": metadata,
+            "key": key_value,
+            "ordinal": ordinal,
+            "func_task": None,
+            "phase": "waiting",
+            "deliverable": False,
+            "error": None,
+            "result": None,
+        })
+        # Admission only enqueues the element; the pump below enforces the
+        # running and in-flight limits, so a slow element never blocks feeding
+        # later, independent elements.
+        self._wakeup.set()
+
+    async def _insert_job_stream(self, x, metadata):
+        try:
+            await self._wait_for_work_slot()
+            self.start_signal.emit(x, metadata)
+            coro = self.func(x, *self.args, **self.kwargs)
+            task = self._create_task(coro)
+            await self.work_queue.put((task, metadata, x))
+        except Exception as e:
+            self._release_refs(metadata)
+            logger.exception(e)
+            raise
 
     async def _wait_for_work_slot(self):
         while self.work_queue.full():
             await asyncio.sleep(0)
 
-    async def _insert_job(self, x, metadata):
+    # ------------------------------------------------------------------
+    # Worker loop
+    # ------------------------------------------------------------------
+    async def work_callback(self, stop_work: asyncio.Event):
+        if self._key_mode:
+            await self._work_callback_key(stop_work)
+        else:
+            await self._work_callback_stream(stop_work)
+
+    async def _work_callback_stream(self, stop_work: asyncio.Event):
+        while not stop_work.is_set():
+            task, metadata, ident = await self.work_queue.get()
+            self.work_queue.task_done()
+            try:
+                result = await task
+            except Exception as e:
+                self.return_signal.emit(ident, metadata)
+                logger.exception(e)
+                # Exception path: nothing is delivered downstream; ack marks
+                # the terminal state of this element.
+                self.ack_signal.emit(ident, metadata)
+                if self.stop_on_exception:
+                    self.stop()
+            else:
+                self.return_signal.emit(ident, metadata)
+                self.delivered_signal.emit(ident, metadata)
+                results = self._emit(result, metadata=metadata)
+                if results:
+                    await asyncio.gather(*results)
+                self.ack_signal.emit(ident, metadata)
+            self._release_refs(metadata)
+
+    async def _work_callback_key(self, stop_work: asyncio.Event):
+        while not stop_work.is_set():
+            await self._wakeup.wait()
+            self._wakeup.clear()
+            if stop_work.is_set():
+                return
+            # Drain every transition achievable without an external event
+            # (starting functions, delivering results, finishing failed
+            # elements) before blocking again.
+            while self._pump():
+                if stop_work.is_set():
+                    return
+
+    def _pump(self):
+        progressed = False
+        # New functions only start while both a work slot and an unconfirmed
+        # result slot are available.
+        while (self._running < self.parallelism
+               and self._in_flight < self.max_in_flight):
+            job = self._next_runnable()
+            if job is None:
+                break
+            self._start(job)
+            progressed = True
+        while self._in_flight < self.max_in_flight:
+            job = self._next_deliverable()
+            if job is None:
+                break
+            self._deliver(job)
+            progressed = True
+        return progressed
+
+    def _next_runnable(self):
+        for job in self._jobs:
+            if job["phase"] != "waiting":
+                continue
+            key_value = job["key"]
+            if (job["ordinal"] == self._key_next_run[key_value]
+                    and self._key_busy[key_value] == 0):
+                return job
+        return None
+
+    def _start(self, job):
+        job["phase"] = "running"
+        self._running += 1
+        self._key_busy[job["key"]] = 1
+        self.start_signal.emit(job["ident"], job["metadata"])
+        task = self._create_task(self.func(job["x"], *self.args, **self.kwargs))
+        job["func_task"] = task
+        task.add_done_callback(self._on_function_done)
+
+    def _on_function_done(self, task):
+        job = next(j for j in self._jobs if j["func_task"] is task)
+        job["deliverable"] = True
+        self.return_signal.emit(job["ident"], job["metadata"])
         try:
-            await self._wait_for_work_slot()
-            coro = self.func(x, *self.args, **self.kwargs)
-            task = self._create_task(coro)
-            await self.work_queue.put((task, metadata))
-            self._retain_refs(metadata)
+            job["result"] = task.result()
+        except asyncio.CancelledError:
+            # A cancelled function still has to go through the failure path so
+            # its identifier is reported exactly once and its slot is released.
+            job["error"] = asyncio.CancelledError()
         except Exception as e:
+            job["error"] = e
             logger.exception(e)
-            raise
+        self._running -= 1
+        # The next element of this key may now start its function, even though
+        # this element's result may still be waiting to be delivered/acked.
+        self._key_busy[job["key"]] = 0
+        self._key_next_run[job["key"]] = job["ordinal"] + 1
+        self._wakeup.set()
+
+    def _next_deliverable(self):
+        for job in self._jobs:
+            if (job["phase"] == "running" and job["deliverable"]
+                    and job["ordinal"]
+                    == self._key_next_deliver[job["key"]]):
+                return job
+        return None
+
+    def _deliver(self, job):
+        if job["error"] is not None:
+            # Exception path: nothing is handed downstream, so the element
+            # completes immediately (start -> return -> ack, no delivery) and
+            # hands over the per-key ordering position to the next element.
+            self.ack_signal.emit(job["ident"], job["metadata"])
+            self._finish(job)
+            return
+        job["phase"] = "in_flight"
+        self._in_flight += 1
+        self.delivered_signal.emit(job["ident"], job["metadata"])
+        try:
+            results = self._emit(job["result"], metadata=job["metadata"])
+        except Exception as e:
+            # Do not leak the in-flight slot if a downstream node raises
+            # synchronously: the element is still acknowledged exactly once.
+            logger.exception(e)
+            self._on_ack(job)
+            return
+        if results:
+            ack_task = self._create_task(asyncio.gather(*results))
+            ack_task.add_done_callback(self._make_ack_callback(job))
+        else:
+            self._on_ack(job)
+
+    def _make_ack_callback(self, job):
+        def _on_ack_task(task):
+            # Retrieve (and log) any downstream exception so it does not surface
+            # as an unretrieved task exception; the element is still acked once.
+            if not task.cancelled():
+                exc = task.exception()
+                if exc is not None:
+                    logger.exception(exc)
+            self._on_ack(job)
+        return _on_ack_task
+
+    def _on_ack(self, job):
+        if job["phase"] == "done":
+            return
+        self.ack_signal.emit(job["ident"], job["metadata"])
+        self._in_flight -= 1
+        self._finish(job)
+        self._wakeup.set()
+
+    def _finish(self, job):
+        job["phase"] = "done"
+        self._key_next_deliver[job["key"]] = job["ordinal"] + 1
+        self._release_refs(job["metadata"])
+        try:
+            self._jobs.remove(job)
+        except ValueError:
+            pass
+        if self.stop_on_exception and job["error"] is not None:
+            self.stop()
 
 
 @Stream.register_api()

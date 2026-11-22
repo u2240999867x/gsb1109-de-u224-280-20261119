@@ -105,6 +105,44 @@ When working asynchronously, we can also map asynchronous functions.
 
    asyncio.run(f_inc())
 
+Ordering within a key
+.....................
+
+By default ``map_async`` preserves order across the whole stream. When
+independent items can safely overtake each other, pass ``order="key"`` together
+with a ``key`` callable. Ordering is then preserved only between items that
+share a key (for example, observations from the same device), while different
+keys run independently. For a given key the second function does not start
+until the first one returns, and its result is not handed downstream until the
+previous item of that key has been fully acknowledged:
+
+.. code-block:: python
+
+   source = Stream(asynchronous=True)
+   mapped = source.map_async(
+       enrich, parallelism=2, max_in_flight=2,
+       order="key", key=lambda observation: observation["device_id"],
+   )
+
+``parallelism`` bounds how many functions run at once and ``max_in_flight``
+bounds how many results may be handed downstream without an acknowledgement.
+When the in-flight limit is reached no new function starts; a function that
+returns keeps its own slot until a downstream acknowledgement frees room.
+
+Four signals expose the lifecycle of every item so each identifier can be
+audited on both the success and exception paths:
+
+.. code-block:: python
+
+   mapped.start_signal.connect(lambda x, metadata: print("start", x))
+   mapped.return_signal.connect(lambda x, metadata: print("return", x))
+   mapped.delivered_signal.connect(lambda x, metadata: print("delivered", x))
+   mapped.ack_signal.connect(lambda x, metadata: print("acknowledged", x))
+
+``start``, ``return`` and ``ack`` fire exactly once per item. ``delivered``
+fires exactly once on the success path and is skipped when the function
+raises.
+
 
 Event Loop on a Separate Thread
 -------------------------------

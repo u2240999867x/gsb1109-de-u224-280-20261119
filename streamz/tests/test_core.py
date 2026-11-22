@@ -198,6 +198,289 @@ async def test_map_async():
     assert (time() - start) == pytest.approx(0.1, abs=4e-3)
 
 
+class _AckGate(sz.Stream):
+    """Downstream node whose write acknowledgement is controlled by the test."""
+    def __init__(self, upstream, **kwargs):
+        super().__init__(upstream, **kwargs)
+        self.pending = {}
+        self.delivered_order = []
+
+    def update(self, x, who=None, metadata=None):
+        future = asyncio.get_running_loop().create_future()
+        self.pending[x] = future
+        self.delivered_order.append(x)
+        return future
+
+    def release(self, x):
+        self.pending.pop(x).set_result(None)
+
+
+def _record_signals(mapped):
+    log = []
+    mapped.start_signal.connect(lambda x, m: log.append(("start", x)))
+    mapped.return_signal.connect(lambda x, m: log.append(("return", x)))
+    mapped.delivered_signal.connect(lambda x, m: log.append(("delivered", x)))
+    mapped.ack_signal.connect(lambda x, m: log.append(("ack", x)))
+    return log
+
+
+def test_map_async_key_validation():
+    source = Stream()
+
+    async def identity(x):
+        return x
+
+    with pytest.raises(ValueError):
+        source.map_async(identity, order="bogus")
+    with pytest.raises(ValueError):
+        source.map_async(identity, order="key")
+
+
+@pytest.mark.asyncio
+async def test_map_async_key_order_and_limits():
+    gates = {}
+    started = []
+
+    async def func(x):
+        started.append(x)
+        await gates[x].wait()
+        return x + "!"
+
+    source = Stream(asynchronous=True)
+    mapped = source.map_async(
+        func, parallelism=2, max_in_flight=2,
+        order="key", key=lambda x: x[0],
+    )
+    gate = _AckGate(mapped)
+    log = _record_signals(mapped)
+
+    for ident in ("A1", "A2", "B1"):
+        gates[ident] = asyncio.Event()
+    await source.emit("A1")
+    await source.emit("A2")
+    await source.emit("B1")
+    await asyncio.sleep(0.05)
+
+    # A1 is stuck in the function; B1 uses the other slot, A2 is blocked on A1.
+    assert started == ["A1", "B1"]
+    assert mapped._running == 2
+    assert mapped._in_flight == 0
+
+    # B1 returns but its write acknowledgement is withheld.
+    gates["B1"].set()
+    await asyncio.sleep(0.05)
+    assert gate.delivered_order == ["B1!"]
+    assert "B1!" in gate.pending
+    assert mapped._in_flight == 1
+    assert mapped._running == 1
+
+    # C1 takes the freed function slot despite B's slow write.
+    gates["C1"] = asyncio.Event()
+    await source.emit("C1")
+    await asyncio.sleep(0.05)
+    assert started == ["A1", "B1", "C1"]
+    assert mapped._running == 2
+
+    # C1 returns too; two results are now handed downstream but unconfirmed.
+    gates["C1"].set()
+    await asyncio.sleep(0.05)
+    assert gate.delivered_order == ["B1!", "C1!"]
+    assert mapped._in_flight == 2
+    assert mapped._running == 1
+
+    # No free result slot: D1 and E1 must not start any function.
+    gates["D1"] = asyncio.Event()
+    gates["E1"] = asyncio.Event()
+    await source.emit("D1")
+    await source.emit("E1")
+    await asyncio.sleep(0.05)
+    assert started == ["A1", "B1", "C1"]
+    assert mapped._running == 1
+    assert mapped._in_flight == 2
+
+    # Confirming B1 frees exactly one slot, so a single runnable item starts.
+    gate.release("B1!")
+    await asyncio.sleep(0.05)
+    assert ("ack", "B1") in log
+    assert started == ["A1", "B1", "C1", "D1"]
+    assert mapped._in_flight == 1
+    assert mapped._running == 2
+
+    # Every identifier is reported at most once per lifecycle phase.
+    phases = [entry for entry in log]
+    assert len(phases) == len(set(phases))
+
+
+@pytest.mark.asyncio
+async def test_map_async_key_per_key_delivery_order():
+    gates = {}
+    started = []
+
+    async def func(x):
+        started.append(x)
+        await gates[x].wait()
+        return x + "!"
+
+    source = Stream(asynchronous=True)
+    mapped = source.map_async(
+        func, parallelism=2, max_in_flight=2,
+        order="key", key=lambda x: x[0],
+    )
+    gate = _AckGate(mapped)
+
+    # Same device A: A2's function returns first, but A1's result must be
+    # delivered first. Device B is independent and may overtake both.
+    for ident in ("A1", "A2", "B1"):
+        gates[ident] = asyncio.Event()
+    await source.emit("A1")
+    await source.emit("A2")
+    await source.emit("B1")
+    await asyncio.sleep(0.05)
+    assert started == ["A1", "B1"]  # A2 waits for A1's function
+
+    gates["B1"].set()
+    await asyncio.sleep(0.05)
+    assert gate.delivered_order == ["B1!"]  # different device overtakes
+
+    # A1 returns, freeing device A; A2 can finally start.
+    gates["A1"].set()
+    await asyncio.sleep(0.05)
+    assert started == ["A1", "B1", "A2"]
+    # A1 is delivered before A2, but A2's hand-off additionally waits for A1's
+    # downstream acknowledgement.
+    assert gate.delivered_order == ["B1!", "A1!"]
+    gate.release("A1!")
+    await asyncio.sleep(0.05)
+
+    gates["A2"].set()
+    await asyncio.sleep(0.05)
+    # Within device A the delivery order follows input order.
+    assert gate.delivered_order == ["B1!", "A1!", "A2!"]
+
+
+@pytest.mark.asyncio
+async def test_map_async_key_exception_handoff_and_refs():
+    gates = {}
+    failures = {"A1"}
+    acked = []
+
+    async def func(x):
+        await gates[x].wait()
+        if x in failures:
+            raise RuntimeError("boom " + x)
+        return x + "!"
+
+    source = Stream(asynchronous=True)
+
+    ref_a1 = RefCounter()
+    ref_a2 = RefCounter()
+    mapped = source.map_async(
+        func, parallelism=2, max_in_flight=2,
+        order="key", key=lambda x: x[0], stop_on_exception=False,
+    )
+    ref_a1.loop = mapped.loop
+    ref_a1.cb = lambda: acked.append("A1")
+    ref_a2.loop = mapped.loop
+    ref_a2.cb = lambda: acked.append("A2")
+    gate = _AckGate(mapped)
+    log = _record_signals(mapped)
+
+    for ident in ("A1", "A2"):
+        gates[ident] = asyncio.Event()
+    await source.emit("A1", metadata=[{"ref": ref_a1}])
+    await source.emit("A2", metadata=[{"ref": ref_a2}])
+    await asyncio.sleep(0.05)
+    # Before release each raw observation is still retained exactly once.
+    assert ref_a1.count == 1
+    assert mapped._running == 1  # only A1 runs; A2 waits on device A
+
+    # A1 fails but continuation is allowed: no downstream delivery, yet the
+    # failure hands off the per-key ordering so A2 is processed next.
+    gates["A1"].set()
+    await asyncio.sleep(0.05)
+    assert ("delivered", "A1") not in log
+    assert log.count(("start", "A1")) == 1
+    assert log.count(("return", "A1")) == 1
+    assert log.count(("ack", "A1")) == 1
+    assert ref_a1.count == 0
+    assert acked == ["A1"]  # acknowledgement recorded right after release
+
+    gates["A2"].set()
+    await asyncio.sleep(0.05)
+    assert gate.delivered_order == ["A2!"]
+    assert ref_a2.count == 1  # handed downstream but not yet acknowledged
+    gate.release("A2!")
+    await asyncio.sleep(0.05)
+    assert ref_a2.count == 0
+    assert acked == ["A1", "A2"]
+    assert log.count(("start", "A2")) == 1
+    assert log.count(("return", "A2")) == 1
+    assert log.count(("delivered", "A2")) == 1
+    assert log.count(("ack", "A2")) == 1
+    assert mapped.work_task is not None  # stream kept running after the failure
+
+
+@pytest.mark.asyncio
+async def test_map_async_key_stop_on_exception():
+    gates = {}
+
+    async def func(x):
+        await gates[x].wait()
+        if x == "A1":
+            raise RuntimeError("boom A1")
+        return x + "!"
+
+    source = Stream(asynchronous=True)
+    mapped = source.map_async(
+        func, parallelism=2, max_in_flight=2,
+        order="key", key=lambda x: x[0], stop_on_exception=True,
+    )
+    _AckGate(mapped)
+    log = _record_signals(mapped)
+
+    for ident in ("A1", "B1"):
+        gates[ident] = asyncio.Event()
+    await source.emit("A1")
+    await source.emit("B1")
+    await asyncio.sleep(0.05)
+
+    gates["A1"].set()
+    await await_for(lambda: mapped.work_task is None, 1)
+
+    # The failing identifier still completes its full lifecycle exactly once.
+    assert log.count(("start", "A1")) == 1
+    assert log.count(("return", "A1")) == 1
+    assert ("delivered", "A1") not in log
+    assert log.count(("ack", "A1")) == 1
+
+
+@pytest.mark.asyncio
+async def test_map_async_stream_mode_signals_and_order():
+    async def func(x):
+        await asyncio.sleep(0.01)
+        return x + "!"
+
+    source = Stream(asynchronous=True)
+    mapped = source.map_async(func, parallelism=2)
+    log = _record_signals(mapped)
+    results = mapped.sink_to_list()
+
+    for ident in ("a", "b", "c"):
+        await source.emit(ident)
+    await await_for(lambda: len(results) == 3, 1)
+
+    assert results == ["a!", "b!", "c!"]
+    for ident in ("a", "b", "c"):
+        assert log.count(("start", ident)) == 1
+        assert log.count(("return", ident)) == 1
+        assert log.count(("delivered", ident)) == 1
+        assert log.count(("ack", ident)) == 1
+    # The default mode remains fully ordered across the whole stream.
+    indices = {phase: [i for i, (p, _) in enumerate(log) if p == phase]
+               for phase in ("start", "return", "delivered", "ack")}
+    assert indices["delivered"] == sorted(indices["delivered"])
+
+
 def test_map_args():
     source = Stream()
     L = source.map(operator.add, 10).sink_to_list()
