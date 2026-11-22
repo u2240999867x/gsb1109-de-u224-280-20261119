@@ -9,6 +9,7 @@ __license__ = "MIT"
 
 import copy
 import os
+import re
 import types
 import typing
 from snakemake.caching.rule import RuleCache
@@ -45,6 +46,7 @@ from snakemake.io import (
     get_flag_value,
     expand,
     strip_wildcard_constraints,
+    regex_from_filepattern,
     apply_wildcards,
     is_flagged,
     flag,
@@ -1303,6 +1305,63 @@ class Rule(RuleInterface):
         except ValueError as ex:
             raise IOFileException(f"{ex}", snakefile=self.snakefile, lineno=self.lineno)
 
+    def explain_nonproducer(self, requested_output):
+        """Explain why this rule does not produce the requested output.
+
+        Returns ``None`` if the rule is a producer.  Otherwise a tuple of a
+        reason code and a human-readable detail is returned.  This method only
+        inspects the output patterns; it never evaluates input functions.
+        """
+        try:
+            for o in self.products():
+                if o.match(requested_output):
+                    return None
+        except sre_constants.error as ex:
+            raise IOFileException(
+                f"{ex} in wildcard statement",
+                snakefile=self.snakefile,
+                lineno=self.lineno,
+            )
+        except ValueError as ex:
+            raise IOFileException(f"{ex}", snakefile=self.snakefile, lineno=self.lineno)
+
+        for o in self.products():
+            stripped = strip_wildcard_constraints(str(o))
+            try:
+                match = re.match(regex_from_filepattern(stripped), requested_output)
+            except sre_constants.error as ex:
+                raise IOFileException(
+                    f"{ex} in wildcard statement",
+                    snakefile=self.snakefile,
+                    lineno=self.lineno,
+                )
+            except ValueError as ex:
+                raise IOFileException(
+                    f"{ex}", snakefile=self.snakefile, lineno=self.lineno
+                )
+            if match is None:
+                continue
+            wildcards = match.groupdict()
+            constraints = o.wildcard_constraints()
+            for name, value in wildcards.items():
+                constraint = constraints.get(name)
+                if constraint is not None and not constraint.match(value):
+                    return (
+                        "wildcard-constraint",
+                        f"wildcard {name}={value!r} does not match constraint "
+                        f"{constraint.pattern!r} of output {str(o)!r}",
+                    )
+            return (
+                "wildcard-resolution",
+                f"output pattern {str(o)!r} matches only when wildcard constraints "
+                f"are ignored",
+            )
+
+        return (
+            "no-match",
+            "output patterns do not match the requested file",
+        )
+
     def get_wildcards(self, requested_output, wildcards_dict=None):
         """
         Return wildcard dictionary by
@@ -1425,6 +1484,30 @@ class Ruleorder:
             return wildcard_cmp
 
         return 0
+
+    def explain_compare(self, rule1, rule2):
+        """Return a comparison together with the reason for it.
+
+        ``rule2`` is preferred over ``rule1`` if the comparison is negative.
+        Unlike :meth:`compare`, this also states which mechanism established
+        the ordering, which is useful for diagnostics.
+        """
+        comp = self.compare(rule1, rule2)
+        if rule1.name == rule2.name or comp == 0:
+            return comp, None
+        if rule1.name != rule2.name:
+            for clause in reversed(self.order):
+                if rule1.name in clause and rule2.name in clause:
+                    return (
+                        comp,
+                        f"ruleorder: {' > '.join(clause)}",
+                    )
+        if rule1.has_wildcards() != rule2.has_wildcards():
+            return (
+                comp,
+                "rule without wildcards is preferred over a rule with wildcards",
+            )
+        return comp, None
 
     def __iter__(self):
         return self.order.__iter__()

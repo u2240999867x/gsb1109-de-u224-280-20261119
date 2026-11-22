@@ -1328,6 +1328,20 @@ def get_argument_parser(
             "inferring DAG. This can help to debug unexpected DAG topology or errors.",
         )
         group_output.add_argument(
+            "--explain-dag",
+            "--explain-rule-selection",
+            "--explain-rules",
+            "--explain",
+            action="store_true",
+            dest="explain_dag",
+            help="Print a report that explains for each target file why a "
+            "particular producer rule was selected. The report lists rejected "
+            "candidates together with the reason for their rejection (wildcard "
+            "constraint, input function error, missing input, or rule order "
+            "elimination). Candidates eliminated by rule order are explicitly "
+            "reported as not evaluated.",
+        )
+        group_output.add_argument(
             "--nocolor", action="store_true", help="Do not use a colored output."
         )
         group_output.add_argument(
@@ -2061,6 +2075,7 @@ def create_output_settings(args, log_handler_settings) -> OutputSettings:
         nocolor=args.nocolor,
         quiet=args.quiet,
         debug_dag=args.debug_dag,
+        explain_dag=args.explain_dag,
         verbose=args.verbose,
         show_failed_logs=args.show_failed_logs,
         log_handler_settings=log_handler_settings,
@@ -2295,6 +2310,8 @@ def args_to_api(args, parser):
                         dag_api.printfilegraph()
                     elif args.d3dag:
                         dag_api.printd3dag()
+                    elif args.explain_dag and not args.dryrun:
+                        dag_api.explain_rule_selection()
                     elif args.unlock:
                         dag_api.unlock()
                     elif args.cleanup_metadata:

@@ -386,6 +386,11 @@ Snakemake does not connect my rules as I have expected, how can I debug my depen
 Since dependencies are inferred implicitly, results can sometimes be surprising when little errors are made in filenames or when input functions raise unexpected errors.
 For debugging such cases, Snakemake provides the command line flag ``--debug-dag`` that leads to printing details each decision that is taken while determining the dependencies.
 
+If you want to know why a particular target file was assigned to a producer rule, use ``--explain-dag`` (optionally together with ``--dry-run``).
+It prints a report with the target path, the selected rule, and every rejected or pruned candidate together with the reason for its rejection, e.g. a wildcard constraint, a failing input function, a missing input further down the dependency chain, or elimination by ``ruleorder``.
+Candidates that are eliminated by ``ruleorder`` are reported as *not evaluated*, i.e. Snakemake does not claim anything about their inputs or availability.
+The same report is available programmatically via ``DAGApi.rule_selection_report()``.
+
 In addition, it is advisable to check whether certain intermediate files would be created by targeting them individually via the command line.
 
 Finally, it is possible to constrain the rules that are considered for DAG creating via ``--allowed-rules``.

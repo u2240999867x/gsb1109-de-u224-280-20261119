@@ -1,0 +1,37 @@
+ruleorder: second > third > fourth
+
+def failing_input(wildcards):
+    raise ValueError("intentional input function failure")
+
+rule all:
+    input: "archive/final.txt"
+
+rule first:
+    output: "archive/{kind}.txt"
+    wildcard_constraints:
+        kind = "pdf"
+    input: "in/first.txt"
+    shell: "cp {input} {output}"
+
+rule second:
+    output: "archive/{kind}.txt"
+    wildcard_constraints:
+        kind = "final"
+    input: failing_input
+    shell: "cp {input} {output}"
+
+
+
+rule third:
+    output: "archive/{kind}.txt"
+    wildcard_constraints:
+        kind = "final"
+    input: "in/a.txt"
+    shell: "cp {input} {output}"
+
+rule fourth:
+    output: "archive/{kind}.txt"
+    wildcard_constraints:
+        kind = "final"
+    input: "in/b.txt"
+    shell: "cp {input} {output}"

@@ -1079,6 +1079,28 @@ class Workflow(WorkflowExecutorInterface):
         self._build_dag()
         print(self.dag)
 
+    def print_rule_selection(self, targets=None):
+        """Build the DAG and print the rule selection report without executing."""
+        try:
+            self.build_dag_for_explanation()
+        except Exception:
+            # A failed DAG (e.g. an ambiguity) is exactly the situation in
+            # which the recorded decisions are most useful. Print them before
+            # propagating the error.
+            print(self.dag.rule_selection.report(targets))
+            raise
+        print(self.dag.rule_selection.report(targets))
+
+    def build_dag_for_explanation(self):
+        """Build the DAG so that rule selection decisions can be inspected."""
+        assert self.dag_settings is not None
+        self._prepare_dag(
+            forceall=self.dag_settings.forceall,
+            ignore_incomplete=True,
+            lock_warn_only=True,
+        )
+        self._build_dag()
+
     def printrulegraph(self):
         assert self.dag_settings is not None
         self._prepare_dag(
@@ -1255,10 +1277,47 @@ class Workflow(WorkflowExecutorInterface):
 
     def _build_dag(self):
         logger.info("Building DAG of jobs...")
-        self.async_run(self.dag.init())
-        self.async_run(self.dag.update_checkpoint_dependencies())
+        try:
+            self.async_run(self.dag.init())
+            self.async_run(self.dag.update_checkpoint_dependencies())
+        except Exception:
+            if self.explain_dag or (
+                self.output_settings is not None and self.output_settings.debug_dag
+            ):
+                self.log_rule_selection_report()
+            raise
 
         self.log_rulegraph()
+
+        if self.output_settings is not None and self.output_settings.debug_dag:
+            self.log_rule_selection_report()
+
+    @property
+    def explain_dag(self):
+        return self.output_settings is not None and self.output_settings.explain_dag
+
+    def log_rule_selection_report(self):
+        debug_event = (
+            self.output_settings is not None and self.output_settings.debug_dag
+        )
+        channel = "debug-dag" if debug_event else "explain"
+        reported = getattr(self, "_rule_selection_reported", None)
+        if reported is None:
+            reported = self._rule_selection_reported = set()
+        if channel in reported:
+            return
+        reported.add(channel)
+        lines = self.dag.rule_selection.report_lines()
+        for line in lines:
+            if debug_event:
+                logger.debug(
+                    None,
+                    extra=dict(event=LogEvent.DEBUG_DAG, selection=line),
+                )
+            else:
+                # Explicitly requested explanation, hence not subject to the
+                # regular quiet filtering of job/progress messages.
+                logger.info(line)
 
     def execute(
         self,
@@ -1442,6 +1501,8 @@ class Workflow(WorkflowExecutorInterface):
                     return
                 # in case of dryrun and quiet, just print above info and exit. this set is equiv to --quiet
                 if self.output_settings.quiet == {Quietness.RULES, Quietness.PROGRESS}:
+                    if self.explain_dag:
+                        self.log_rule_selection_report()
                     return
 
             if not self.dryrun and not self.execution_settings.no_hooks:
@@ -1454,6 +1515,10 @@ class Workflow(WorkflowExecutorInterface):
             except Exception as e:
                 if self.dryrun:
                     self.log_provenance_info()
+                if self.explain_dag or (
+                    self.output_settings is not None and self.output_settings.debug_dag
+                ):
+                    self.log_rule_selection_report()
                 raise e
             finally:
                 if should_deploy_sources:
@@ -1481,6 +1546,8 @@ class Workflow(WorkflowExecutorInterface):
                         )
                         self.dag.print_reasons()
                         self.log_provenance_info()
+                        if self.explain_dag:
+                            self.log_rule_selection_report()
 
                     logger.info(
                         "This was a dry-run (flag -n). The order of jobs "
@@ -1492,6 +1559,8 @@ class Workflow(WorkflowExecutorInterface):
                             "which will result in alteration of the DAG of "
                             "jobs (e.g. adding more jobs) after their completion."
                         )
+                    if self.explain_dag:
+                        self.log_rule_selection_report()
                 else:
                     if not self.execution_settings.no_hooks:
                         self._onsuccess(self.logger_manager.get_logfile())

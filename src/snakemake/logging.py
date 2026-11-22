@@ -241,7 +241,9 @@ SNAKEMAKE
         """Format for dag_debug log."""
         output = []
 
-        if "file" in msg:
+        if "selection" in msg:
+            output.append(str(msg["selection"]))
+        elif "file" in msg:
             output.append(
                 f"file {msg['file']}:\n    {msg['msg']}\n{textwrap.indent(str(msg['exception']), '    ')}"
             )

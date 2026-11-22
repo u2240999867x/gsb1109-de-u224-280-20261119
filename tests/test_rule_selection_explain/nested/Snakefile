@@ -1,0 +1,28 @@
+ruleorder: high > side
+
+rule all:
+    input: "archive/final.txt"
+
+rule high:
+    output: "archive/final.txt"
+    input: "sub/mid.txt"
+    shell: "cp {input} {output}"
+
+rule side:
+    output: "archive/final.txt"
+    input: "in/side.txt"
+    shell: "cp {input} {output}"
+
+rule sub_excluded:
+    output: "sub/{name}.txt"
+    wildcard_constraints:
+        name = "other"
+    input: "in/sub.txt"
+    shell: "cp {input} {output}"
+
+rule sub_deep:
+    output: "sub/{name}.txt"
+    wildcard_constraints:
+        name = "mid"
+    input: "deep/missing.txt"
+    shell: "cp {input} {output}"

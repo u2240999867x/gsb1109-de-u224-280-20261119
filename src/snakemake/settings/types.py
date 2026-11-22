@@ -421,6 +421,9 @@ class OutputSettings(SettingsBase, OutputSettingsLoggerInterface):
     nocolor
     quiet
     debug_dag
+    explain_dag
+        Print a rule selection report that explains why each target file was
+        assigned to a producer rule, including rejected or pruned candidates.
     verbose
     show_failed_logs
     log_handler_settings
@@ -442,6 +445,7 @@ class OutputSettings(SettingsBase, OutputSettingsLoggerInterface):
     nocolor: bool = False
     quiet: Optional[AnySet[Quietness]] = None
     debug_dag: bool = False
+    explain_dag: bool = False
     verbose: bool = False
     show_failed_logs: bool = False
     log_handler_settings: Mapping[str, LogHandlerSettingsBase] = immutables.Map()

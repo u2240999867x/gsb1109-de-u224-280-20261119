@@ -12,7 +12,7 @@ import functools
 import hashlib
 from pathlib import Path
 import sys
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional
 import os
 import tarfile
 from snakemake.common.constants import MIN_PY_VERSION, SNAKEFILE_CHOICES
@@ -786,6 +786,35 @@ class DAGApi(ApiBase):
     def printd3dag(self):
         """Print the DAG of the workflow in D3.js compatible JSON."""
         self.workflow_api._workflow.printd3dag()
+
+    @_no_exec
+    def explain_rule_selection(self, targets: Optional[Iterable[str]] = None):
+        """Print a report explaining the selected producer rule for each target.
+
+        The report is derived from the decisions made while the DAG was built.
+        It lists rejected candidates and the reason for their rejection, and
+        marks candidates that were eliminated by rule order as not evaluated.
+
+        Arguments
+        ---------
+        targets: Optional[Iterable[str]] -- Restrict the report to these target files.
+        """
+        self.workflow_api._workflow.print_rule_selection(targets=targets)
+
+    @_no_exec
+    def rule_selection_report(self, targets: Optional[Iterable[str]] = None):
+        """Build the DAG and return the structured rule selection report.
+
+        This is the same data that backs :meth:`explain_rule_selection` and the
+        ``--explain-dag`` report.  Rendering or returning it does not evaluate
+        input functions again.
+
+        Arguments
+        ---------
+        targets: Optional[Iterable[str]] -- Restrict the report to these target files.
+        """
+        self.workflow_api._workflow.build_dag_for_explanation()
+        return self.workflow_api._workflow.dag.rule_selection.as_dict(targets)
 
     @_no_exec
     def unlock(self):

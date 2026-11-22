@@ -21,7 +21,7 @@ import json
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 import uuid
 from collections import Counter, defaultdict, deque, namedtuple
-from functools import partial
+from functools import partial, cmp_to_key
 from itertools import chain, filterfalse, groupby
 from operator import attrgetter
 from pathlib import Path
@@ -85,10 +85,88 @@ from snakemake.jobs import (
 from snakemake.settings.types import SharedFSUsage
 from snakemake.logging import logger
 from snakemake.output_index import OutputIndex
+from snakemake.rule_selection import (
+    CandidateStatus,
+    RejectionReason,
+    RuleSelectionRecorder,
+    SelectionOutcome,
+)
 from snakemake.sourcecache import LocalSourceFile, SourceFile
 from snakemake.settings.enums import ChangeType
 
 PotentialDependency = namedtuple("PotentialDependency", ["file", "jobs", "known"])
+
+
+def _compare_candidates(candidate, other):
+    """Order candidates by rule priority, highest first.
+
+    ``Rule.__lt__``/``__gt__`` encode the partial order given by ruleorder and
+    the implicit preference for rules without wildcards.  Python's ``sorted``
+    cannot handle a partial order reliably, so ties are broken deterministically
+    by rule name.  For incomparable candidates this does not change the
+    decision, but it makes evaluation order reproducible.
+    """
+    if candidate > other:
+        return -1
+    if candidate < other:
+        return 1
+    candidate_name = candidate.rule.name
+    other_name = other.rule.name
+    if candidate_name < other_name:
+        return -1
+    if candidate_name > other_name:
+        return 1
+    return 0
+
+
+def sort_candidates(candidates):
+    return sorted(candidates, key=cmp_to_key(_compare_candidates))
+
+
+class CandidateJob:
+    """A potential producer that is only turned into a job when it is actually
+    considered.
+
+    Constructing a :class:`~snakemake.jobs.Job` evaluates its input functions.
+    Doing that eagerly for all matching rules would evaluate candidates that
+    ruleorder prunes later on and could trigger unintended side effects.
+    """
+
+    def __init__(self, rule, targetfile, wildcards_dict=None):
+        self.rule = rule
+        self.targetfile = targetfile
+        self.wildcards_dict = wildcards_dict
+        self._job = None
+
+    def __hash__(self):
+        return hash((self.rule.name, self.targetfile))
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, CandidateJob)
+            and self.rule.name == other.rule.name
+            and self.targetfile == other.targetfile
+        )
+
+    def __lt__(self, other):
+        return self.rule.__lt__(other.rule)
+
+    def __gt__(self, other):
+        return self.rule.__gt__(other.rule)
+
+    def __repr__(self):
+        return self.rule.name
+
+    def is_job(self):
+        return self._job is not None
+
+    def set_job(self, job):
+        self._job = job
+
+    @property
+    def job(self):
+        assert self._job is not None, "bug: candidate was used before it was evaluated"
+        return self._job
 
 
 def toposort(graph):
@@ -175,6 +253,9 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
 
         self.job_factory = JobFactory()
         self.group_job_factory = GroupJobFactory()
+
+        self.rule_selection = RuleSelectionRecorder()
+        self._job_creation_failures = dict()
 
         self.forcerules = set()
         self.forcefiles = set()
@@ -1089,6 +1170,7 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         known_producers=None,
         progress=False,
         create_inventory=False,
+        path=(),
     ):
         """Update the DAG by adding given jobs and their dependencies."""
         if visited is None:
@@ -1099,18 +1181,149 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         exceptions = list()
         cycles = list()
 
+        trace_path = path
+        trace = None
+        if file is not None:
+            if not trace_path or trace_path[-1] != file:
+                trace_path = path + (file,)
+            trace = self.rule_selection.begin(file, trace_path)
+
         # check if all potential producers are strictly ordered
-        jobs = sorted(jobs, reverse=True)
+        jobs = sort_candidates(jobs)
         discarded_jobs = set()
 
-        def is_strictly_higher_ordered(pivot_job):
-            return all(
-                pivot_job > job
-                for job in jobs
-                if job is not pivot_job and job not in discarded_jobs
-            )
+        def prune_remaining(pivot_candidate, start_index):
+            """Record and skip candidates that are strictly lower ordered than
+            an already successful producer. They are deliberately not
+            evaluated, hence no statement about their inputs is made."""
+            remaining = [
+                other
+                for other in jobs[start_index:]
+                if other not in discarded_jobs
+            ]
+            if not remaining or not all(pivot_candidate > other for other in remaining):
+                return False
+            if trace is not None:
+                for other in remaining:
+                    self.rule_selection.record(
+                        file,
+                        other.rule.name,
+                        trace_path,
+                        status=CandidateStatus.NOT_EVALUATED,
+                        reason=RejectionReason.RULEORDER,
+                        detail=order_reason(pivot_candidate, other),
+                        wildcards=getattr(other, "wildcards_dict", None),
+                        evaluated=False,
+                    )
+            return True
 
-        for i, job in enumerate(jobs):
+        def order_reason(pivot_job, job):
+            _, reason = self.workflow._ruleorder.explain_compare(
+                job.rule, pivot_job.rule
+            )
+            detail = f"{pivot_job.rule.name} is preferred over {job.rule.name}"
+            if reason:
+                detail += f" ({reason})"
+            return detail
+
+        async def materialize(candidate):
+            if not isinstance(candidate, CandidateJob):
+                return candidate
+            key = (candidate.rule.name, candidate.targetfile)
+            if key in self._job_creation_failures:
+                raise self._job_creation_failures[key]
+            try:
+                job = await self.new_job(
+                    candidate.rule,
+                    targetfile=candidate.targetfile,
+                    wildcards_dict=candidate.wildcards_dict,
+                )
+            except InputFunctionException as ex:
+                self._job_creation_failures[key] = ex
+                raise
+            candidate.set_job(job)
+            return job
+
+        if (
+            StrictDagEvaluation.FUNCTIONS
+            in self.workflow.dag_settings.strict_evaluation
+        ):
+            # Strict evaluation also validates candidates that ruleorder would
+            # prune later on. This intentionally evaluates their input
+            # functions, i.e. it is opt-in and differs from normal scheduling.
+            for candidate in jobs:
+                await materialize(candidate)
+
+        for i, candidate in enumerate(jobs):
+            # A successful candidate that is strictly higher ordered than this
+            # one makes it unnecessary to look at this candidate at all.
+            skipping = None
+            for producer_job in producers:
+                if producer_job > candidate:
+                    skipping = producer_job
+                    break
+            if skipping is not None:
+                if trace is not None:
+                    self.rule_selection.record(
+                        file,
+                        candidate.rule.name,
+                        trace_path,
+                        status=CandidateStatus.NOT_EVALUATED,
+                        reason=RejectionReason.RULEORDER,
+                        detail=order_reason(skipping, candidate),
+                        wildcards=getattr(candidate, "wildcards_dict", None),
+                        evaluated=False,
+                    )
+                continue
+            try:
+                job = await materialize(candidate)
+            except InputFunctionException as ex:
+                if (
+                    StrictDagEvaluation.FUNCTIONS
+                    in self.workflow.dag_settings.strict_evaluation
+                ):
+                    raise
+                if trace is not None:
+                    self.rule_selection.record(
+                        file,
+                        candidate.rule.name,
+                        trace_path,
+                        status=CandidateStatus.REJECTED,
+                        reason=RejectionReason.INPUT_FUNCTION,
+                        detail=str(ex),
+                        wildcards=getattr(candidate, "wildcards_dict", None),
+                        evaluated=True,
+                        exception_type=type(ex).__name__,
+                    )
+                exceptions.append(ex)
+                discarded_jobs.add(candidate)
+                continue
+            except WorkflowError as ex:
+                if trace is not None:
+                    self.rule_selection.record(
+                        file,
+                        candidate.rule.name,
+                        trace_path,
+                        status=CandidateStatus.REJECTED,
+                        reason=RejectionReason.EVALUATION_ERROR,
+                        detail=str(ex),
+                        wildcards=getattr(candidate, "wildcards_dict", None),
+                        evaluated=True,
+                        exception_type=type(ex).__name__,
+                    )
+                exceptions.append(ex)
+                discarded_jobs.add(candidate)
+                continue
+            if trace is not None:
+                self.rule_selection.record(
+                    file,
+                    job.rule.name,
+                    trace_path,
+                    status=CandidateStatus.CANDIDATE,
+                    detail="job was constructed for evaluation",
+                    wildcards=job.wildcards_dict,
+                    evaluated=True,
+                )
             logger.debug(
                 None, extra=dict(event=LogEvent.DEBUG_DAG, status="candidate", job=job)
             )
@@ -1118,9 +1331,33 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                 is_flagged(f, "before_update") for f in job.input if f == file
             ):
                 cycles.append(job)
+                if trace is not None:
+                    self.rule_selection.record(
+                        file,
+                        job.rule.name,
+                        trace_path,
+                        status=CandidateStatus.REJECTED,
+                        reason=RejectionReason.CYCLIC_GRAPH,
+                        detail="the job depends on the file it shall produce",
+                        wildcards=job.wildcards_dict,
+                        evaluated=True,
+                        exception_type="CyclicGraphException",
+                    )
                 continue
             if job in visited:
                 cycles.append(job)
+                if trace is not None:
+                    self.rule_selection.record(
+                        file,
+                        job.rule.name,
+                        trace_path,
+                        status=CandidateStatus.REJECTED,
+                        reason=RejectionReason.CYCLIC_GRAPH,
+                        detail="the job was already visited on this dependency path",
+                        wildcards=job.wildcards_dict,
+                        evaluated=True,
+                        exception_type="CyclicGraphException",
+                    )
                 continue
             try:
                 self.check_periodic_wildcards(job)
@@ -1130,18 +1367,46 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                     known_producers=known_producers,
                     progress=progress,
                     create_inventory=create_inventory,
+                    path=trace_path,
                 )
                 producers.append(job)
-                if is_strictly_higher_ordered(job):
-                    # All other jobs are either discarded or strictly less given
-                    # any defined ruleorder.
+                if prune_remaining(candidate, i + 1):
                     break
             except (
                 MissingInputException,
                 WorkflowError,
             ) as ex:
                 exceptions.append(ex)
-                discarded_jobs.add(job)
+                discarded_jobs.add(candidate)
+                if trace is not None:
+                    failure_path = getattr(ex, "_selection_path", None)
+                    nested = failure_path is not None and failure_path[-1] != file
+                    reason = (
+                        RejectionReason.DEPENDENCY_FAILED
+                        if nested
+                        else RejectionReason.MISSING_INPUT
+                        if isinstance(ex, MissingInputException)
+                        else RejectionReason.INPUT_FUNCTION
+                        if isinstance(ex, InputFunctionException)
+                        else RejectionReason.EVALUATION_ERROR
+                    )
+                    detail = str(ex)
+                    if nested:
+                        detail = (
+                            f"dependency path {' -> '.join(failure_path)} failed: "
+                            + detail
+                        )
+                    self.rule_selection.record(
+                        file,
+                        job.rule.name,
+                        trace_path,
+                        status=CandidateStatus.REJECTED,
+                        reason=reason,
+                        detail=detail,
+                        wildcards=job.wildcards_dict,
+                        evaluated=True,
+                        exception_type=type(ex).__name__,
+                    )
             except (CyclicGraphException,) as ex:
                 if (
                     StrictDagEvaluation.CYCLIC_GRAPH
@@ -1149,7 +1414,19 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                 ):
                     raise ex
                 exceptions.append(ex)
-                discarded_jobs.add(job)
+                discarded_jobs.add(candidate)
+                if trace is not None:
+                    self.rule_selection.record(
+                        file,
+                        job.rule.name,
+                        trace_path,
+                        status=CandidateStatus.REJECTED,
+                        reason=RejectionReason.CYCLIC_GRAPH,
+                        detail=str(ex),
+                        wildcards=job.wildcards_dict,
+                        evaluated=True,
+                        exception_type=type(ex).__name__,
+                    )
             except (PeriodicWildcardError,) as ex:
                 if (
                     StrictDagEvaluation.PERIODIC_WILDCARDS
@@ -1157,7 +1434,19 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                 ):
                     raise ex
                 exceptions.append(ex)
-                discarded_jobs.add(job)
+                discarded_jobs.add(candidate)
+                if trace is not None:
+                    self.rule_selection.record(
+                        file,
+                        job.rule.name,
+                        trace_path,
+                        status=CandidateStatus.REJECTED,
+                        reason=RejectionReason.PERIODIC_WILDCARDS,
+                        detail=str(ex),
+                        wildcards=job.wildcards_dict,
+                        evaluated=True,
+                        exception_type=type(ex).__name__,
+                    )
             except RecursionError as e:
                 raise WorkflowError(
                     e,
@@ -1175,13 +1464,36 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                     ),
                 )
         if not producers:
+            detail = "no candidate rule could produce the file"
             if cycles:
                 job = cycles[0]
-                raise CyclicGraphException(job.rule, file, rule=job.rule)
+                ex = CyclicGraphException(job.rule, file, rule=job.rule)
+                self._annotate_failure(ex, trace_path)
+                if trace is not None:
+                    self.rule_selection.finish(
+                        file,
+                        trace_path,
+                        SelectionOutcome.FAILED,
+                        detail=detail,
+                    )
+                raise ex
             if len(exceptions) > 1:
-                raise WorkflowError(*exceptions)
+                ex = WorkflowError(*exceptions)
             elif len(exceptions) == 1:
-                raise exceptions[0]
+                ex = exceptions[0]
+            else:
+                ex = MissingRuleException(file)
+            self._annotate_failure(ex, trace_path)
+            if trace is not None:
+                self.rule_selection.finish(
+                    file,
+                    trace_path,
+                    SelectionOutcome.FAILED,
+                    detail=detail,
+                )
+            if exceptions:
+                raise ex
+            raise MissingRuleException(file)
         else:
             for e in exceptions:
                 if isinstance(e, CyclicGraphException) or isinstance(
@@ -1194,13 +1506,91 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
             logger.info(f"Processed {n} potential jobs.")
             self._progress = n
 
-        producers.sort(reverse=True)
+        producers = sort_candidates(producers)
         producer = producers[0]
         ambiguities = list(
             filter(lambda x: not x < producer and not producer < x, producers[1:])
         )
-        if ambiguities and not self.workflow.execution_settings.ignore_ambiguity:
-            raise AmbiguousRuleException(file, producer, ambiguities[0])
+        if ambiguities and not self._ignore_ambiguity():
+            if trace is not None:
+                self.rule_selection.record(
+                    file,
+                    producer.rule.name,
+                    trace_path,
+                    status=CandidateStatus.AMBIGUOUS,
+                    reason=RejectionReason.AMBIGUITY,
+                    detail=(
+                        f"ambiguous with {ambiguities[0].rule.name}; "
+                        "no ruleorder decides between them"
+                    ),
+                    wildcards=producer.wildcards_dict,
+                    evaluated=True,
+                )
+                self.rule_selection.record(
+                    file,
+                    ambiguities[0].rule.name,
+                    trace_path,
+                    status=CandidateStatus.AMBIGUOUS,
+                    reason=RejectionReason.AMBIGUITY,
+                    detail=(
+                        f"ambiguous with {producer.rule.name}; "
+                        "no ruleorder decides between them"
+                    ),
+                    wildcards=ambiguities[0].wildcards_dict,
+                    evaluated=True,
+                )
+                self.rule_selection.finish(
+                    file,
+                    trace_path,
+                    SelectionOutcome.AMBIGUOUS,
+                    detail=(
+                        f"real ambiguity between {producer.rule.name} and "
+                        f"{ambiguities[0].rule.name}"
+                    ),
+                )
+            ex = AmbiguousRuleException(file, producer, ambiguities[0])
+            self._annotate_failure(ex, trace_path)
+            raise ex
+        if trace is not None:
+            self.rule_selection.record(
+                file,
+                producer.rule.name,
+                trace_path,
+                status=CandidateStatus.SELECTED,
+                reason=None,
+                detail="selected as producer",
+                wildcards=producer.wildcards_dict,
+                evaluated=True,
+            )
+            for other in producers[1:]:
+                comp, order_detail = self.workflow._ruleorder.explain_compare(
+                    other.rule, producer.rule
+                )
+                if comp < 0:
+                    reason = RejectionReason.RULEORDER
+                    detail = order_reason(producer, other)
+                else:
+                    reason = RejectionReason.AMBIGUITY
+                    detail = (
+                        "ambiguity ignored (--allow-ambiguity); "
+                        f"{producer.rule.name} was selected"
+                    )
+                self.rule_selection.record(
+                    file,
+                    other.rule.name,
+                    trace_path,
+                    status=CandidateStatus.REJECTED,
+                    reason=reason,
+                    detail=detail,
+                    wildcards=other.wildcards_dict,
+                    evaluated=True,
+                )
+            self.rule_selection.finish(
+                file,
+                trace_path,
+                SelectionOutcome.SELECTED,
+                selected_rule=producer.rule.name,
+            )
         logger.debug(
             f"Selected {producer.rule.name}",
             extra=dict(event=LogEvent.DEBUG_DAG, status="selected", job=producer),
@@ -1216,6 +1606,18 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
             )
         return producer
 
+    def _ignore_ambiguity(self):
+        settings = self.workflow.execution_settings
+        return settings is not None and settings.ignore_ambiguity
+
+    @staticmethod
+    def _annotate_failure(ex, path):
+        if not hasattr(ex, "_selection_path"):
+            try:
+                ex._selection_path = tuple(path)
+            except Exception:
+                pass
+
     async def update_(
         self,
         job,
@@ -1223,6 +1625,7 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         known_producers=None,
         progress=False,
         create_inventory=False,
+        path=(),
     ):
         """Update the DAG by adding the given job and its dependencies."""
         if job in self._dependencies:
@@ -1236,7 +1639,7 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         potential_dependencies = [
             res
             async for res in self.collect_potential_dependencies(
-                job, known_producers=known_producers
+                job, known_producers=known_producers, path=path
             )
         ]
 
@@ -1277,6 +1680,7 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                         known_producers=known_producers,
                         progress=progress,
                         create_inventory=create_inventory,
+                        path=path,
                     )
                     producer[res.file] = selected_job
                 except (
@@ -1299,6 +1703,20 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                             ),
                         )
                         known_producers[res.file] = None
+                        trace = self.rule_selection.find(
+                            res.file, tuple(path) + (res.file,)
+                        )
+                        if trace is not None and trace.outcome == "failed":
+                            trace.outcome = SelectionOutcome.PRESENT
+                            trace.detail = (
+                                "the file already exists on disk, hence it does "
+                                "not have to be produced"
+                            )
+                            for candidate in trace.candidates:
+                                if candidate.status == CandidateStatus.REJECTED:
+                                    candidate.detail += (
+                                        " (not needed: the file already exists on disk)"
+                                    )
                     if isinstance(ex, CyclicGraphException) or isinstance(
                         ex, PeriodicWildcardError
                     ):
@@ -2447,7 +2865,7 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                 update_job.add_aux_resource(mutex, 1)
                 self.workflow.register_resource(mutex, 1)
 
-    async def collect_potential_dependencies(self, job, known_producers):
+    async def collect_potential_dependencies(self, job, known_producers, path=()):
         """Collect all potential dependencies of a job. These might contain
         ambiguities. The keys of the returned dict represent the files to be considered.
         """
@@ -2494,7 +2912,9 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                             yield PotentialDependency(
                                 file,
                                 await file2jobs(
-                                    file, wildcards_dict=job.wildcards_dict
+                                    file,
+                                    wildcards_dict=job.wildcards_dict,
+                                    path=path,
                                 ),
                                 False,
                             )
@@ -2578,37 +2998,85 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
             )
         return await self.new_job(targetrule)
 
-    async def file2jobs(self, targetfile, wildcards_dict=None):
-        rules = self.output_index.match_producers(targetfile)
-        jobs = []
-        exceptions = list()
-        for rule in rules:
-            try:
-                jobs.append(
-                    await self.new_job(
-                        rule, targetfile=targetfile, wildcards_dict=wildcards_dict
-                    )
-                )
-            except InputFunctionException as e:
-                exceptions.append(e)
-                if (
-                    StrictDagEvaluation.FUNCTIONS
-                    in self.workflow.dag_settings.strict_evaluation
-                ):
-                    raise e
-        if not jobs:
-            if exceptions:
-                raise exceptions[0]
+    async def file2jobs(self, targetfile, wildcards_dict=None, path=()):
+        """Return lazy candidates for all rules that may produce targetfile.
+
+        Candidates whose output pattern only matches when wildcard constraints
+        are ignored are rejected here, before any input function is evaluated.
+        Input functions of actual candidates are only evaluated once the
+        candidate is considered by :meth:`update`.
+        """
+        matched_rules = self.output_index.match(targetfile)
+        if not matched_rules:
+            trace_path = tuple(path) or (targetfile,)
+            if not trace_path or trace_path[-1] != targetfile:
+                trace_path = tuple(path) + (targetfile,)
+            self.rule_selection.begin(targetfile, trace_path)
+            self.rule_selection.record(
+                targetfile,
+                "<none>",
+                trace_path,
+                status=CandidateStatus.REJECTED,
+                reason=RejectionReason.NO_RULE,
+                detail="no rule has an output pattern matching this file",
+                evaluated=False,
+            )
+            self.rule_selection.finish(
+                targetfile,
+                trace_path,
+                SelectionOutcome.FAILED,
+                detail="no rule has an output pattern matching this file",
+            )
             raise MissingRuleException(targetfile)
-        else:
-            # Warn user of possible errors
-            for e in exceptions:
-                print_exception_warning(
-                    e,
-                    self.workflow.linemaps,
-                    "Use --strict-dag-evaluation to force strict mode.",
+
+        trace_path = tuple(path) or (targetfile,)
+        if not trace_path or trace_path[-1] != targetfile:
+            trace_path = tuple(path) + (targetfile,)
+        trace = self.rule_selection.begin(targetfile, trace_path)
+
+        candidates = []
+        rejected = []
+        for rule in sorted(matched_rules, key=lambda rule: rule.name):
+            explanation = rule.explain_nonproducer(targetfile)
+            if explanation is not None:
+                reason, detail = explanation
+                reason_code = (
+                    RejectionReason.WILDCARD_CONSTRAINT
+                    if reason == "wildcard-constraint"
+                    else RejectionReason.WILDCARD_RESOLUTION
+                    if reason == "wildcard-resolution"
+                    else RejectionReason.NO_PRODUCER
                 )
-        return jobs
+                self.rule_selection.record(
+                    targetfile,
+                    rule.name,
+                    trace_path,
+                    status=CandidateStatus.REJECTED,
+                    reason=reason_code,
+                    detail=detail,
+                    evaluated=False,
+                )
+                rejected.append(rule)
+                continue
+            candidates.append(
+                CandidateJob(rule, targetfile, wildcards_dict=wildcards_dict)
+            )
+
+        if not candidates:
+            detail = "no producer matched the output pattern and wildcard constraints"
+            if rejected:
+                detail = (
+                    "all rules with matching output prefix/suffix were rejected "
+                    "by their output pattern or wildcard constraints"
+                )
+            self.rule_selection.finish(
+                targetfile,
+                trace_path,
+                SelectionOutcome.FAILED,
+                detail=detail,
+            )
+            raise MissingRuleException(targetfile)
+        return candidates
 
     def rule_dot2(self):
         dag = defaultdict(list)

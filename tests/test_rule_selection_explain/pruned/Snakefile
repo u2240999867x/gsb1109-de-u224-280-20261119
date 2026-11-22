@@ -1,0 +1,25 @@
+ruleorder: third > fourth
+
+def audit_input(wildcards):
+    with open("audit.flag", "w") as flag:
+        flag.write("evaluated\n")
+    raise ValueError("the pruned candidate must not be evaluated")
+
+
+rule all:
+    input: "archive/final.txt"
+
+rule third:
+    output: "archive/final.txt"
+    input: "in/a.txt"
+    shell: "cp {input} {output}"
+
+rule fourth:
+    output: "archive/final.txt"
+    input: "sub/fixed.txt"
+    shell: "cp {input} {output}"
+
+rule subproducer:
+    output: "sub/fixed.txt"
+    input: audit_input
+    shell: "cp {input} {output}"

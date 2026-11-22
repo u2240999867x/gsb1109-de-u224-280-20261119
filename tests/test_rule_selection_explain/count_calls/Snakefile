@@ -1,0 +1,35 @@
+import json
+import os
+
+COUNT_FILE = "calls.json"
+
+
+def make_input(label):
+    def input_function(wildcards):
+        calls = json.load(open(COUNT_FILE)) if os.path.exists(COUNT_FILE) else {}
+        calls[label] = calls.get(label, 0) + 1
+        with open(COUNT_FILE, "w") as f:
+            json.dump(calls, f)
+        return f"in/{label}.txt"
+
+    return input_function
+
+
+ruleorder: third > fourth
+
+rule all:
+    input: "archive/one.txt"
+
+rule third:
+    output: "archive/{sample}.txt"
+    wildcard_constraints:
+        sample = "one|two"
+    input: make_input("a")
+    shell: "cp {input} {output}"
+
+rule fourth:
+    output: "archive/{sample}.txt"
+    wildcard_constraints:
+        sample = "one|two"
+    input: make_input("a")
+    shell: "cp {input} {output}"
