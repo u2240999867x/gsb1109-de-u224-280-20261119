@@ -25,6 +25,7 @@ from sql_metadata.keywords_lists import QueryType
 from sql_metadata.nested_resolver import NestedResolver
 from sql_metadata.query_type_extractor import QueryTypeExtractor
 from sql_metadata.sql_cleaner import SqlCleaner
+from sql_metadata.star_catalog import CatalogColumn, StarExpander
 from sql_metadata.table_extractor import TableExtractor
 from sql_metadata.utils import UniqueList
 
@@ -41,14 +42,25 @@ class Parser:
     :type sql: str
     :param disable_logging: If ``True``, suppress all log output.
     :type disable_logging: bool
+    :param table_schemas: Optional ordered physical columns per table
+        (or table alias), e.g. ``{"a": ["id", "amount"]}``.  Used by
+        :attr:`catalog_columns` to expand ``*`` / ``table.*``
+        projections; tables absent from the mapping stay unknown.
+    :type table_schemas: dict[str, list[str]] | None
     """
 
-    def __init__(self, sql: str = "", disable_logging: bool = False) -> None:
+    def __init__(
+        self,
+        sql: str = "",
+        disable_logging: bool = False,
+        table_schemas: dict[str, list[str]] | None = None,
+    ) -> None:
         self._logger = logging.getLogger(self.__class__.__name__)
         self._logger.disabled = disable_logging
 
         self._raw_query = sql
         self._query_type: QueryType | None = None
+        self._table_schemas = table_schemas
 
         self._ast_parser = ASTParser(sql)
         self._resolver: NestedResolver | None = None
@@ -75,6 +87,8 @@ class Parser:
 
         self._values: list[Any] | None = None
         self._values_dict: dict[str, int | float | str | list[Any]] | None = None
+
+        self._catalog_columns: list[CatalogColumn] | None = None
 
     def _require_ast(self) -> exp.Expression:
         """Return the AST, asserting it is non-None.
@@ -297,6 +311,41 @@ class Parser:
         if not self._columns_extracted:
             _ = self.columns
         return self._output_columns
+
+    @property
+    def catalog_columns(self) -> list[CatalogColumn]:
+        """Return the ordered output catalog, expanding star projections.
+
+        Unlike :attr:`output_columns` — which leaves ``*`` and
+        ``table.*`` as literal stars — this expands every star using
+        the ``table_schemas`` supplied at construction and the
+        recursively expanded subqueries/CTes in the SQL.  ``EXCEPT``
+        removes bindings, ``REPLACE`` keeps the name in place while
+        updating the traced sources, and duplicate output names receive
+        DuckDB-style suffixes (``amount`` then ``amount_1``).
+
+        Entries that cannot be confirmed (a star over a table without a
+        supplied schema, and every entry positioned after such a gap)
+        come back with ``known=False``; their names must not be treated
+        as real columns.  Plain :attr:`columns` extraction is unaffected
+        and remains usable without schemas.
+
+        :rtype: list[CatalogColumn]
+        """
+        if self._catalog_columns is not None:
+            return self._catalog_columns
+        try:
+            ast = self._require_ast()
+            table_aliases = self.tables_aliases
+        except ValueError:
+            self._catalog_columns = []
+            return self._catalog_columns
+        self._catalog_columns = StarExpander(
+            ast,
+            table_schemas=self._table_schemas,
+            table_aliases=table_aliases,
+        ).expand()
+        return self._catalog_columns
 
     @property
     def tables(self) -> UniqueList:

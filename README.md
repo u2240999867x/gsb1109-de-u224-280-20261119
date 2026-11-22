@@ -121,6 +121,53 @@ Parser("CREATE TABLE t (id INT)").output_columns
 # []
 ```
 
+### Expanding star projections with EXCEPT / REPLACE
+
+`output_columns` leaves `*` and `table.*` as literal stars. To expand them
+into the ordered bindings the query actually returns, pass the ordered
+physical columns of each table as `table_schemas` and read
+`catalog_columns`. Each entry is a `CatalogColumn(name, sources, known)`:
+`sources` traces the binding back to physical columns through every nested
+`REPLACE`, and duplicate output names get DuckDB-style suffixes.
+
+```python
+from sql_metadata import Parser
+
+inner = (
+    "SELECT a.* EXCEPT (trace) REPLACE (amount * 2 AS amount), b.*, "
+    "'r' AS review FROM a JOIN b ON a.id = b.id"
+)
+sql = f"SELECT * EXCEPT (review) REPLACE (amount + 1 AS amount) FROM ({inner})"
+
+# b exposes label, stock — amount traces through both REPLACE hops to a.amount
+parser = Parser(sql, table_schemas={
+    "a": ["id", "trace", "amount"],
+    "b": ["label", "stock"],
+})
+[(c.name, c.sources) for c in parser.catalog_columns]
+# [('id', ('a.id',)), ('amount', ('a.amount',)),
+#  ('label', ('b.label',)), ('stock', ('b.stock',))]
+
+# b.stock physically renamed to amount — the second binding becomes amount_1
+# and still traces to b.amount; the outer REPLACE only touches the a.amount slot
+parser = Parser(sql, table_schemas={
+    "a": ["id", "trace", "amount"],
+    "b": ["label", "amount"],
+})
+[(c.name, c.sources) for c in parser.catalog_columns]
+# [('id', ('a.id',)), ('amount', ('a.amount',)),
+#  ('label', ('b.label',)), ('amount_1', ('b.amount',))]
+
+# Without b's schema its wildcard segment stays unknown (known=False); nothing
+# after it can be named or positioned, and no names are invented. The
+# confirmable a-sourced bindings stay intact, and plain `columns` still works.
+parser = Parser(sql, table_schemas={"a": ["id", "trace", "amount"]})
+[(c.name, c.known) for c in parser.catalog_columns]
+# [('id', True), ('amount', True), ('b.*', False)]
+parser.columns
+# ['*', 'a.*', 'b.*', 'a.id', 'b.id']
+```
+
 ### Detecting query type
 
 ```python
