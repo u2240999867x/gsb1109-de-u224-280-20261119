@@ -121,6 +121,91 @@ Parser("CREATE TABLE t (id INT)").output_columns
 # []
 ```
 
+### Scope-aware column attribution
+
+`columns` is a flat, de-duplicated list: when two query blocks share a name it
+cannot say which block a value came from. `column_attribution` keeps each query
+scope (CTEs, LATERAL subqueries, correlated references) separate and reports
+which relation and column every reference actually bound to.
+
+```python
+from sql_metadata import Parser
+
+sql = """
+WITH sales AS (SELECT id, code, amount FROM archive_orders)
+SELECT v.chosen_code
+FROM sales AS s, LATERAL (
+    WITH sales AS (SELECT id, amount FROM latest_adjustments)
+    SELECT t.amount, code AS chosen_code
+    FROM sales AS t
+    JOIN corrections AS u ON t.id = u.id
+    WHERE code = s.code
+) AS v
+"""
+
+# Declare the physical schemas the query is expected to run against.
+report = Parser(sql).column_attribution({"corrections": ["id", "code"]})
+
+report.sources_for("v.chosen_code")
+# ('corrections.code',)
+
+report.filters_for("v.chosen_code")[0].left.source_name
+# 'corrections.code'
+
+# both `sales` CTE bindings are preserved
+[(cte.name, cte.scope, cte.columns) for cte in report.ctes]
+# [('sales', 'outer', ('id', 'code', 'amount')),
+#  ('sales', 'v', ('id', 'amount'))]
+
+report.dialect            # 'default' (or the dialect that parsed the query)
+report.binding_points     # one Binding per scope:relation.column actually used
+report.bindings_for("s.code")   # every real binding of that alias
+report.aliases_for("s")         # every `s` declaration, per scope
+```
+
+The report is scenario based. When a schema cannot be established from the
+query text, it returns alternative scenarios instead of a single mixed answer.
+Each scenario resolves every reference once, so a projected value and the
+predicate on its left-hand side always share one binding:
+
+```python
+# corrections has no `code`: both references resolve to the outer `sales` CTE.
+report = Parser(sql).column_attribution({"corrections": ["id"]})
+report.sources_for("v.chosen_code")
+# ('archive_orders.code',)
+
+# corrections not described at all: two consistent scenarios, never a mix.
+report = Parser(sql).column_attribution()
+len(report.scenarios)     # 2
+report.scenarios[0].id    # "v:code=u.code" or "v:code=s.code"
+```
+
+A local relation that shadows a correlated alias follows DuckDB's rule: the
+local relation is used when it exposes the column, and the reference falls
+through to the outer relation when it does not. Both binding points are
+identifiable:
+
+```python
+# The LATERAL body additionally joins a local relation also named `s`:
+#   JOIN (SELECT id[, code] FROM local_corrections) AS s ON s.id = t.id
+report = Parser(sql_with_local_s).column_attribution(
+    {"corrections": ["id"], "latest_adjustments": ["id", "code", "amount"]},
+    dialect="duckdb",
+)
+report.output("v.chosen_code").value_sources
+# local `s` with code:    ('local_corrections.code',)
+# local `s` without code: ('archive_orders.code',)   # `s` shadowed, falls back
+report.bindings_for("s.code")
+# the real binding point(s): "v:s.code" or "outer:s.code"
+report.aliases_for("s")
+# both declarations: ("outer", "sales", "cte") and ("v", "s", "subquery")
+```
+
+Accessing `tables`, `columns`, `tables_aliases`, or `with_names` first does not
+change the report — it is built from the AST, not from the flattened lists.
+Definitions accept a column list, a `{"columns": [...]}` mapping, a
+comma-separated string, or `None` for "relation exists, schema unknown".
+
 ### Detecting query type
 
 ```python

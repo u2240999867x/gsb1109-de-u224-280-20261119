@@ -13,6 +13,7 @@ sql-metadata v3 is a Python library that parses SQL queries and extracts metadat
 | [`column_extractor.py`](sql_metadata/column_extractor.py) | Single-pass DFS column/alias extraction | `ColumnExtractor` |
 | [`table_extractor.py`](sql_metadata/table_extractor.py) | Table extraction with position-based sorting | `TableExtractor` |
 | [`nested_resolver.py`](sql_metadata/nested_resolver.py) | CTE/subquery name and body extraction, nested column resolution | `NestedResolver` |
+| [`column_attribution.py`](sql_metadata/column_attribution.py) | Scope-aware per-reference attribution, scenario model, CTE shadowing | `ColumnAttributionAnalyzer`, `ColumnAttributionReport` |
 | [`query_type_extractor.py`](sql_metadata/query_type_extractor.py) | Query type detection from AST root node | `QueryTypeExtractor` |
 | [`comments.py`](sql_metadata/comments.py) | Comment extraction/stripping via tokenizer gaps | `extract_comments`, `strip_comments` |
 | [`keywords_lists.py`](sql_metadata/keywords_lists.py) | `QueryType` enum | — |
@@ -108,6 +109,8 @@ flowchart LR
 | `with_queries` | `{cte_name: body_sql}` | NestedResolver |
 | `subqueries` | `{subquery_name: body_sql}` | NestedResolver |
 | `subqueries_names` | Subquery aliases (innermost first) | AST parse → NestedResolver |
+| `column_attribution(definitions, dialect)` | Scope-aware per-reference report | AST parse → `ColumnAttributionAnalyzer` |
+| `attribution` | Default attribution report | `column_attribution()` |
 | `limit_and_offset` | `(limit, offset)` tuple | AST parse (regex fallback) |
 | `values` | Literal values from INSERT | AST parse |
 | `values_dict` | `{column: value}` pairs | `.values` + `.columns` |
@@ -425,6 +428,78 @@ A collection of pure stateless functions (no class). Exploits the fact that sqlg
 **Two stripping variants:**
 - `strip_comments` — public API, preserves `#VAR` references
 - `strip_comments_for_parsing` — internal, always strips `#` comments (needed before `sqlglot.parse()`)
+
+---
+
+### ColumnAttributionAnalyzer — scope-aware attribution
+
+**File:** [`column_attribution.py`](sql_metadata/column_attribution.py) | **Classes:** `ColumnAttributionAnalyzer`, `ColumnAttributionReport`
+
+`columns` is intentionally a flat, de-duplicated list. That is the right shape
+for inventory metadata, but it loses three facts:
+
+* two query blocks may each define a CTE named `sales`;
+* a LATERAL subquery may correlate with the enclosing query;
+* a relation alias may exist in an inner scope but not expose a given column.
+
+`ColumnAttributionAnalyzer` re-walks the AST with an explicit scope tree and
+answers those questions without touching the existing extractors.
+
+#### Scope model
+
+Each query block becomes a `_Scope` with its own visible CTE environment and
+relation list. CTE bodies, subqueries, and LATERAL bodies are child scopes;
+only LATERAL scopes may correlate with their parent (`can_correlate=True`).
+Because the CTE environment is copied per scope, the outer `sales` and the
+inner `sales` are separate definitions even though they share a name.
+
+#### Resolution rules
+
+```mermaid
+flowchart TB
+    REF["Column reference"]
+    REF --> Q{"qualified?"}
+    Q -->|"s.code"| INNER["Walk relation aliases\ninner scope → outer\n(only through LATERAL)"]
+    Q -->|"code"| LOCAL["Search current scope's\nrelations in FROM/JOIN order"]
+    INNER --> FOUND{"relation known\nto expose column?"}
+    FOUND -->|yes| BIND["Bind here"]
+    FOUND -->|no, alias exists| FALLBACK["Record shadowing,\ncontinue outwards"]
+    FOUND -->|alias absent| FALLBACK
+    LOCAL --> LOCALFOUND{"local relation\nsupplies column?"}
+    LOCALFOUND -->|yes| BIND
+    LOCALFOUND -->|no| OUTER["Correlated outer scope"]
+```
+
+A reference whose qualifier names an inner relation that does not expose the
+column falls through to the outer relation with the same alias — this mirrors
+DuckDB's behaviour for `s.code` when a local `s` projects only `id`. The
+binding carries `fallback=True`, the list of shadowed scopes, and both
+binding points stay visible in `report.binding_points`.
+
+#### Scenario consistency
+
+References are grouped by `(scope, qualifier, name)`. Each group collects
+candidate bindings from the scope chain; when a group has more than one
+candidate, the analyzer emits one scenario per combination of choices. All
+references in a group share the chosen binding within a scenario, so a
+projected value and the predicate on its left-hand side can never report two
+different sources. The leaf-source cache is reset per scenario, which prevents
+one scenario's resolution from leaking into another.
+
+#### Report surface
+
+`Parser.column_attribution(definitions=None, dialect=None)` returns a frozen
+`ColumnAttributionReport` exposing:
+
+- `outputs` / `output(name)` / `sources_for(name)` / `filters_for(name)`
+- `reference(text)` — every `ReferenceResolution` for a textual reference
+- `scenarios`, `scenario(id)`, `binding_points`
+- `tables`, `aliases`, `relations`, `ctes`, `scopes`, `dialect`, `ambiguous`
+- `to_dict()` for JSON serialisation
+
+The report is built from the AST only and cached per definition set, so the
+order in which `columns`, `tables_aliases`, or `tables` are first accessed does
+not change it.
 
 ---
 

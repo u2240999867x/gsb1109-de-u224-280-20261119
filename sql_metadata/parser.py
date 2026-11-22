@@ -13,11 +13,15 @@ Thin facade that composes the specialised extractors via lazy properties:
 
 import logging
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from sqlglot import exp
 
 from sql_metadata.ast_parser import ASTParser
+from sql_metadata.column_attribution import (
+    ColumnAttributionReport,
+    build_column_attribution,
+)
 from sql_metadata.column_extractor import ColumnExtractor
 from sql_metadata.comments import extract_comments, strip_comments
 from sql_metadata.generalizator import Generalizator
@@ -75,6 +79,11 @@ class Parser:
 
         self._values: list[Any] | None = None
         self._values_dict: dict[str, int | float | str | list[Any]] | None = None
+
+        self._attribution_cache: dict[
+            tuple[tuple[tuple[str, tuple[str, ...] | None], ...], str | None],
+            ColumnAttributionReport,
+        ] = {}
 
     def _require_ast(self) -> exp.Expression:
         """Return the AST, asserting it is non-None.
@@ -401,6 +410,113 @@ class Parser:
             NestedResolver.extract_subqueries(self._require_ast())
         )
         return self._subqueries_names
+
+    def column_attribution(
+        self,
+        definitions: Mapping[str, Any] | None = None,
+        dialect: str | None = None,
+        *,
+        force: bool = False,
+    ) -> ColumnAttributionReport:
+        """Return a scope-aware attribution report for the query.
+
+        Unlike :attr:`columns` — a flat, de-duplicated list that merges every
+        query block — this report keeps each query scope's relation bindings
+        separate.  It answers questions such as "where does
+        ``v.chosen_code`` really come from?" and "which fields does the
+        predicate compare?" even when an outer query and a LATERAL subquery
+        both define a CTE named ``sales``.
+
+        :param definitions: Mapping of physical table name to its ordered
+            column list, e.g. ``{"corrections": ["id", "code"]}``.  A value
+            of ``None`` marks a table whose columns are unknown.  A table
+            that is absent from the mapping is also treated as unknown, which
+            produces alternative scenarios rather than a guess.
+        :param dialect: Optional dialect label for the report.  Defaults to
+            the dialect that actually parsed the query.
+        :param force: Recompute even when an identical request was cached.
+        :returns: A :class:`~sql_metadata.column_attribution.ColumnAttributionReport`.
+        :rtype: ColumnAttributionReport
+        :raises ValueError: If the SQL cannot be parsed.
+        """
+        ast = self._require_ast()
+        normalized = self._normalise_attribution_definitions(definitions)
+        key = (normalized, dialect)
+        if not force and key in self._attribution_cache:
+            return self._attribution_cache[key]
+
+        parser_dialect = self._ast_parser.dialect
+        if dialect is not None:
+            dialect_name = dialect
+        elif isinstance(parser_dialect, str):
+            dialect_name = parser_dialect
+        elif parser_dialect is None:
+            dialect_name = "default"
+        else:
+            dialect_name = getattr(parser_dialect, "__name__", str(parser_dialect))
+
+        report = build_column_attribution(
+            ast,
+            definitions=dict(normalized),
+            dialect=dialect_name,
+            tables=list(self.tables),
+        )
+        self._attribution_cache[key] = report
+        return report
+
+    @property
+    def attribution(self) -> ColumnAttributionReport:
+        """Return the default attribution report (no schema definitions).
+
+        Shorthand for ``self.column_attribution()``.  Accessing this
+        property before or after ``columns`` / ``tables_aliases`` does not
+        change the result: the report is built from the AST only.
+
+        :rtype: ColumnAttributionReport
+        """
+        return self.column_attribution()
+
+    @staticmethod
+    def _normalise_attribution_definitions(
+        definitions: Mapping[str, Any] | None,
+    ) -> tuple[tuple[str, tuple[str, ...] | None], ...]:
+        """Return a hashable, order-stable form of *definitions*."""
+        if not definitions:
+            return ()
+        items: list[tuple[str, tuple[str, ...] | None]] = []
+        for name in sorted(definitions, key=str):
+            value = definitions[name]
+            if value is None:
+                items.append((str(name), None))
+            elif isinstance(value, str):
+                items.append(
+                    (
+                        str(name),
+                        tuple(
+                            part.strip()
+                            for part in value.split(",")
+                            if part.strip()
+                        ),
+                    )
+                )
+            elif isinstance(value, Mapping):
+                for field_name in ("columns", "fields", "schema"):
+                    if field_name in value:
+                        columns = value[field_name]
+                        break
+                else:
+                    columns = list(value)
+                items.append(
+                    (
+                        str(name),
+                        tuple(str(column) for column in columns),
+                    )
+                )
+            else:
+                items.append(
+                    (str(name), tuple(str(column) for column in value))
+                )
+        return tuple(items)
 
     @staticmethod
     def _extract_int_from_node(node: Any) -> int | None:

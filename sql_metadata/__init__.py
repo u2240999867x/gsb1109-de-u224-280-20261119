@@ -15,8 +15,32 @@ for AST construction and tokenization, with custom dialect handling for
 MSSQL, MySQL, Hive/Spark, and TSQL bracket notation.
 """
 
+from sql_metadata.column_attribution import (
+    AttributionScenario,
+    Binding,
+    ColumnAttributionReport,
+    OutputAttribution,
+    OutputReport,
+    PredicateAttribution,
+    ReferenceResolution,
+    SourceColumn,
+    attribute_columns,
+)
 from sql_metadata.exceptions import InvalidQueryDefinition
 from sql_metadata.keywords_lists import QueryType
 from sql_metadata.parser import Parser
 
-__all__ = ["InvalidQueryDefinition", "Parser", "QueryType"]
+__all__ = [
+    "AttributionScenario",
+    "Binding",
+    "ColumnAttributionReport",
+    "InvalidQueryDefinition",
+    "OutputAttribution",
+    "OutputReport",
+    "Parser",
+    "PredicateAttribution",
+    "QueryType",
+    "ReferenceResolution",
+    "SourceColumn",
+    "attribute_columns",
+]
