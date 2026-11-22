@@ -40,6 +40,7 @@ See the `examples`_ folder for more.
    syntax.rst
    types.rst
    attributes.rst
+   pushdown.rst
    rule_engine/index.rst
    debug_repl.rst
    change_log.rst
