@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_store_collection" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="store_collection_process" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1">
+      <bpmn:outgoing>flow_start_split</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:parallelGateway id="ParallelSplit">
+      <bpmn:incoming>flow_start_split</bpmn:incoming>
+      <bpmn:outgoing>flow_split_gateway</bpmn:outgoing>
+      <bpmn:outgoing>flow_split_reconcile</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:exclusiveGateway id="NextWindowGateway" default="flow_gateway_wait">
+      <bpmn:incoming>flow_split_gateway</bpmn:incoming>
+      <bpmn:incoming>flow_loop_back</bpmn:incoming>
+      <bpmn:outgoing>flow_gateway_wait</bpmn:outgoing>
+      <bpmn:outgoing>flow_gateway_join</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="flow_gateway_join" sourceRef="NextWindowGateway" targetRef="ParallelJoin">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">window_index &gt; 4</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:intermediateCatchEvent id="WaitForWindow">
+      <bpmn:incoming>flow_gateway_wait</bpmn:incoming>
+      <bpmn:outgoing>flow_wait_collect</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="TimerEventDefinition_window">
+        <bpmn:timeDate xsi:type="bpmn:tFormalExpression">window_due</bpmn:timeDate>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:manualTask id="CollectStoreData" name="Collect store data">
+      <bpmn:incoming>flow_wait_collect</bpmn:incoming>
+      <bpmn:outgoing>flow_collect_compute</bpmn:outgoing>
+    </bpmn:manualTask>
+    <bpmn:scriptTask id="ComputeNextWindow" name="Compute next window">
+      <bpmn:incoming>flow_collect_compute</bpmn:incoming>
+      <bpmn:outgoing>flow_loop_back</bpmn:outgoing>
+      <bpmn:script>next_index = window_index + 1
+year = 2026 + (next_index - 1) // 12
+month = (next_index - 1) % 12 + 1
+last_day = monthrange(year, month)[1]
+window_due = datetime(year, month, last_day, 1, 30, tzinfo=ZoneInfo('America/New_York')).astimezone(timezone.utc).isoformat()
+window_label = '%04d-%02d' % (year, month)
+window_index = next_index</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:intermediateCatchEvent id="WaitForReconciliation">
+      <bpmn:incoming>flow_split_reconcile</bpmn:incoming>
+      <bpmn:outgoing>flow_reconcile_task</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="TimerEventDefinition_reconcile">
+        <bpmn:timeDate xsi:type="bpmn:tFormalExpression">reconcile_due</bpmn:timeDate>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:manualTask id="ReconcileReceipts" name="Reconcile receipts">
+      <bpmn:incoming>flow_reconcile_task</bpmn:incoming>
+      <bpmn:outgoing>flow_reconcile_join</bpmn:outgoing>
+    </bpmn:manualTask>
+    <bpmn:parallelGateway id="ParallelJoin">
+      <bpmn:incoming>flow_gateway_join</bpmn:incoming>
+      <bpmn:incoming>flow_reconcile_join</bpmn:incoming>
+      <bpmn:outgoing>flow_join_end</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:endEvent id="EndEvent_1">
+      <bpmn:incoming>flow_join_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="flow_start_split" sourceRef="StartEvent_1" targetRef="ParallelSplit" />
+    <bpmn:sequenceFlow id="flow_split_gateway" sourceRef="ParallelSplit" targetRef="NextWindowGateway" />
+    <bpmn:sequenceFlow id="flow_split_reconcile" sourceRef="ParallelSplit" targetRef="WaitForReconciliation" />
+    <bpmn:sequenceFlow id="flow_gateway_wait" sourceRef="NextWindowGateway" targetRef="WaitForWindow" />
+    <bpmn:sequenceFlow id="flow_wait_collect" sourceRef="WaitForWindow" targetRef="CollectStoreData" />
+    <bpmn:sequenceFlow id="flow_collect_compute" sourceRef="CollectStoreData" targetRef="ComputeNextWindow" />
+    <bpmn:sequenceFlow id="flow_loop_back" sourceRef="ComputeNextWindow" targetRef="NextWindowGateway" />
+    <bpmn:sequenceFlow id="flow_reconcile_task" sourceRef="WaitForReconciliation" targetRef="ReconcileReceipts" />
+    <bpmn:sequenceFlow id="flow_reconcile_join" sourceRef="ReconcileReceipts" targetRef="ParallelJoin" />
+    <bpmn:sequenceFlow id="flow_join_end" sourceRef="ParallelJoin" targetRef="EndEvent_1" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="store_collection_process">
+      <bpmndi:BPMNShape id="Shape_Start" bpmnElement="StartEvent_1"><dc:Bounds x="100" y="180" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Split" bpmnElement="ParallelSplit"><dc:Bounds x="180" y="173" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Gateway" bpmnElement="NextWindowGateway"><dc:Bounds x="280" y="100" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_WaitWindow" bpmnElement="WaitForWindow"><dc:Bounds x="380" y="107" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Collect" bpmnElement="CollectStoreData"><dc:Bounds x="460" y="85" width="100" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Compute" bpmnElement="ComputeNextWindow"><dc:Bounds x="600" y="85" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_WaitReconcile" bpmnElement="WaitForReconciliation"><dc:Bounds x="287" y="260" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Reconcile" bpmnElement="ReconcileReceipts"><dc:Bounds x="380" y="238" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Join" bpmnElement="ParallelJoin"><dc:Bounds x="760" y="173" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End" bpmnElement="EndEvent_1"><dc:Bounds x="860" y="180" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Edge_start_split" bpmnElement="flow_start_split"><di:waypoint x="136" y="198" /><di:waypoint x="180" y="198" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_split_gw" bpmnElement="flow_split_gateway"><di:waypoint x="205" y="173" /><di:waypoint x="305" y="125" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_split_rec" bpmnElement="flow_split_reconcile"><di:waypoint x="205" y="223" /><di:waypoint x="287" y="223" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_gw_wait" bpmnElement="flow_gateway_wait"><di:waypoint x="330" y="125" /><di:waypoint x="380" y="125" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_wait_collect" bpmnElement="flow_wait_collect"><di:waypoint x="416" y="125" /><di:waypoint x="460" y="125" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_collect_compute" bpmnElement="flow_collect_compute"><di:waypoint x="560" y="125" /><di:waypoint x="600" y="125" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_loop" bpmnElement="flow_loop_back"><di:waypoint x="660" y="85" /><di:waypoint x="660" y="60" /><di:waypoint x="305" y="60" /><di:waypoint x="305" y="100" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_gw_join" bpmnElement="flow_gateway_join"><di:waypoint x="330" y="140" /><di:waypoint x="760" y="198" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_rec_task" bpmnElement="flow_reconcile_task"><di:waypoint x="323" y="278" /><di:waypoint x="380" y="278" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_rec_join" bpmnElement="flow_reconcile_join"><di:waypoint x="500" y="278" /><di:waypoint x="785" y="223" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_join_end" bpmnElement="flow_join_end"><di:waypoint x="810" y="198" /><di:waypoint x="860" y="198" /></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
