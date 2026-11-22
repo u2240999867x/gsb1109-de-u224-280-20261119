@@ -104,6 +104,37 @@ def test_subprocess_exec_always_returns_needed(mock_dag):
     assert mock_dag.is_needed_tempfile(producer, tempfile)
 
 
+def test_get_unneeded_temp_files_deferred_while_checkpoint_pending(mock_dag):
+    """No temp file may be declared unneeded while a checkpoint is unevaluated.
+
+    Once the checkpoint is evaluated, the DAG may grow new consumers of the
+    temp file, so granting a remote (group) job permission to delete it would
+    be premature. This mirrors the deferral of handle_temp in DAG.finish().
+    """
+    mock_dag.workflow.remote_exec = False  # assume main process
+    mock_dag._checkpoint_jobs = {MagicMock()}
+
+    producer = MagicMock()
+    tempfile = _make_tempfile("output.tmp")
+    producer.output = [tempfile]
+    mock_dag.depending[producer] = {}
+
+    assert list(mock_dag.get_unneeded_temp_files(producer)) == []
+
+
+def test_get_unneeded_temp_files_after_checkpoints_done(mock_dag):
+    """Without pending checkpoints, unneeded temp files are reported as usual."""
+    mock_dag.workflow.remote_exec = False  # assume main process
+    mock_dag._checkpoint_jobs = set()
+
+    producer = MagicMock()
+    tempfile = _make_tempfile("output.tmp")
+    producer.output = [tempfile]
+    mock_dag.depending[producer] = {}
+
+    assert list(mock_dag.get_unneeded_temp_files(producer)) == [tempfile]
+
+
 def test_handle_temp_yields_output_iofile_with_temp_flag(mock_dag):
     """Regression: set intersection in handle_temp must yield the output _IOFile.
 

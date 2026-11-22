@@ -294,6 +294,16 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         self.check_directory_outputs()
 
     def get_unneeded_temp_files(self, job: Union[Job, GroupJob]) -> Iterable[str]:
+        if self.checkpoint_jobs:
+            # While there are still checkpoint jobs, we cannot safely declare
+            # any temp file as unneeded: once the checkpoints are evaluated,
+            # the DAG may still grow new consumers of the temp files (e.g. via
+            # input functions that depend on the checkpoint output). Hence, no
+            # temp file deletion permission is granted to the (remote) job here.
+            # Instead, temp file handling is deferred to the main process, just
+            # like in DAG.finish(), where the same check is applied.
+            return
+
         def get_files(job, group_job=None):
             for f in job.output:
                 if is_flagged(f, "temp") and not self.is_needed_tempfile(

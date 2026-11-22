@@ -1,0 +1,111 @@
+# Scenario: a remote ingestion job group prepares two temp files.
+# scratch.txt is only consumed inside the group; handoff.txt is first consumed
+# inside the group (to create the summary), but an out-of-group reconciliation
+# consumer may read it again later. An independent checkpoint decides, based on
+# a manifest published by another system, whether that consumer will exist.
+
+rule all:
+    input:
+        "summary.txt",
+        "slices.txt",
+        "report.txt",
+
+
+rule prepare:
+    output:
+        scratch=temp("scratch.txt"),
+        handoff=temp("handoff.txt"),
+    group:
+        "ingest"
+    shell:
+        """
+        echo "scratch-$$" > {output.scratch}
+        echo "handoff-original-$$" > {output.handoff}
+        echo prepare >> runs.log
+        """
+
+
+rule slice:
+    input:
+        "scratch.txt",
+    output:
+        "slices.txt",
+    group:
+        "ingest"
+    shell:
+        """
+        cat {input} > {output}
+        echo slice >> runs.log
+        """
+
+
+rule summarize:
+    input:
+        "handoff.txt",
+    output:
+        "summary.txt",
+    group:
+        "ingest"
+    shell:
+        """
+        cat {input} > {output}
+        echo summarize >> runs.log
+        """
+
+
+# The manifest is published by an independent system; the checkpoint only
+# records its decision. It deliberately does NOT read handoff.txt: making
+# handoff a checkpoint input would serialize the otherwise independent jobs.
+# The priority merely models that the external manifest usually arrives
+# promptly; it creates no data dependency between the jobs.
+checkpoint manifest:
+    output:
+        "manifest.txt",
+    priority:
+        10
+    shell:
+        """
+        for i in $(seq 1 600); do
+            if [ -f manifest.published ]; then
+                break
+            fi
+            sleep 0.5
+        done
+        test -f manifest.published && cp manifest.published {output}
+        """
+
+
+def reconciliation_consumers(wildcards):
+    # Expand an out-of-group consumer of handoff.txt only if the manifest
+    # asks for reconciliation.
+    with checkpoints.manifest.get().output[0].open() as f:
+        if f.read().strip() == "consume":
+            return ["reconciled.txt"]
+    return []
+
+
+rule reconcile:
+    input:
+        "handoff.txt",
+    output:
+        "reconciled.txt",
+    shell:
+        """
+        # fail on the first attempt; a resume in the same directory succeeds
+        if [ ! -f .reconcile_failed_once ]; then
+            touch .reconcile_failed_once
+            exit 1
+        fi
+        cat {input} > {output}
+        """
+
+
+rule report:
+    input:
+        "summary.txt",
+        "slices.txt",
+        reconciliation_consumers,
+    output:
+        "report.txt",
+    shell:
+        "cat {input} > {output}"
