@@ -317,6 +317,76 @@ parser.comments
 
 See `test/test_normalization.py` file for more examples of a bit more complex queries.
 
+### Dry-running a PostgreSQL `MERGE`
+
+`Parser` reports the tables and columns of a `MERGE`, but cannot say which `WHEN`
+branch would actually fire for concrete rows. `MergeSpec` / `MergeDryRun` answer
+that question **offline** — they parse the statement and replay it over small
+in-memory samples using SQL three-valued logic, without executing any write.
+
+```python
+from sql_metadata import MergeSpec, MergeDryRun, analyze_merge
+
+sql = """
+MERGE INTO stock s
+USING (SELECT wh, item, qty, version, quality, locked, archived
+       FROM incoming WHERE archived = false) i
+ON s.wh = i.wh AND s.item = i.item
+WHEN MATCHED AND i.quality = 'recount' THEN
+  UPDATE SET qty = i.qty, version = s.version + 1
+WHEN MATCHED AND i.quality = 'recount' AND i.locked = false THEN DELETE
+WHEN MATCHED AND i.quality IS NULL AND i.locked IS NOT TRUE THEN
+  UPDATE SET version = i.version
+WHEN NOT MATCHED THEN
+  INSERT (wh, item, qty) VALUES (i.wh, i.item, i.qty)
+"""
+
+# No rows required: physical key, source filter, per-branch value sources and
+# the columns left to catalog defaults are all derivable from the SQL.
+structure = analyze_merge(sql, target_columns=("wh", "item", "qty", "version", "locked"))
+structure.on_pairs                # (("wh", "wh"), ("item", "item"))
+structure.source_filter_sql       # "archived = FALSE"
+structure.default_managed_columns # ("version", "locked")
+
+spec = MergeSpec.from_sql(sql)
+plan = MergeDryRun(
+    spec,
+    target_rows=[{"wh": 1, "item": 100, "qty": 5, "version": 3, "locked": False}],
+    source_rows=[
+        {"wh": 1, "item": 100, "qty": 9, "version": 3, "quality": "recount",
+         "locked": False, "archived": False},
+        {"wh": 1, "item": 100, "qty": 5, "version": 7, "quality": None,
+         "locked": None, "archived": False},
+        {"wh": 2, "item": 200, "qty": 4, "version": 1, "quality": None,
+         "locked": None, "archived": False},
+    ],
+    defaults={"version": 1},
+).run()
+
+# Each source row reports the branch it hit and the value it would write.
+[(o.original_index, o.branch_index, o.action) for o in plan.outcomes]
+# [(0, 1, "update"), (1, 3, "update"), (2, 4, "insert")]
+
+# The first MATCHED clause swallows the DELETE (branch 2 never fires), and the
+# two same-key sources compete for one target: the statement cannot commit, so
+# even the unopposed insert is rolled back.
+plan.would_commit            # False
+plan.conflicts[0].branch_indexes  # [1, 3]
+plan.target_after            # unchanged: only the original stock row remains
+
+# Archiving one source removes it through the USING filter; the remaining
+# update and insert then commit. Declare source-key uniqueness to turn the
+# result into a guaranteed commit instead of a sample-only observation.
+archived_sources = [dict(row, archived=(index == 1)) for index, row in enumerate(source_rows)]
+clean = MergeDryRun(spec, target_rows, archived_sources,
+                    defaults={"version": 1}, source_unique=True).run()
+clean.would_commit   # True
+clean.guaranteed     # True
+```
+
+See `test/test_merge_dry_run.py` for the full behavior, including three-valued
+logic, `DO NOTHING`, delete/update ordering and the no-sample structure report.
+
 ## Migrating from `sql_metadata` 1.x / 2.x
 
 The `sql_metadata.compat` module (previously provided for v1 → v2 migration) has been **removed in v3**.  Port your code to the class-based `Parser` API shown in the examples above:

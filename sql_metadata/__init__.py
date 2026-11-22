@@ -17,6 +17,38 @@ MSSQL, MySQL, Hive/Spark, and TSQL bracket notation.
 
 from sql_metadata.exceptions import InvalidQueryDefinition
 from sql_metadata.keywords_lists import QueryType
+from sql_metadata.merge_dry_run import (
+    ACTION_DELETE,
+    ACTION_DO_NOTHING,
+    ACTION_INSERT,
+    ACTION_NO_BRANCH,
+    ACTION_UPDATE,
+    MergeConflict,
+    MergeConflictError,
+    MergeDryRun,
+    MergeEvaluationError,
+    MergePlan,
+    MergeSpec,
+    MergeStructure,
+    analyze_merge,
+)
 from sql_metadata.parser import Parser
 
-__all__ = ["InvalidQueryDefinition", "Parser", "QueryType"]
+__all__ = [
+    "ACTION_DELETE",
+    "ACTION_DO_NOTHING",
+    "ACTION_INSERT",
+    "ACTION_NO_BRANCH",
+    "ACTION_UPDATE",
+    "InvalidQueryDefinition",
+    "MergeConflict",
+    "MergeConflictError",
+    "MergeDryRun",
+    "MergeEvaluationError",
+    "MergePlan",
+    "MergeSpec",
+    "MergeStructure",
+    "Parser",
+    "QueryType",
+    "analyze_merge",
+]
