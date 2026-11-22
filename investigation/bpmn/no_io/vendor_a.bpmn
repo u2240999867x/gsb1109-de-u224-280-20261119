@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="defs_vendor_a_no_io" targetNamespace="http://example.com/spiff-investigation">
+  <bpmn:process id="vendor_a" name="Vendor A statistics" isExecutable="true">
+    <bpmn:startEvent id="a_start">
+      <bpmn:outgoing>f_a_start_m1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:manualTask id="a_entry" name="A entry barrier">
+      <bpmn:incoming>f_a_start_m1</bpmn:incoming>
+      <bpmn:outgoing>f_a_m1_swap</bpmn:outgoing>
+    </bpmn:manualTask>
+    <bpmn:scriptTask id="a_swap" name="A set 11 and swap rows" scriptFormat="python">
+      <bpmn:incoming>f_a_m1_swap</bpmn:incoming>
+      <bpmn:outgoing>f_a_swap_m2</bpmn:outgoing>
+      <bpmn:script>total['rows'][0]['count'] = 11
+total['rows'].reverse()</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:manualTask id="a_park" name="A parked after swap">
+      <bpmn:incoming>f_a_swap_m2</bpmn:incoming>
+      <bpmn:outgoing>f_a_m2_end</bpmn:outgoing>
+    </bpmn:manualTask>
+    <bpmn:endEvent id="a_end">
+      <bpmn:incoming>f_a_m2_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_a_start_m1" sourceRef="a_start" targetRef="a_entry" />
+    <bpmn:sequenceFlow id="f_a_m1_swap" sourceRef="a_entry" targetRef="a_swap" />
+    <bpmn:sequenceFlow id="f_a_swap_m2" sourceRef="a_swap" targetRef="a_park" />
+    <bpmn:sequenceFlow id="f_a_m2_end" sourceRef="a_park" targetRef="a_end" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="diagram_a">
+    <bpmndi:BPMNPlane id="plane_a" bpmnElement="vendor_a" />
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

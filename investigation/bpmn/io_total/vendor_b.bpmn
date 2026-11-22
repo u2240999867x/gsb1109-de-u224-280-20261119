@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="defs_vendor_b_io" targetNamespace="http://example.com/spiff-investigation">
+  <bpmn:process id="vendor_b" name="Vendor B statistics" isExecutable="true">
+    <bpmn:ioSpecification>
+      <bpmn:dataOutput id="total" />
+      <bpmn:inputSet id="b_ins" />
+      <bpmn:outputSet id="b_outs">
+        <bpmn:dataOutputRefs>total</bpmn:dataOutputRefs>
+      </bpmn:outputSet>
+    </bpmn:ioSpecification>
+    <bpmn:startEvent id="b_start">
+      <bpmn:outgoing>f_b_start_m1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:manualTask id="b_entry" name="B entry barrier">
+      <bpmn:incoming>f_b_start_m1</bpmn:incoming>
+      <bpmn:outgoing>f_b_m1_edit</bpmn:outgoing>
+    </bpmn:manualTask>
+    <bpmn:scriptTask id="b_edit" name="B set 19 and drop stale A" scriptFormat="python">
+      <bpmn:incoming>f_b_m1_edit</bpmn:incoming>
+      <bpmn:outgoing>f_b_edit_m2</bpmn:outgoing>
+      <bpmn:script>total['rows'][1]['count'] = 19
+total = {'rows': [_row for _row in total['rows'] if _row['vendor'] != 'A']}</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:manualTask id="b_park" name="B parked after edit">
+      <bpmn:incoming>f_b_edit_m2</bpmn:incoming>
+      <bpmn:outgoing>f_b_m2_end</bpmn:outgoing>
+    </bpmn:manualTask>
+    <bpmn:endEvent id="b_end">
+      <bpmn:incoming>f_b_m2_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_b_start_m1" sourceRef="b_start" targetRef="b_entry" />
+    <bpmn:sequenceFlow id="f_b_m1_edit" sourceRef="b_entry" targetRef="b_edit" />
+    <bpmn:sequenceFlow id="f_b_edit_m2" sourceRef="b_edit" targetRef="b_park" />
+    <bpmn:sequenceFlow id="f_b_m2_end" sourceRef="b_park" targetRef="b_end" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="diagram_b">
+    <bpmndi:BPMNPlane id="plane_b" bpmnElement="vendor_b" />
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

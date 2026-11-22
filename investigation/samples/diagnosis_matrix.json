@@ -1,0 +1,3662 @@
+{
+  "midpoint": {
+    "no_io": {
+      "case": "no_io",
+      "archive_bytes": 25247,
+      "live": {
+        "label": "live midpoint (after A swap, B idle)",
+        "public": {
+          "parent:call_a": {
+            "state": "STARTED",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              }
+            }
+          },
+          "parent:call_b": {
+            "state": "STARTED",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              }
+            }
+          },
+          "vendor_a:a_park": {
+            "state": "READY",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              }
+            }
+          },
+          "vendor_b:b_park": {
+            "state": "FUTURE",
+            "data": {}
+          },
+          "vendor_b:b_entry": {
+            "state": "READY",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "lab_only_alias_groups": [
+          [
+            "parent:init",
+            "parent:split",
+            "parent:call_a",
+            "vendor_a:a_start",
+            "vendor_a:a_entry",
+            "vendor_a:a_swap",
+            "vendor_a:a_park",
+            "parent:call_b",
+            "vendor_b:b_start",
+            "vendor_b:b_entry",
+            "vendor_a:a_start",
+            "vendor_a:a_entry",
+            "vendor_a:a_swap",
+            "vendor_a:a_park",
+            "vendor_b:b_start",
+            "vendor_b:b_entry"
+          ],
+          [
+            "vendor_a:Start",
+            "vendor_a:Start"
+          ],
+          [
+            "vendor_b:Start",
+            "vendor_b:Start"
+          ]
+        ]
+      },
+      "restored": {
+        "label": "restored midpoint (same archive)",
+        "public": {
+          "parent:call_a": {
+            "state": "STARTED",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              }
+            }
+          },
+          "parent:call_b": {
+            "state": "STARTED",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              }
+            }
+          },
+          "vendor_a:a_park": {
+            "state": "READY",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              }
+            }
+          },
+          "vendor_b:b_park": {
+            "state": "FUTURE",
+            "data": {}
+          },
+          "vendor_b:b_entry": {
+            "state": "READY",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "lab_only_alias_groups": [
+          [
+            "parent:init",
+            "parent:split",
+            "parent:call_a",
+            "parent:call_b"
+          ],
+          [
+            "vendor_a:Start",
+            "vendor_a:Start"
+          ],
+          [
+            "vendor_a:a_start",
+            "vendor_a:a_entry",
+            "vendor_a:a_swap",
+            "vendor_a:a_park",
+            "vendor_a:a_start",
+            "vendor_a:a_entry",
+            "vendor_a:a_swap",
+            "vendor_a:a_park"
+          ],
+          [
+            "vendor_b:Start",
+            "vendor_b:Start"
+          ],
+          [
+            "vendor_b:b_start",
+            "vendor_b:b_entry",
+            "vendor_b:b_start",
+            "vendor_b:b_entry"
+          ]
+        ]
+      },
+      "public_data_identical": true,
+      "lab_only_live_has_parent_child_alias": true,
+      "lab_only_restored_has_parent_child_alias": false
+    },
+    "io_total": {
+      "case": "io_total",
+      "archive_bytes": 25768,
+      "live": {
+        "label": "live midpoint (after A swap, B idle)",
+        "public": {
+          "parent:call_a": {
+            "state": "STARTED",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              },
+              "audit_tag": "preserved-across-return"
+            }
+          },
+          "parent:call_b": {
+            "state": "STARTED",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              },
+              "audit_tag": "preserved-across-return"
+            }
+          },
+          "vendor_a:a_park": {
+            "state": "READY",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              },
+              "audit_tag": "preserved-across-return"
+            }
+          },
+          "vendor_b:b_park": {
+            "state": "FUTURE",
+            "data": {}
+          },
+          "vendor_b:b_entry": {
+            "state": "READY",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              },
+              "audit_tag": "preserved-across-return"
+            }
+          }
+        },
+        "lab_only_alias_groups": [
+          [
+            "parent:init",
+            "parent:split",
+            "parent:call_a",
+            "vendor_a:a_start",
+            "vendor_a:a_entry",
+            "vendor_a:a_swap",
+            "vendor_a:a_park",
+            "parent:call_b",
+            "vendor_b:b_start",
+            "vendor_b:b_entry",
+            "vendor_a:a_start",
+            "vendor_a:a_entry",
+            "vendor_a:a_swap",
+            "vendor_a:a_park",
+            "vendor_b:b_start",
+            "vendor_b:b_entry"
+          ],
+          [
+            "vendor_a:Start",
+            "vendor_a:Start"
+          ],
+          [
+            "vendor_b:Start",
+            "vendor_b:Start"
+          ]
+        ]
+      },
+      "restored": {
+        "label": "restored midpoint (same archive)",
+        "public": {
+          "parent:call_a": {
+            "state": "STARTED",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              },
+              "audit_tag": "preserved-across-return"
+            }
+          },
+          "parent:call_b": {
+            "state": "STARTED",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              },
+              "audit_tag": "preserved-across-return"
+            }
+          },
+          "vendor_a:a_park": {
+            "state": "READY",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              },
+              "audit_tag": "preserved-across-return"
+            }
+          },
+          "vendor_b:b_park": {
+            "state": "FUTURE",
+            "data": {}
+          },
+          "vendor_b:b_entry": {
+            "state": "READY",
+            "data": {
+              "total": {
+                "rows": [
+                  {
+                    "vendor": "B",
+                    "count": 0
+                  },
+                  {
+                    "vendor": "A",
+                    "count": 11
+                  }
+                ]
+              },
+              "audit_tag": "preserved-across-return"
+            }
+          }
+        },
+        "lab_only_alias_groups": [
+          [
+            "parent:init",
+            "parent:split",
+            "parent:call_a",
+            "parent:call_b"
+          ],
+          [
+            "vendor_a:Start",
+            "vendor_a:Start"
+          ],
+          [
+            "vendor_a:a_start",
+            "vendor_a:a_entry",
+            "vendor_a:a_swap",
+            "vendor_a:a_park",
+            "vendor_a:a_start",
+            "vendor_a:a_entry",
+            "vendor_a:a_swap",
+            "vendor_a:a_park"
+          ],
+          [
+            "vendor_b:Start",
+            "vendor_b:Start"
+          ],
+          [
+            "vendor_b:b_start",
+            "vendor_b:b_entry",
+            "vendor_b:b_start",
+            "vendor_b:b_entry"
+          ]
+        ]
+      },
+      "public_data_identical": true,
+      "lab_only_live_has_parent_child_alias": true,
+      "lab_only_restored_has_parent_child_alias": false
+    }
+  },
+  "same_order_ab": {
+    "no_io/live": {
+      "case": "no_io",
+      "mode": "live",
+      "completion_order": [
+        "a",
+        "b"
+      ],
+      "checkpoints": [
+        {
+          "label": "live midpoint",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "FUTURE",
+              "data": {}
+            },
+            "vendor_b:b_entry": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "parent:call_b",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ]
+          ]
+        },
+        {
+          "label": "live after B edit, before any return",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "parent:call_b",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "live after a return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "parent:call_b",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "live after b return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "parent:call_b",
+              "parent:join",
+              "parent:report",
+              "parent:end",
+              "parent:parent.EndJoin",
+              "parent:End"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End"
+            ]
+          ]
+        }
+      ],
+      "final_report": {
+        "vendors": [
+          "B",
+          "A"
+        ],
+        "counts": [
+          0,
+          19
+        ],
+        "total_rows": [
+          {
+            "vendor": "B",
+            "count": 0
+          },
+          {
+            "vendor": "A",
+            "count": 19
+          }
+        ]
+      }
+    },
+    "no_io/restored": {
+      "case": "no_io",
+      "mode": "restored",
+      "completion_order": [
+        "a",
+        "b"
+      ],
+      "checkpoints": [
+        {
+          "label": "restored midpoint",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "FUTURE",
+              "data": {}
+            },
+            "vendor_b:b_entry": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "parent:call_b"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ]
+          ]
+        },
+        {
+          "label": "restored after B edit, before any return",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "parent:call_b"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "restored after a return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_b"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "restored after b return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End"
+            ],
+            [
+              "parent:call_b",
+              "parent:join",
+              "parent:report",
+              "parent:end",
+              "parent:parent.EndJoin",
+              "parent:End"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End"
+            ]
+          ]
+        }
+      ],
+      "final_report": {
+        "vendors": [
+          "B",
+          "A"
+        ],
+        "counts": [
+          0,
+          11
+        ],
+        "total_rows": [
+          {
+            "vendor": "B",
+            "count": 0
+          },
+          {
+            "vendor": "A",
+            "count": 11
+          }
+        ]
+      }
+    },
+    "io_total/live": {
+      "case": "io_total",
+      "mode": "live",
+      "completion_order": [
+        "a",
+        "b"
+      ],
+      "checkpoints": [
+        {
+          "label": "live midpoint",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "FUTURE",
+              "data": {}
+            },
+            "vendor_b:b_entry": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "parent:call_b",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ]
+          ]
+        },
+        {
+          "label": "live after B edit, before any return",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "parent:call_b",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "live after a return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "parent:call_b",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "live after b return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "parent:call_b": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "parent:call_b",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End",
+              "parent:join",
+              "parent:report",
+              "parent:end",
+              "parent:parent.EndJoin",
+              "parent:End",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ]
+          ]
+        }
+      ],
+      "final_report": {
+        "vendors": [
+          "B",
+          "A"
+        ],
+        "counts": [
+          0,
+          19
+        ],
+        "total_rows": [
+          {
+            "vendor": "B",
+            "count": 0
+          },
+          {
+            "vendor": "A",
+            "count": 19
+          }
+        ]
+      }
+    },
+    "io_total/restored": {
+      "case": "io_total",
+      "mode": "restored",
+      "completion_order": [
+        "a",
+        "b"
+      ],
+      "checkpoints": [
+        {
+          "label": "restored midpoint",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "FUTURE",
+              "data": {}
+            },
+            "vendor_b:b_entry": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "parent:call_b"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ]
+          ]
+        },
+        {
+          "label": "restored after B edit, before any return",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "parent:call_b"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "restored after a return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_b"
+            ],
+            [
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "restored after b return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "parent:call_b": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                },
+                "audit_tag": "preserved-across-return"
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split"
+            ],
+            [
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "parent:call_b",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End",
+              "parent:join",
+              "parent:report",
+              "parent:end",
+              "parent:parent.EndJoin",
+              "parent:End",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ]
+          ]
+        }
+      ],
+      "final_report": {
+        "vendors": [
+          "B",
+          "A"
+        ],
+        "counts": [
+          0,
+          11
+        ],
+        "total_rows": [
+          {
+            "vendor": "B",
+            "count": 0
+          },
+          {
+            "vendor": "A",
+            "count": 11
+          }
+        ]
+      }
+    }
+  },
+  "reverse_order_ba": {
+    "no_io/live": {
+      "case": "no_io",
+      "mode": "live",
+      "completion_order": [
+        "b",
+        "a"
+      ],
+      "checkpoints": [
+        {
+          "label": "live midpoint",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "FUTURE",
+              "data": {}
+            },
+            "vendor_b:b_entry": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "parent:call_b",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ]
+          ]
+        },
+        {
+          "label": "live after B edit, before any return",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "parent:call_b",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "live after b return",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End"
+            ]
+          ]
+        },
+        {
+          "label": "live after a return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "parent:call_a",
+              "parent:join",
+              "parent:report",
+              "parent:end",
+              "parent:parent.EndJoin",
+              "parent:End"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End"
+            ]
+          ]
+        }
+      ],
+      "final_report": {
+        "vendors": [
+          "B"
+        ],
+        "counts": [
+          0
+        ],
+        "total_rows": [
+          {
+            "vendor": "B",
+            "count": 0
+          }
+        ]
+      }
+    },
+    "no_io/restored": {
+      "case": "no_io",
+      "mode": "restored",
+      "completion_order": [
+        "b",
+        "a"
+      ],
+      "checkpoints": [
+        {
+          "label": "restored midpoint",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "FUTURE",
+              "data": {}
+            },
+            "vendor_b:b_entry": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "parent:call_b"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ]
+          ]
+        },
+        {
+          "label": "restored after B edit, before any return",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a",
+              "parent:call_b"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_edit",
+              "vendor_b:b_park"
+            ]
+          ]
+        },
+        {
+          "label": "restored after b return",
+          "public": {
+            "parent:call_a": {
+              "state": "STARTED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "READY",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split",
+              "parent:call_a"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End"
+            ]
+          ]
+        },
+        {
+          "label": "restored after a return",
+          "public": {
+            "parent:call_a": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "parent:call_b": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_a:a_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_park": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    }
+                  ]
+                }
+              }
+            },
+            "vendor_b:b_entry": {
+              "state": "COMPLETED",
+              "data": {
+                "total": {
+                  "rows": [
+                    {
+                      "vendor": "B",
+                      "count": 0
+                    },
+                    {
+                      "vendor": "A",
+                      "count": 19
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "lab_only_alias_groups": [
+            [
+              "parent:init",
+              "parent:split"
+            ],
+            [
+              "parent:call_a",
+              "parent:join",
+              "parent:report",
+              "parent:end",
+              "parent:parent.EndJoin",
+              "parent:End"
+            ],
+            [
+              "vendor_a:Start",
+              "vendor_a:Start"
+            ],
+            [
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End",
+              "vendor_a:a_start",
+              "vendor_a:a_entry",
+              "vendor_a:a_swap",
+              "vendor_a:a_park",
+              "vendor_a:a_end",
+              "vendor_a:vendor_a.EndJoin",
+              "vendor_a:End"
+            ],
+            [
+              "vendor_b:Start",
+              "vendor_b:Start"
+            ],
+            [
+              "vendor_b:b_start",
+              "vendor_b:b_entry",
+              "vendor_b:b_start",
+              "vendor_b:b_entry"
+            ],
+            [
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End",
+              "vendor_b:b_edit",
+              "vendor_b:b_park",
+              "vendor_b:b_end",
+              "vendor_b:vendor_b.EndJoin",
+              "vendor_b:End"
+            ]
+          ]
+        }
+      ],
+      "final_report": {
+        "vendors": [
+          "B"
+        ],
+        "counts": [
+          0
+        ],
+        "total_rows": [
+          {
+            "vendor": "B",
+            "count": 0
+          }
+        ]
+      }
+    }
+  },
+  "return_boundary": {
+    "no_io": {
+      "rows_object_shared_across_return": false,
+      "total_object_shared_across_return": false,
+      "parent_call_keys": [
+        "total"
+      ],
+      "audit_tag_preserved": false
+    },
+    "io_total": {
+      "rows_object_shared_across_return": true,
+      "total_object_shared_across_return": false,
+      "parent_call_keys": [
+        "audit_tag",
+        "total"
+      ],
+      "audit_tag_preserved": true
+    }
+  },
+  "merge_truncation": {
+    "two_row_target_plus_one_row_incoming": [
+      {
+        "vendor": "B",
+        "count": 0
+      }
+    ],
+    "one_row_target_plus_two_row_incoming": [
+      {
+        "vendor": "B",
+        "count": 0
+      },
+      {
+        "vendor": "A",
+        "count": 11
+      }
+    ],
+    "trim_rule": "merge_array executes del a[len(b):], so a shorter incoming list truncates the target"
+  }
+}

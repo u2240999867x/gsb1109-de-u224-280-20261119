@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  id="defs_parent_no_io" targetNamespace="http://example.com/spiff-investigation">
+  <bpmn:process id="parent" name="Parent two-vendor rollup" isExecutable="true">
+    <bpmn:startEvent id="start">
+      <bpmn:outgoing>f_start_init</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:scriptTask id="init" name="Init total.rows" scriptFormat="python">
+      <bpmn:incoming>f_start_init</bpmn:incoming>
+      <bpmn:outgoing>f_init_split</bpmn:outgoing>
+      <bpmn:script>total = {'rows': [{'vendor': 'A', 'count': 0}, {'vendor': 'B', 'count': 0}]}</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:parallelGateway id="split">
+      <bpmn:incoming>f_init_split</bpmn:incoming>
+      <bpmn:outgoing>f_split_call_a</bpmn:outgoing>
+      <bpmn:outgoing>f_split_call_b</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:callActivity id="call_a" name="Vendor A call activity" calledElement="vendor_a">
+      <bpmn:incoming>f_split_call_a</bpmn:incoming>
+      <bpmn:outgoing>f_call_a_join</bpmn:outgoing>
+    </bpmn:callActivity>
+    <bpmn:callActivity id="call_b" name="Vendor B call activity" calledElement="vendor_b">
+      <bpmn:incoming>f_split_call_b</bpmn:incoming>
+      <bpmn:outgoing>f_call_b_join</bpmn:outgoing>
+    </bpmn:callActivity>
+    <bpmn:parallelGateway id="join">
+      <bpmn:incoming>f_call_a_join</bpmn:incoming>
+      <bpmn:incoming>f_call_b_join</bpmn:incoming>
+      <bpmn:outgoing>f_join_report</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:scriptTask id="report" name="Read final report" scriptFormat="python">
+      <bpmn:incoming>f_join_report</bpmn:incoming>
+      <bpmn:outgoing>f_report_end</bpmn:outgoing>
+      <bpmn:script>report_vendors = [_row['vendor'] for _row in total['rows']]
+report_counts = [_row['count'] for _row in total['rows']]</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="end">
+      <bpmn:incoming>f_report_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_start_init" sourceRef="start" targetRef="init" />
+    <bpmn:sequenceFlow id="f_init_split" sourceRef="init" targetRef="split" />
+    <bpmn:sequenceFlow id="f_split_call_a" sourceRef="split" targetRef="call_a" />
+    <bpmn:sequenceFlow id="f_split_call_b" sourceRef="split" targetRef="call_b" />
+    <bpmn:sequenceFlow id="f_call_a_join" sourceRef="call_a" targetRef="join" />
+    <bpmn:sequenceFlow id="f_call_b_join" sourceRef="call_b" targetRef="join" />
+    <bpmn:sequenceFlow id="f_join_report" sourceRef="join" targetRef="report" />
+    <bpmn:sequenceFlow id="f_report_end" sourceRef="report" targetRef="end" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="diagram_1">
+    <bpmndi:BPMNPlane id="plane_1" bpmnElement="parent" />
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
