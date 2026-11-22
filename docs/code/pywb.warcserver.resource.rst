@@ -36,6 +36,14 @@ pywb.warcserver.resource.responseloader module
    :undoc-members:
    :show-inheritance:
 
+pywb.warcserver.resource.rangecatalog module
+--------------------------------------------
+
+.. automodule:: pywb.warcserver.resource.rangecatalog
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Module contents
 ---------------
 

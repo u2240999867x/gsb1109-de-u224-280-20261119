@@ -276,7 +276,9 @@ class RewriterApp(object):
 
         try:
             content_length = int(content_length)
-            if not range_end:
+            # An empty end means "to the end"; an explicit end of 0 is the
+            # one-byte range 0-0 and must not be treated as missing.
+            if range_end is None or range_end == '':
                 range_end = content_length - 1
 
             if range_start >= content_length or range_end >= content_length:

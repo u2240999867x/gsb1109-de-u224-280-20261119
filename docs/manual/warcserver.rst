@@ -357,3 +357,67 @@ For more examples on custom Warcserver usage, consult the Warcserver tests, such
 
 
 
+
+
+.. _media-range-catalog:
+
+Multi-Fragment Media Range Catalog
+----------------------------------
+
+A media capture can be stored as several WARC records which together cover one
+byte representation.  The :mod:`pywb.warcserver.resource.rangecatalog` module
+adds a representation-aware read path for that layout.  A catalog import checks
+the actual length of every fragment, every overlapping byte and the complete
+representation identity before the catalog is published.  Playback requests
+read only the requested slices and start streaming as soon as the first
+fragment is available.
+
+A catalog manifest describes each representation and its fragments::
+
+    {
+      "generation": 2,
+      "representations": [
+        {
+          "representation_id": "media-2024-01",
+          "url": "https://example.com/video.mp4",
+          "etag": "\"media-v1\"",
+          "total_length": 1048576,
+          "segments": [
+            {"start": 0, "end": 524287,
+             "sources": [{"filename": "capture-head.warc",
+                          "offset": 331, "length": 525600}]},
+            {"start": 524288, "end": 1048575,
+             "sources": [{"filename": "capture-tail.warc",
+                          "offset": 331, "length": 525600},
+                         {"filename": "capture-tail-backup.warc",
+                          "offset": 331, "length": 525600}]}
+          ]
+        }
+      ]
+    }
+
+Use :func:`~pywb.warcserver.resource.rangecatalog.load_catalog` to load a
+manifest and :class:`~pywb.warcserver.resource.rangecatalog.ArchiveService` to
+publish successive generations.  :class:`MediaArchiveApp` exposes a small WSGI
+surface for direct reads, metadata and pinned continuation.
+
+Every read response includes:
+
+* ``ETag`` -- the representation validator
+* ``X-Archive-Representation`` -- the selected representation id
+* ``X-Archive-Generation`` -- the catalog generation in which it was published
+* ``X-Archive-Coverage`` -- the verified coverage, e.g. ``bytes 0-1048575/1048576``
+* ``X-Archive-Pin`` and ``X-Archive-Pinned-URL`` -- a stable continuation point
+
+Range requests are evaluated against the complete representation.  A request
+that crosses two fragments keeps the same representation; it never falls back
+to a newer catalog unless that catalog's content identity is the same.  If the
+remaining bytes cannot be proven to belong to the pinned representation, the
+response is ``416`` rather than a mixed-version ``206``.
+
+``If-Range`` accepts only a strong validator equal to the selected
+representation's ``ETag``.  A mismatch may fall back only to the complete
+``200`` response of that same representation; when no complete representation
+exists, the request fails with ``404``.  The range parser treats ``bytes=0-0``
+as exactly one byte, and normal single-record pywb replay keeps its existing
+behavior.
