@@ -72,6 +72,7 @@ Diffs
    :maxdepth: 2
 
    diffs
+   two_step_migration
 
 Logging
 -------

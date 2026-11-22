@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="Definitions_TwoStepOld" targetNamespace="https://example.invalid/two-step">
+  <bpmn:message id="Message_Batch" name="file_batch"/>
+
+  <bpmn:process id="Top" isExecutable="true">
+    <bpmn:startEvent id="Start_Top">
+      <bpmn:outgoing>Flow_Start</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:parallelGateway id="Split">
+      <bpmn:incoming>Flow_Start</bpmn:incoming>
+      <bpmn:outgoing>Flow_A</bpmn:outgoing>
+      <bpmn:outgoing>Flow_B</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:callActivity id="Call_A" calledElement="supplier_a">
+      <bpmn:incoming>Flow_A</bpmn:incoming>
+      <bpmn:outgoing>Flow_A_Done</bpmn:outgoing>
+    </bpmn:callActivity>
+    <bpmn:callActivity id="Call_B" calledElement="supplier_b">
+      <bpmn:incoming>Flow_B</bpmn:incoming>
+      <bpmn:outgoing>Flow_B_Done</bpmn:outgoing>
+    </bpmn:callActivity>
+    <bpmn:parallelGateway id="Join">
+      <bpmn:incoming>Flow_A_Done</bpmn:incoming>
+      <bpmn:incoming>Flow_B_Done</bpmn:incoming>
+      <bpmn:outgoing>Flow_End</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:endEvent id="End_Top">
+      <bpmn:incoming>Flow_End</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_Start" sourceRef="Start_Top" targetRef="Split"/>
+    <bpmn:sequenceFlow id="Flow_A" sourceRef="Split" targetRef="Call_A"/>
+    <bpmn:sequenceFlow id="Flow_B" sourceRef="Split" targetRef="Call_B"/>
+    <bpmn:sequenceFlow id="Flow_A_Done" sourceRef="Call_A" targetRef="Join"/>
+    <bpmn:sequenceFlow id="Flow_B_Done" sourceRef="Call_B" targetRef="Join"/>
+    <bpmn:sequenceFlow id="Flow_End" sourceRef="Join" targetRef="End_Top"/>
+  </bpmn:process>
+
+  <bpmn:process id="supplier_a" isExecutable="true">
+    <bpmn:startEvent id="A_Start">
+      <bpmn:outgoing>A_Flow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:receiveTask id="A_WaitFile" name="WaitFile" messageRef="Message_Batch">
+      <bpmn:incoming>A_Flow_1</bpmn:incoming>
+      <bpmn:outgoing>A_Flow_2</bpmn:outgoing>
+    </bpmn:receiveTask>
+    <bpmn:endEvent id="A_End">
+      <bpmn:incoming>A_Flow_2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="A_Flow_1" sourceRef="A_Start" targetRef="A_WaitFile"/>
+    <bpmn:sequenceFlow id="A_Flow_2" sourceRef="A_WaitFile" targetRef="A_End"/>
+  </bpmn:process>
+
+  <bpmn:process id="supplier_b" isExecutable="true">
+    <bpmn:startEvent id="B_Start">
+      <bpmn:outgoing>B_Flow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:receiveTask id="B_WaitFile" name="WaitFile" messageRef="Message_Batch">
+      <bpmn:incoming>B_Flow_1</bpmn:incoming>
+      <bpmn:outgoing>B_Flow_2</bpmn:outgoing>
+    </bpmn:receiveTask>
+    <bpmn:endEvent id="B_End">
+      <bpmn:incoming>B_Flow_2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="B_Flow_1" sourceRef="B_Start" targetRef="B_WaitFile"/>
+    <bpmn:sequenceFlow id="B_Flow_2" sourceRef="B_WaitFile" targetRef="B_End"/>
+  </bpmn:process>
+</bpmn:definitions>

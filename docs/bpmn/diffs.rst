@@ -1,3 +1,5 @@
+.. _diff-utilities:
+
 Diff Utilities
 ==============
 
