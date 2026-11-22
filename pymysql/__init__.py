@@ -38,6 +38,7 @@ from .err import (
     ProgrammingError,
     Warning,
 )
+from .metadata import ColumnMetadata, SourceDirectory
 from .times import (
     Date,
     DateFromTicks,
@@ -139,12 +140,14 @@ NULL = "NULL"
 
 __all__ = [
     "BINARY",
+    "ColumnMetadata",
     "DATE",
     "FIELD_TYPE",
     "NULL",
     "NUMBER",
     "ROWID",
     "STRING",
+    "SourceDirectory",
     "TIME",
     "TIMESTAMP",
     "Binary",

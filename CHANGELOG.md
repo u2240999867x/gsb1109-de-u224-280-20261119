@@ -1,5 +1,21 @@
 # Changes
 
+## Unreleased
+
+* Add `pymysql.metadata.ColumnMetadata`, an in-order snapshot of each result
+  column's raw source identifiers and protocol metadata, exposed on cursors and
+  results as `column_metadata` alongside the unchanged DB-API `description`.
+  `FieldDescriptorPacket` now retains the original identifier bytes
+  (`table_name_bytes`, `org_table_bytes`, `name_bytes`, `org_name_bytes`) in
+  addition to the decoded display strings.
+* Add `pymysql.metadata.SourceDirectory`, a caller-provided catalog of source
+  declarations keyed by the raw `(catalog, database, table, column)` bytes.
+  Resolved declarations are available as `cursor.declarations`; expression
+  columns and sources absent from the bound directory resolve to `None`.
+  Bind a directory per query with `cursor.execute(..., source_directory=...)`
+  or set `Connection.source_directory`. Earlier snapshots are immutable when
+  the directory is replaced.
+
 ## v1.2.4 (security fix)
 
 Release date: 2026-11-09

@@ -240,10 +240,20 @@ class FieldDescriptorPacket(MysqlPacket):
         """
         self.catalog = self.read_length_coded_string()
         self.db = self.read_length_coded_string()
-        self.table_name = self.read_length_coded_string().decode(encoding)
-        self.org_table = self.read_length_coded_string().decode(encoding)
-        self.name = self.read_length_coded_string().decode(encoding)
-        self.org_name = self.read_length_coded_string().decode(encoding)
+        table_name_bytes = self.read_length_coded_string()
+        org_table_bytes = self.read_length_coded_string()
+        name_bytes = self.read_length_coded_string()
+        org_name_bytes = self.read_length_coded_string()
+        # Raw protocol bytes identify the actual source schema object even when
+        # decoding with the connection encoding renders distinct bytes identically.
+        self.table_name_bytes = table_name_bytes
+        self.org_table_bytes = org_table_bytes
+        self.name_bytes = name_bytes
+        self.org_name_bytes = org_name_bytes
+        self.table_name = table_name_bytes.decode(encoding)
+        self.org_table = org_table_bytes.decode(encoding)
+        self.name = name_bytes.decode(encoding)
+        self.org_name = org_name_bytes.decode(encoding)
         (
             self.charsetnr,
             self.length,

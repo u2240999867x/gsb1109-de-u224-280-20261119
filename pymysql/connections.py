@@ -17,6 +17,7 @@ from . import VERSION_STRING, _auth, converters, err
 from .charset import charset_by_id, charset_by_name
 from .constants import CLIENT, COMMAND, CR, ER, FIELD_TYPE, SERVER_STATUS
 from .cursors import Cursor
+from .metadata import build_column_metadata, resolve_declarations
 from .optionfile import Parser
 from .protocol import (
     EOFPacketWrapper,
@@ -163,6 +164,12 @@ class Connection:
     :param named_pipe: Not supported.
     :param db: **DEPRECATED** Alias for database.
     :param passwd: **DEPRECATED** Alias for password.
+    :param source_directory: A :class:`pymysql.metadata.SourceDirectory`
+        used to confirm result column sources against known schema
+        declarations.  May be replaced between queries; a snapshot taken for
+        an earlier result keeps the directory that was bound when the query
+        ran.  Defaults to no directory, in which case every column
+        declaration is unknown.
 
     See `Connection <https://www.python.org/dev/peps/pep-0249/#connection-objects>`_ in the
     specification.
@@ -217,6 +224,7 @@ class Connection:
         named_pipe=None,  # not supported
         passwd=None,  # deprecated
         db=None,  # deprecated
+        source_directory=None,
     ):
         if db is not None and database is None:
             warnings.warn("'db' is deprecated, use 'database'", DeprecationWarning, 3)
@@ -347,6 +355,11 @@ class Connection:
         self._result = None
         self._affected_rows = 0
         self.host_info = "Not connected"
+
+        # Caller's current source directory.  Mutating this never changes a
+        # snapshot already attached to a result; only newly executed queries
+        # pick it up (unless an explicit directory is passed to query()).
+        self.source_directory = source_directory
 
         # specified autocommit mode. None means use server default.
         self.autocommit_mode = autocommit
@@ -582,17 +595,25 @@ class Connection:
         return self.cursorclass(self)
 
     # The following methods are INTERNAL USE ONLY (called from Cursor)
-    def query(self, sql, unbuffered=False):
+    def query(self, sql, unbuffered=False, source_directory=None):
         # if DEBUG:
         #     print("DEBUG: sending query:", sql)
         if isinstance(sql, str):
             sql = sql.encode(self.encoding)
         self._execute_command(COMMAND.COM_QUERY, sql)
-        self._affected_rows = self._read_query_result(unbuffered=unbuffered)
+        if source_directory is None:
+            source_directory = self.source_directory
+        self._affected_rows = self._read_query_result(
+            unbuffered=unbuffered, source_directory=source_directory
+        )
         return self._affected_rows
 
-    def next_result(self, unbuffered=False):
-        self._affected_rows = self._read_query_result(unbuffered=unbuffered)
+    def next_result(self, unbuffered=False, source_directory=None):
+        if source_directory is None:
+            source_directory = self.source_directory
+        self._affected_rows = self._read_query_result(
+            unbuffered=unbuffered, source_directory=source_directory
+        )
         return self._affected_rows
 
     def affected_rows(self):
@@ -858,9 +879,9 @@ class Connection:
                 CR.CR_SERVER_GONE_ERROR, f"MySQL server has gone away ({e!r})"
             )
 
-    def _read_query_result(self, unbuffered=False):
+    def _read_query_result(self, unbuffered=False, source_directory=None):
         self._result = None
-        result = MySQLResult(self)
+        result = MySQLResult(self, source_directory=source_directory)
         if unbuffered:
             result.init_unbuffered_query()
         else:
@@ -1275,11 +1296,18 @@ class Connection:
 
 
 class MySQLResult:
-    def __init__(self, connection):
+    def __init__(self, connection, source_directory=None):
         """
         :type connection: Connection
+        :param source_directory: directory in effect when the query producing
+            this result was executed.  It is consulted once, while the column
+            descriptors are read, and retained on the result so the binding
+            stays fixed for this result set's lifetime.  Later result sets get
+            their own result object and resolve against the connection's
+            current directory.
         """
         self.connection = connection
+        self.source_directory = source_directory
         self.affected_rows = None
         self.insert_id = None
         self.server_status = None
@@ -1287,6 +1315,8 @@ class MySQLResult:
         self.message = None
         self.field_count = 0
         self.description = None
+        self.column_metadata = None
+        self.declarations = None
         self.rows = None
         self.has_next = None
         self.unbuffered_active = False
@@ -1497,6 +1527,10 @@ class MySQLResult:
         eof_packet = self.connection._read_packet()
         assert eof_packet.is_eof_packet(), "Protocol error, expecting EOF"
         self.description = tuple(description)
+        self.column_metadata = build_column_metadata(self.fields, conn_encoding)
+        self.declarations = resolve_declarations(
+            self.column_metadata, self.source_directory
+        )
 
 
 def _send_local_file(filename: str, conn: Connection):
