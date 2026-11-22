@@ -142,6 +142,7 @@ setup(
         cdx-indexer = pywb.indexer.cdxindexer:main
         wb-manager = pywb.manager.manager:main_wrap_exc
         warcserver = pywb.apps.cli:warcserver
+        pywb-continuation = pywb.recorder.continuationcli:main
         """,
     classifiers=[
         'Development Status :: 4 - Beta',

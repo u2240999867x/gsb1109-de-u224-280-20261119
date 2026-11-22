@@ -12,6 +12,30 @@ pywb.recorder.filters module
    :undoc-members:
    :show-inheritance:
 
+pywb.recorder.continuation module
+---------------------------------
+
+.. automodule:: pywb.recorder.continuation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pywb.recorder.continuationwriter module
+---------------------------------------
+
+.. automodule:: pywb.recorder.continuationwriter
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pywb.recorder.continuationcli module
+------------------------------------
+
+.. automodule:: pywb.recorder.continuationcli
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 pywb.recorder.multifilewarcwriter module
 ----------------------------------------
 

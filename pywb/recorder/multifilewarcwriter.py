@@ -88,17 +88,41 @@ class MultiFileWARCWriter(BaseWARCWriter):
         except Exception:
             pass
 
-        fh = open(filename, 'a+b')
+        fh, actual_filename = self.open_new_file(filename)
 
         if self.dedup_index:
-            self.dedup_index.add_warc_file(filename, params)
+            self.dedup_index.add_warc_file(actual_filename, params)
 
-        return fh
+        return fh, actual_filename
+
+    def open_new_file(self, filename):
+        """Open a volume this writer owns, never appending to an existing one.
+
+        Existing volumes may be read-only legacy captures and must not be
+        modified.  A name collision therefore rolls over to a fresh name
+        rather than opening the existing file in append mode.
+        """
+        candidate = filename
+        dupe_num = 1
+        while True:
+            try:
+                return open(candidate, 'x+b'), candidate
+            except FileExistsError:
+                candidate = self._next_collision_name(filename, dupe_num)
+                dupe_num += 1
+
+    @staticmethod
+    def _next_collision_name(filename, dupe_num):
+        for ext in ('.warc.gz', '.arc.gz', '.warc', '.arc'):
+            if filename.endswith(ext):
+                return '{0}-{1}{2}'.format(filename[:-len(ext)], dupe_num, ext)
+        stem, ext = os.path.splitext(filename)
+        return '{0}-{1}{2}'.format(stem, dupe_num, ext)
 
     def _close_file(self, fh):
         try:
             if os.name != 'nt':
-                portalocker.lock(fh, portalocker.LOCK_UN)
+                portalocker.unlock(fh)
             return True
         except Exception as e:
             print(e)
@@ -188,7 +212,11 @@ class MultiFileWARCWriter(BaseWARCWriter):
             if not self.allow_new_file(filename, params):
                 return False
 
-            out = self._open_file(filename, params)
+            out, actual_filename = self._open_file(filename, params)
+            if actual_filename != filename:
+                # A same-name legacy volume was already there; write to the
+                # rolled-over name and index that name, never the old one.
+                filename = actual_filename
 
             is_new = True
 
