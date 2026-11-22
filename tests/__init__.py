@@ -33,6 +33,7 @@
 from .ast import *
 from .builtins import *
 from .chain import *
+from .dispatch import *
 from .engine import *
 from .errors import *
 from .issues import *

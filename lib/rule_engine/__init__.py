@@ -48,6 +48,17 @@ from .errors import EvaluationError
 from .errors import RuleSyntaxError
 from .errors import SymbolResolutionError
 
+from .dispatch import DictionaryRegistry
+from .dispatch import DictionarySnapshot
+from .dispatch import DispatchService
+from .dispatch import Evaluation
+from .dispatch import Fact
+from .dispatch import FactKind
+from .dispatch import NightBatchReport
+from .dispatch import Outcome
+from .dispatch import REQUIRED_FACTS
+from .dispatch import Ticket
+
 from .types import DataType
 
 __all__ = (
@@ -56,11 +67,21 @@ __all__ = (
     'ChainExhaustedError',
     'Context',
     'DataType',
+    'DictionaryRegistry',
+    'DictionarySnapshot',
+    'DispatchService',
     'EngineError',
+    'Evaluation',
     'EvaluationError',
+    'Fact',
+    'FactKind',
+    'NightBatchReport',
+    'Outcome',
+    'REQUIRED_FACTS',
     'Rule',
     'RuleSyntaxError',
     'SymbolResolutionError',
+    'Ticket',
     'resolve_attribute',
     'resolve_item',
     'type_resolver_from_dataclass',
