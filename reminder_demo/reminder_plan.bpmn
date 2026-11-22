@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  id="defs_supplier_reminder"
+                  targetNamespace="http://example.org/supplier-reminder">
+  <!--
+    供应商缺件提醒流程（每个批次一个独立流程实例）。
+
+    三条并行支路：
+      1) wait_data        —— 等待数据文件（消息 docs_data）
+      2) wait_validation  —— 等待校验文件（消息 docs_validation）
+      3) reminder_plan    —— 提醒计划子流程（到期 -> 派发 -> 等待送达确认）
+
+    两份文件都到齐 -> released（terminate 结束事件，取消提醒支路）。
+    续期：reminder_plan 上的中断边界消息 renewal_requested ->
+    apply_renewal（人工任务，由调度器完成）-> 重新进入 reminder_plan。
+    续期只重建提醒子流程，不触碰两条文件支路（已收文件不撤销）。
+  -->
+  <bpmn:process id="supplier_batch_reminder" name="供应商缺件提醒(按批次)" isExecutable="true">
+
+    <bpmn:startEvent id="start" name="start">
+      <bpmn:outgoing>flow_start_fork</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:parallelGateway id="fork" name="fork">
+      <bpmn:incoming>flow_start_fork</bpmn:incoming>
+      <bpmn:outgoing>flow_fork_data</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_validation</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_merge</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <bpmn:intermediateCatchEvent id="wait_data" name="docs_data">
+      <bpmn:incoming>flow_fork_data</bpmn:incoming>
+      <bpmn:outgoing>flow_data_join</bpmn:outgoing>
+      <bpmn:messageEventDefinition id="msgdef_data" />
+    </bpmn:intermediateCatchEvent>
+
+    <bpmn:intermediateCatchEvent id="wait_validation" name="docs_validation">
+      <bpmn:incoming>flow_fork_validation</bpmn:incoming>
+      <bpmn:outgoing>flow_validation_join</bpmn:outgoing>
+      <bpmn:messageEventDefinition id="msgdef_validation" />
+    </bpmn:intermediateCatchEvent>
+
+    <bpmn:parallelGateway id="join" name="join">
+      <bpmn:incoming>flow_data_join</bpmn:incoming>
+      <bpmn:incoming>flow_validation_join</bpmn:incoming>
+      <bpmn:outgoing>flow_join_release</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <bpmn:endEvent id="released" name="released">
+      <bpmn:incoming>flow_join_release</bpmn:incoming>
+      <bpmn:terminateEventDefinition id="termdef_release" />
+    </bpmn:endEvent>
+
+    <bpmn:exclusiveGateway id="plan_merge" name="plan_merge">
+      <bpmn:incoming>flow_fork_merge</bpmn:incoming>
+      <bpmn:incoming>flow_apply_plan</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_plan</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:subProcess id="reminder_plan" name="reminder_plan">
+      <bpmn:incoming>flow_merge_plan</bpmn:incoming>
+      <bpmn:outgoing>flow_plan_done</bpmn:outgoing>
+
+      <bpmn:startEvent id="plan_start" name="plan_start">
+        <bpmn:outgoing>flow_ps_timer</bpmn:outgoing>
+      </bpmn:startEvent>
+
+      <bpmn:intermediateCatchEvent id="due_timer" name="due_timer">
+        <bpmn:incoming>flow_ps_timer</bpmn:incoming>
+        <bpmn:outgoing>flow_timer_dispatch</bpmn:outgoing>
+        <bpmn:timerEventDefinition id="timerdef_due">
+          <bpmn:timeDate xsi:type="bpmn:tFormalExpression">due_time_iso</bpmn:timeDate>
+        </bpmn:timerEventDefinition>
+      </bpmn:intermediateCatchEvent>
+
+      <bpmn:manualTask id="dispatch_reminder" name="dispatch_reminder">
+        <bpmn:incoming>flow_timer_dispatch</bpmn:incoming>
+        <bpmn:outgoing>flow_dispatch_gate</bpmn:outgoing>
+      </bpmn:manualTask>
+
+      <bpmn:exclusiveGateway id="after_dispatch" name="after_dispatch" default="flow_gate_end">
+        <bpmn:incoming>flow_dispatch_gate</bpmn:incoming>
+        <bpmn:outgoing>flow_gate_confirm</bpmn:outgoing>
+        <bpmn:outgoing>flow_gate_end</bpmn:outgoing>
+      </bpmn:exclusiveGateway>
+
+      <bpmn:intermediateCatchEvent id="wait_confirm" name="delivery_confirmed">
+        <bpmn:incoming>flow_gate_confirm</bpmn:incoming>
+        <bpmn:outgoing>flow_confirm_end</bpmn:outgoing>
+        <bpmn:messageEventDefinition id="msgdef_confirm" />
+      </bpmn:intermediateCatchEvent>
+
+      <bpmn:endEvent id="plan_end" name="plan_end">
+        <bpmn:incoming>flow_confirm_end</bpmn:incoming>
+        <bpmn:incoming>flow_gate_end</bpmn:incoming>
+      </bpmn:endEvent>
+
+      <bpmn:sequenceFlow id="flow_ps_timer" sourceRef="plan_start" targetRef="due_timer" />
+      <bpmn:sequenceFlow id="flow_timer_dispatch" sourceRef="due_timer" targetRef="dispatch_reminder" />
+      <bpmn:sequenceFlow id="flow_dispatch_gate" sourceRef="dispatch_reminder" targetRef="after_dispatch" />
+      <bpmn:sequenceFlow id="flow_gate_confirm" sourceRef="after_dispatch" targetRef="wait_confirm">
+        <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">dispatched == True</bpmn:conditionExpression>
+      </bpmn:sequenceFlow>
+      <bpmn:sequenceFlow id="flow_gate_end" sourceRef="after_dispatch" targetRef="plan_end" />
+      <bpmn:sequenceFlow id="flow_confirm_end" sourceRef="wait_confirm" targetRef="plan_end" />
+    </bpmn:subProcess>
+
+    <bpmn:boundaryEvent id="renewal_boundary" name="renewal_requested" attachedToRef="reminder_plan" cancelActivity="true">
+      <bpmn:outgoing>flow_boundary_apply</bpmn:outgoing>
+      <bpmn:messageEventDefinition id="msgdef_renewal" />
+    </bpmn:boundaryEvent>
+
+    <bpmn:manualTask id="apply_renewal" name="apply_renewal">
+      <bpmn:incoming>flow_boundary_apply</bpmn:incoming>
+      <bpmn:outgoing>flow_apply_plan</bpmn:outgoing>
+    </bpmn:manualTask>
+
+    <bpmn:endEvent id="plan_done" name="plan_done">
+      <bpmn:incoming>flow_plan_done</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="flow_start_fork" sourceRef="start" targetRef="fork" />
+    <bpmn:sequenceFlow id="flow_fork_data" sourceRef="fork" targetRef="wait_data" />
+    <bpmn:sequenceFlow id="flow_fork_validation" sourceRef="fork" targetRef="wait_validation" />
+    <bpmn:sequenceFlow id="flow_fork_merge" sourceRef="fork" targetRef="plan_merge" />
+    <bpmn:sequenceFlow id="flow_data_join" sourceRef="wait_data" targetRef="join" />
+    <bpmn:sequenceFlow id="flow_validation_join" sourceRef="wait_validation" targetRef="join" />
+    <bpmn:sequenceFlow id="flow_join_release" sourceRef="join" targetRef="released" />
+    <bpmn:sequenceFlow id="flow_merge_plan" sourceRef="plan_merge" targetRef="reminder_plan" />
+    <bpmn:sequenceFlow id="flow_plan_done" sourceRef="reminder_plan" targetRef="plan_done" />
+    <bpmn:sequenceFlow id="flow_boundary_apply" sourceRef="renewal_boundary" targetRef="apply_renewal" />
+    <bpmn:sequenceFlow id="flow_apply_plan" sourceRef="apply_renewal" targetRef="plan_merge" />
+  </bpmn:process>
+</bpmn:definitions>
