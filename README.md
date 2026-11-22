@@ -121,6 +121,126 @@ Parser("CREATE TABLE t (id INT)").output_columns
 # []
 ```
 
+### Extracting output column sources (lineage)
+
+`columns` answers "which columns appear in this query".  `column_sources`
+answers a different question: "which physical columns can feed the value of
+each output column".  Values are traced through CTEs, including recursive
+CTEs, while join and filter columns are reported separately.
+
+```python
+from sql_metadata import Parser
+
+parser = Parser("""
+WITH RECURSIVE closure AS (
+    SELECT roots.id AS id,
+           roots.child_id AS next_id,
+           roots.base_cost AS cost
+    FROM roots
+    UNION ALL
+    SELECT closure.next_id AS id,
+           edges.next_id AS next_id,
+           closure.cost + edges.extra AS cost
+    FROM closure
+    JOIN edges ON closure.next_id = edges.id
+    WHERE edges.live
+)
+SELECT id, cost FROM closure
+""")
+
+# the result for each column is a list of physical value sources,
+# comparable directly with a plain list
+parser.column_sources["id"]
+# ['roots.id', 'roots.child_id', 'edges.next_id']
+
+parser.column_sources["cost"]
+# ['roots.base_cost', 'edges.extra']
+
+# join and filter columns are conditions, not value sources
+parser.column_sources["id"].conditions
+# ['edges.id', 'edges.live']
+
+# the recursive reference that carried values between iterations
+parser.column_sources["id"].recursive
+# ['closure.next_id']
+parser.column_sources["id"].recursive_hops
+# [{'reference': 'closure.next_id', 'column': 'next_id', 'iteration': 'previous'}]
+
+# a self-dependent column stops after collecting its external sources
+parser.column_sources["cost"].cycles
+# ['closure.cost']
+```
+
+Recursive projections are resolved by **position**, not by the alias written
+on each projection.  Swapping the first two recursive projections keeps their
+aliases with the expressions, but changes the declared columns they feed:
+
+```python
+swapped = Parser("""
+WITH RECURSIVE closure AS (
+    SELECT roots.id AS id, roots.child_id AS next_id, roots.base_cost AS cost
+    FROM roots
+    UNION ALL
+    SELECT edges.next_id AS id, closure.next_id AS next_id,
+           closure.cost + edges.extra AS cost
+    FROM closure
+    JOIN edges ON closure.next_id = edges.id
+    WHERE edges.live
+)
+SELECT id, cost FROM closure
+""")
+
+swapped.column_sources["id"]
+# ['roots.id', 'edges.next_id']
+```
+
+Unprojected CTE columns can be inspected directly, and either a full name or a
+position is enough to distinguish a recursive CTE reference from a physical
+table that happens to share the CTE's name:
+
+```python
+parser.resolve_column_source("closure", "next_id")
+# ['roots.child_id', 'edges.next_id']
+
+qualified = Parser("""
+WITH RECURSIVE closure AS (
+    SELECT roots.id AS id, roots.child_id AS next_id, roots.base_cost AS cost
+    FROM roots
+    UNION ALL
+    SELECT closure.next_id AS id, main.closure.next_id AS next_id,
+           closure.cost + main.closure.extra AS cost
+    FROM closure
+    JOIN main.closure ON closure.next_id = main.closure.id
+    WHERE main.closure.live
+)
+SELECT id, cost FROM closure
+""")
+
+qualified.tables
+# ['roots', 'main.closure']
+qualified.column_sources["id"].recursive
+# ['closure.next_id']  — only the bare reference inherits the previous round
+qualified.column_sources["id"]
+# ['roots.id', 'roots.child_id', 'main.closure.next_id']
+```
+
+The full provenance can be serialised with `to_dict()`, summarised with
+`explain()`, or accessed via the helper methods on the mapping:
+
+```python
+parser.column_sources["id"].to_dict()
+# {'sources': ['roots.id', ...], 'conditions': ['edges.id', 'edges.live'],
+#  'recursive': ['closure.next_id'], 'recursive_hops': [...],
+#  'cycles': [], 'unresolved': []}
+
+parser.column_sources.sources_for("id")
+parser.column_sources.conditions_for("id")
+parser.column_sources.recursive_for("id")
+```
+
+Existing `columns`, `tables`, `output_columns`, and `columns_aliases` keep
+their previous behaviour and output.
+
 ### Detecting query type
 
 ```python

@@ -11,6 +11,7 @@ sql-metadata v3 is a Python library that parses SQL queries and extracts metadat
 | [`sql_cleaner.py`](sql_metadata/sql_cleaner.py) | Raw SQL preprocessing (no sqlglot dependency) | `SqlCleaner`, `CleanResult` |
 | [`dialect_parser.py`](sql_metadata/dialect_parser.py) | Dialect detection, sqlglot parsing, parse-quality validation | `DialectParser`, `HashVarDialect`, `BracketedTableDialect` |
 | [`column_extractor.py`](sql_metadata/column_extractor.py) | Single-pass DFS column/alias extraction | `ColumnExtractor` |
+| [`column_sources.py`](sql_metadata/column_sources.py) | Value provenance for output columns (incl. recursive CTEs) | `ColumnSourcesResolver` |
 | [`table_extractor.py`](sql_metadata/table_extractor.py) | Table extraction with position-based sorting | `TableExtractor` |
 | [`nested_resolver.py`](sql_metadata/nested_resolver.py) | CTE/subquery name and body extraction, nested column resolution | `NestedResolver` |
 | [`query_type_extractor.py`](sql_metadata/query_type_extractor.py) | Query type detection from AST root node | `QueryTypeExtractor` |
@@ -98,6 +99,7 @@ flowchart LR
 | `query_type` | `QueryType` enum | `QueryTypeExtractor(ast, raw_query).extract()` |
 | `tokens` | `List[str]` of token strings | sqlglot tokenizer |
 | `columns` | Column names | AST parse → TableExtractor → `ColumnExtractor.extract()` → NestedResolver |
+| `column_sources` | Physical value sources per output column | AST parse → `ColumnSourcesResolver.resolve()` |
 | `columns_dict` | Columns by clause section | `.columns` |
 | `columns_aliases` | `{alias: target_column}` | `.columns` |
 | `columns_aliases_names` | List of alias names | `.columns` |
@@ -442,6 +444,41 @@ A collection of pure stateless functions (no class). Exploits the fact that sqlg
 - `InvalidQueryDefinition` — a `ValueError` subclass raised whenever the SQL is structurally invalid (empty, unparseable, unsupported query type, alias-less CTE, or all dialects degraded). Inheriting from `ValueError` keeps existing `except ValueError:` handlers working while giving callers a specific type to catch.
 
 **[`generalizator.py`](sql_metadata/generalizator.py)** — anonymises SQL for log aggregation: strips comments, replaces literals with `X`, numbers with `N`, collapses `IN(...)` lists to `(XYZ)`.
+
+---
+
+### ColumnSourcesResolver — value provenance
+
+**File:** [`column_sources.py`](sql_metadata/column_sources.py) | **Class:** `ColumnSourcesResolver`
+
+Backs `Parser.column_sources` / `Parser.columns_sources`. Unlike `columns`
+(every reference in the query), this maps each **output** column to the
+physical columns that can supply its value, separately from join/filter
+conditions. It is created on first access and cached on the parser.
+
+**Recursive CTEs are positional.** For each CTE it records:
+
+- `output_names` — the declared column list (`cte(a, b, c)`) or the anchor's
+  SELECT output names.
+- `anchor` — the first `UNION` branch.
+- `recursive` — every later branch.
+
+Resolving declared column *n* looks at projection *n* in the anchor and in
+each recursive branch. The alias written on a projection is irrelevant; this
+is why swapping two recursive projections changes the result while their
+aliases stay attached to their expressions.
+
+**Self-reference vs. same-name table.** Inside a recursive branch, a bare
+reference to the CTE name (`closure.next_id`) inherits the previous round's
+output and is followed back into the CTE definition. A schema-qualified
+relation (`main.closure.next_id`) is a physical table and is kept as-is.
+Recursion terminates via a `(cte, column)` stack; a column that depends on
+itself (`cost = cost + extra`) contributes its non-recursive sources and
+then records a cycle marker.
+
+Each result is a `ColumnSources` list subclass with `conditions`,
+`recursive`, `recursive_hops`, `cycles`, and `unresolved` attributes, plus
+`to_dict()` and `explain()`.
 
 ---
 

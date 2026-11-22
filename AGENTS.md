@@ -28,6 +28,7 @@ sql-metadata/
 │   ├── sql_cleaner.py            # SqlCleaner — raw SQL preprocessing (no sqlglot dependency)
 │   ├── dialect_parser.py         # DialectParser — dialect detection, parsing, quality validation
 │   ├── column_extractor.py       # ColumnExtractor — single-pass DFS column/alias extraction
+│   ├── column_sources.py         # ColumnSourcesResolver — output-column value provenance
 │   ├── table_extractor.py        # TableExtractor — table extraction with position sorting
 │   ├── nested_resolver.py        # NestedResolver — CTE/subquery names, bodies, resolution
 │   ├── query_type_extractor.py   # QueryTypeExtractor — query type detection

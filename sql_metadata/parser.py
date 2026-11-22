@@ -19,6 +19,11 @@ from sqlglot import exp
 
 from sql_metadata.ast_parser import ASTParser
 from sql_metadata.column_extractor import ColumnExtractor
+from sql_metadata.column_sources import (
+    ColumnSources,
+    ColumnSourcesMap,
+    ColumnSourcesResolver,
+)
 from sql_metadata.comments import extract_comments, strip_comments
 from sql_metadata.generalizator import Generalizator
 from sql_metadata.keywords_lists import QueryType
@@ -70,6 +75,8 @@ class Parser:
         self._with_queries: dict[str, str] | None = None
         self._subqueries: dict[str, str] | None = None
         self._subqueries_names: UniqueList | None = None
+
+        self._column_sources: ColumnSourcesMap | None = None
 
         self._limit_and_offset: tuple[int, int] | None = None
 
@@ -274,6 +281,54 @@ class Parser:
         if not self._columns_extracted:
             _ = self.columns
         return self._columns_aliases_dict
+
+    @property
+    def column_sources(self) -> ColumnSourcesMap:
+        """Return the physical value sources of each output column.
+
+        Unlike :attr:`columns` — which lists every column reference — this
+        maps each SELECT output name to the physical columns whose values
+        can reach it.  Recursive CTEs are traced by projection position, so
+        swapping two recursive projections changes the result even when
+        their aliases stay attached to the expressions.
+
+        :rtype: ColumnSourcesMap
+        """
+        if self._column_sources is not None:
+            return self._column_sources
+        resolver = ColumnSourcesResolver(
+            self._require_ast(),
+            self.tables_aliases,
+            self._ast_parser.cte_name_map,
+        )
+        self._column_sources = resolver.resolve()
+        return self._column_sources
+
+    @property
+    def columns_sources(self) -> ColumnSourcesMap:
+        """Alias for :attr:`column_sources`."""
+        return self.column_sources
+
+    def resolve_column_source(
+        self, cte_name: str, column_name: str
+    ) -> "ColumnSources":
+        """Resolve one CTE output column's physical value sources.
+
+        Useful for recursive CTEs whose intermediate columns (``next_id``)
+        are not projected by the outer query.
+
+        :param cte_name: CTE alias, e.g. ``"closure"``.
+        :param column_name: Declared output column name, e.g. ``"next_id"``.
+        :returns: The column's provenance.
+        :rtype: ColumnSources
+        :raises KeyError: If the CTE or column is unknown.
+        """
+        resolver = ColumnSourcesResolver(
+            self._require_ast(),
+            self.tables_aliases,
+            self._ast_parser.cte_name_map,
+        )
+        return resolver.resolve_cte_column(cte_name, column_name)
 
     @property
     def columns_aliases_names(self) -> UniqueList:
