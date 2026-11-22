@@ -32,6 +32,26 @@ Classes
    :members:
    :show-inheritance:
 
+.. autoclass:: LegacyGradeContext
+   :members:
+   :show-inheritance:
+   :special-members: __init__
+   :undoc-members:
+
+.. autoclass:: PendingEvaluation
+   :members:
+   :show-inheritance:
+
+.. autoclass:: ResumableMapping
+   :members:
+   :show-inheritance:
+
+.. autoclass:: DeferredDataError
+   :members:
+   :show-inheritance:
+
+.. autoattribute:: DeferredValue
+
 .. autoclass:: Context
    :members:
    :show-inheritance:

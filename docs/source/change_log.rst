@@ -7,6 +7,22 @@ this list is curated by the development team for note worthy changes.
 Version 5.x.x
 -------------
 
+Version 5.3.0
+^^^^^^^^^^^^^
+
+Unreleased
+
+* Added resumable legacy-grade compatibility for :py:class:`~rule_engine.engine.Chain`. A chain whose context is a
+  :py:class:`~rule_engine.engine.LegacyGradeContext` returns a :py:class:`~rule_engine.engine.PendingEvaluation`
+  handle instead of a result when a genuinely missing current-review ``grade`` is waiting on late legacy data from a
+  :py:class:`~rule_engine.engine.LegacyDataProvider`. Calling
+  :py:meth:`~rule_engine.engine.PendingEvaluation.resume` continues the same chain evaluation from the suspension
+  point without re-reading fields or re-evaluating chain entries that were already evaluated, and each handle can be
+  resumed only once. The evaluation suspends rather than rejecting the object, falling through to the next rule or
+  keeping a thread busy. Explicit ``null``, wrong-typed values and grades that exist in other groups keep their
+  original behavior. Chains using an ordinary :py:class:`~rule_engine.engine.Context` are unchanged and keep their
+  direct call path.
+
 Version 5.2.0
 ^^^^^^^^^^^^^
 

@@ -39,6 +39,11 @@ from .engine import type_resolver_from_dict
 from .engine import type_resolver_from_sqlalchemy
 from .engine import Chain
 from .engine import Context
+from .engine import DeferredDataError
+from .engine import DeferredValue
+from .engine import LegacyGradeContext
+from .engine import PendingEvaluation
+from .engine import ResumableMapping
 from .engine import Rule
 
 from .errors import AttributeResolutionError
@@ -56,8 +61,13 @@ __all__ = (
     'ChainExhaustedError',
     'Context',
     'DataType',
+    'DeferredDataError',
+    'DeferredValue',
     'EngineError',
     'EvaluationError',
+    'LegacyGradeContext',
+    'PendingEvaluation',
+    'ResumableMapping',
     'Rule',
     'RuleSyntaxError',
     'SymbolResolutionError',

@@ -37,6 +37,7 @@ import threading
 from typing import Any, Iterable, Iterator, NamedTuple, TypeVar, overload
 
 from .. import errors
+from . import compat
 from .context import Context
 from .rule import Rule
 
@@ -211,12 +212,22 @@ class Chain(object):
         Evaluate *thing* against each rule in the chain and return the value of the first one that matches. If no rule
         matches, the :py:attr:`.default_value` is returned.
 
+        When the chain's context is a :py:class:`~.compat.LegacyGradeContext`, the evaluation is resumable: if a
+        missing current-review grade is waiting on late legacy data, this returns a
+        :py:class:`~.compat.PendingEvaluation` handle instead of a result, without rejecting the object or visiting
+        later rules. Every other context keeps the direct, non-suspending call path.
+
         :param thing: The object on which to apply the rules.
-        :return: The value of the first matching rule, or the default value.
+        :return: The value of the first matching rule, the default value, or a :py:class:`~.compat.PendingEvaluation`.
         :raises ChainExhaustedError: No rule matched and :py:attr:`.default_value` is
                 :py:data:`~rule_engine.errors.UNDEFINED`.
         """
         default_value = self.default_value
+        if isinstance(self.context, compat.LegacyGradeContext):
+            # capture the entries up front so rules published after the suspension start do not change this evaluation
+            entries = self._entries
+            wrapped = self.context.wrap(thing)
+            return compat.run_resumable(self.context, entries, default_value, wrapped)
         entry = self.find(thing)
         if entry is not None:
             return entry.value
@@ -230,9 +241,17 @@ class Chain(object):
         :py:meth:`.evaluate`, the default value is not used. This can be used to determine which rule matched, and
         :py:meth:`.index` can then be used to determine its position.
 
+        A resumable :py:class:`~.compat.LegacyGradeContext` chain can not be searched this way: a suspension is not a
+        matching entry. Use :py:meth:`.evaluate` there, which returns a :py:class:`~.compat.PendingEvaluation` handle.
+
         :param thing: The object on which to apply the rules.
         :return: The first matching :py:class:`.ChainEntry`, or ``None`` if no rule matched.
         """
+        if isinstance(self.context, compat.LegacyGradeContext):
+            raise errors.EvaluationError(
+                    'Chain.find is not available on a resumable legacy context; use Chain.evaluate and resume the '
+                    'PendingEvaluation handle it returns'
+            )
         for entry in self._entries:
             if entry.rule.matches(thing):
                 return entry
