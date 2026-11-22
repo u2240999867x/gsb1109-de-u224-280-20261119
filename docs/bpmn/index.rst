@@ -82,6 +82,15 @@ Logging
    logging
 
 
+Supplier Batch Reception
+------------------------
+
+.. toctree::
+   :maxdepth: 2
+
+   reception
+
+
 Exceptions
 ----------
 

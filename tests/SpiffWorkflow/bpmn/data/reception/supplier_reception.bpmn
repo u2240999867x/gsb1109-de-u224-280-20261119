@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="Definitions_Reception" targetNamespace="https://example.invalid">
+  <bpmn:message id="Message_File" name="File Received" />
+  <bpmn:message id="Message_Checksum" name="Checksum Received" />
+  <bpmn:process id="reception" name="Supplier Batch Reception" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_Reception">
+      <bpmn:outgoing>Flow_Start_File</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:intermediateCatchEvent id="WaitFile" name="File Received">
+      <bpmn:incoming>Flow_Start_File</bpmn:incoming>
+      <bpmn:outgoing>Flow_File_Checksum</bpmn:outgoing>
+      <bpmn:messageEventDefinition id="MessageEventDefinition_File" messageRef="Message_File" />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:intermediateCatchEvent id="WaitChecksum" name="Checksum Received">
+      <bpmn:incoming>Flow_File_Checksum</bpmn:incoming>
+      <bpmn:outgoing>Flow_Checksum_End</bpmn:outgoing>
+      <bpmn:messageEventDefinition id="MessageEventDefinition_Checksum" messageRef="Message_Checksum" />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="EndEvent_Reception">
+      <bpmn:incoming>Flow_Checksum_End</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_Start_File" sourceRef="StartEvent_Reception" targetRef="WaitFile" />
+    <bpmn:sequenceFlow id="Flow_File_Checksum" sourceRef="WaitFile" targetRef="WaitChecksum" />
+    <bpmn:sequenceFlow id="Flow_Checksum_End" sourceRef="WaitChecksum" targetRef="EndEvent_Reception" />
+  </bpmn:process>
+</bpmn:definitions>
