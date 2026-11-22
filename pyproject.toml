@@ -49,6 +49,11 @@ ignore_missing_imports = true
 [tool.coverage.run]
 relative_files = true
 
+[tool.pytest.ini_options]
+markers = [
+    "known_defect: regression test reproducing a defect present in this snapshot (expected to fail until fixed)",
+]
+
 [tool.coverage.report]
 show_missing = true
 fail_under = 100
