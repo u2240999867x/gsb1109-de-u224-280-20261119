@@ -2123,7 +2123,8 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                     if newjob.input != job.input:
                         await self.replace_job(job, newjob, recursive=False)
                         updated = True
-                    if updated and not job.has_unfinished_queue_input():
+                        job = newjob
+                    if not job.has_unfinished_queue_input():
                         self._jobs_with_finished_queue_input.add(job)
             if updated:
                 await self.postprocess_after_update()

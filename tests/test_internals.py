@@ -1,5 +1,6 @@
 import asyncio
 import os
+import queue
 import threading
 from collections import Counter, namedtuple
 from functools import partial
@@ -16,7 +17,8 @@ from snakemake.common.misc import is_local_file
 from snakemake.pathvars import Pathvars
 from snakemake.ioutils import subpath
 from snakemake.iocontainers import InputFiles, ParamStore, Wildcards
-from snakemake.io import _IOFile
+from snakemake.io import _IOFile, QueueInfo
+from snakemake.dag import DAG
 from snakemake.scheduling import job_scheduler
 from snakemake.scheduling.job_scheduler import JobRateLimiter, JobScheduler
 from snakemake.settings.types import MaxJobsPerTimespan
@@ -300,3 +302,138 @@ def test_job_rate_limiter_time_until_free(monkeypatch):
     now[0] = 110.0
     assert limiter.get_free_jobs() == 1
     assert limiter.time_until_free() == 4
+
+
+class _FakeQueueJob:
+    """Minimal stand-in for a job with from_queue input."""
+
+    def __init__(self, queue_info, reads):
+        self.queue_info = queue_info
+        self.reads = reads
+        self.input = list(queue_info.consume({}))
+
+    def has_queue_input(self):
+        return True
+
+    def has_unfinished_queue_input(self):
+        return not self.queue_info.finished
+
+    async def updated(self):
+        self.reads.append("read")
+        return _FakeQueueJob(self.queue_info, self.reads)
+
+
+class _FakeQueueDag:
+    """Minimal stand-in for the DAG parts used by update_queue_input_jobs."""
+
+    def __init__(self, jobs):
+        self.jobs = list(jobs)
+        self._jobs_with_finished_queue_input = set()
+        self.replacements = []
+        self.postprocess_calls = 0
+
+    @property
+    def queue_input_jobs(self):
+        return set(self.jobs)
+
+    def has_unfinished_queue_input_jobs(self):
+        return any(job.has_unfinished_queue_input() for job in self.queue_input_jobs)
+
+    async def replace_job(self, job, newjob, recursive=True):
+        self.replacements.append((job, newjob))
+        self.jobs.remove(job)
+        self.jobs.append(newjob)
+
+    async def postprocess_after_update(self):
+        self.postprocess_calls += 1
+
+    update_queue_input_jobs = DAG.update_queue_input_jobs
+
+
+def test_update_queue_input_jobs_tracks_each_declaration_round_independently():
+    sentinel = object()
+    queue_a = queue.Queue()
+    queue_b = queue.Queue()
+    info_a = QueueInfo(queue_a, sentinel)
+    info_b = QueueInfo(queue_b, sentinel)
+
+    # both declarations share the same path
+    queue_a.put("shared.txt")
+    queue_b.put("shared.txt")
+    reads_a, reads_b = [], []
+    job_a = _FakeQueueJob(info_a, reads_a)
+    job_b = _FakeQueueJob(info_b, reads_b)
+    dag = _FakeQueueDag([job_a, job_b])
+
+    # B's round closes with an identical path list while A's round stays open
+    queue_b.put(sentinel)
+    updated = asyncio.run(dag.update_queue_input_jobs())
+
+    assert not updated
+    assert dag.replacements == []
+    # B's closed round is booked although the path list did not change,
+    # A's still open round is not
+    assert dag._jobs_with_finished_queue_input == {job_b}
+    assert dag.has_unfinished_queue_input_jobs()
+
+    # a later round: A's expectation is revised (new file) and A's round closes
+    queue_a.put("new_a.txt")
+    queue_a.put(sentinel)
+    updated = asyncio.run(dag.update_queue_input_jobs())
+
+    assert updated
+    # A's plan is replaced, B's already booked round is not read again
+    assert len(dag.replacements) == 1
+    old_a, new_a = dag.replacements[0]
+    assert old_a is job_a
+    assert new_a.input == ["shared.txt", "new_a.txt"]
+    assert len(reads_a) == 2
+    assert len(reads_b) == 1
+    assert job_b.input == ["shared.txt"]
+    # the booked jobs are the ones present in the plan
+    assert dag._jobs_with_finished_queue_input == {new_a, job_b}
+    assert dag.postprocess_calls == 1
+    # all rounds closed: aggregation may finish
+    assert not dag.has_unfinished_queue_input_jobs()
+
+
+def test_update_queue_input_jobs_no_work_when_all_rounds_closed():
+    sentinel = object()
+    queue_a = queue.Queue()
+    queue_b = queue.Queue()
+    for q in (queue_a, queue_b):
+        q.put("shared.txt")
+        q.put(sentinel)
+    reads_a, reads_b = [], []
+    dag = _FakeQueueDag(
+        [
+            _FakeQueueJob(QueueInfo(queue_a, sentinel), reads_a),
+            _FakeQueueJob(QueueInfo(queue_b, sentinel), reads_b),
+        ]
+    )
+
+    updated = asyncio.run(dag.update_queue_input_jobs())
+
+    # everything already delivered and approved: zero work, closure allowed
+    assert not updated
+    assert reads_a == [] and reads_b == []
+    assert dag.replacements == []
+    assert dag.postprocess_calls == 0
+    assert not dag.has_unfinished_queue_input_jobs()
+
+
+def test_update_queue_input_jobs_unfinished_round_blocks_closure():
+    sentinel = object()
+    queue_a = queue.Queue()
+    # discovered, but no finish signal yet
+    queue_a.put("shared.txt")
+    reads_a = []
+    dag = _FakeQueueDag([_FakeQueueJob(QueueInfo(queue_a, sentinel), reads_a)])
+
+    updated = asyncio.run(dag.update_queue_input_jobs())
+
+    assert not updated
+    assert len(reads_a) == 1
+    # an unfinished round is neither booked nor allows closing
+    assert dag._jobs_with_finished_queue_input == set()
+    assert dag.has_unfinished_queue_input_jobs()
