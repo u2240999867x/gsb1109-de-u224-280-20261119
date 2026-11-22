@@ -1,0 +1,41 @@
+{
+  "source": "sql_metadata.Parser",
+  "tables": [
+    "events"
+  ],
+  "columns": [
+    "id",
+    "device",
+    "sec",
+    "qty",
+    "org"
+  ],
+  "columns_aliases": {
+    "rolling_total": "rolling",
+    "rolling": "qty"
+  },
+  "subqueries": {
+    "t": "SELECT id, device, org, sec, qty, SUM(qty) OVER w AS rolling FROM events WINDOW w AS (PARTITION BY device ORDER BY sec ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)"
+  },
+  "query_type": "QueryType.SELECT",
+  "field_roles": {
+    "id": "行标识；最外层 ORDER BY id DESC 只控制展示顺序，与内层并列排序无关",
+    "device": "内层 w 的 PARTITION BY 键",
+    "org": "外层 w 的 PARTITION BY 键（本样本中全部相同）",
+    "sec": "两层窗口共用的 ORDER BY 键（内层 ROWS、外层 RANGE）",
+    "qty": "内层 SUM 的度量",
+    "rolling": "内层输出别名 = SUM(qty) OVER 内层 w；同时是外层 SUM 的度量",
+    "rolling_total": "外层输出别名 = SUM(rolling) OVER 外层 w",
+    "w": "两层各自命名的窗口，同名但作用域互不覆盖"
+  },
+  "single_row_variant": {
+    "tables": [
+      "events"
+    ],
+    "subqueries": [
+      "t",
+      "s"
+    ],
+    "note": "WHERE id = 1 在最外层，过滤发生在两层窗口计算之后"
+  }
+}

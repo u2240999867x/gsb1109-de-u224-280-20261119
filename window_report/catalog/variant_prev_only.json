@@ -1,0 +1,373 @@
+{
+  "scenario": "变种：内层只取上一行（ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING）",
+  "empty_frame_rule": "空帧没有任何输入；rolling 为 NULL 不是原行的零贡献，外层 SUM 忽略 NULL",
+  "paths": [
+    {
+      "path": "A: 内层第二顺序 id ASC",
+      "inner_frame": "ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING",
+      "inner_tiebreaker": [
+        1,
+        2
+      ],
+      "inner_partition_orders": {
+        "A": [
+          1,
+          2,
+          4
+        ],
+        "B": [
+          3
+        ]
+      },
+      "intermediate": [
+        {
+          "id": 1,
+          "device": "A",
+          "sec": 1,
+          "rolling": null,
+          "inputs": [],
+          "empty_frame": true
+        },
+        {
+          "id": 2,
+          "device": "A",
+          "sec": 1,
+          "rolling": 10,
+          "inputs": [
+            1
+          ],
+          "empty_frame": false
+        },
+        {
+          "id": 3,
+          "device": "B",
+          "sec": 2,
+          "rolling": null,
+          "inputs": [],
+          "empty_frame": true
+        },
+        {
+          "id": 4,
+          "device": "A",
+          "sec": 3,
+          "rolling": 20,
+          "inputs": [
+            2
+          ],
+          "empty_frame": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": 1,
+          "sec": 1,
+          "rolling_total": 10,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            },
+            {
+              "inner_id": 2,
+              "rolling": 10,
+              "inputs": [
+                1
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1
+          ],
+          "reused_inputs": []
+        },
+        {
+          "id": 2,
+          "sec": 1,
+          "rolling_total": 10,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            },
+            {
+              "inner_id": 2,
+              "rolling": 10,
+              "inputs": [
+                1
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1
+          ],
+          "reused_inputs": []
+        },
+        {
+          "id": 3,
+          "sec": 2,
+          "rolling_total": 10,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            },
+            {
+              "inner_id": 2,
+              "rolling": 10,
+              "inputs": [
+                1
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 3,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            }
+          ],
+          "distinct_inputs": [
+            1
+          ],
+          "reused_inputs": []
+        },
+        {
+          "id": 4,
+          "sec": 3,
+          "rolling_total": 20,
+          "via": [
+            {
+              "inner_id": 3,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            },
+            {
+              "inner_id": 4,
+              "rolling": 20,
+              "inputs": [
+                2
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            2
+          ],
+          "reused_inputs": []
+        }
+      ],
+      "requested": {
+        "1": 10,
+        "3": 10
+      }
+    },
+    {
+      "path": "B: 无第二顺序时的另一合法次序",
+      "inner_frame": "ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING",
+      "inner_tiebreaker": [
+        2,
+        1
+      ],
+      "inner_partition_orders": {
+        "A": [
+          2,
+          1,
+          4
+        ],
+        "B": [
+          3
+        ]
+      },
+      "intermediate": [
+        {
+          "id": 1,
+          "device": "A",
+          "sec": 1,
+          "rolling": 20,
+          "inputs": [
+            2
+          ],
+          "empty_frame": false
+        },
+        {
+          "id": 2,
+          "device": "A",
+          "sec": 1,
+          "rolling": null,
+          "inputs": [],
+          "empty_frame": true
+        },
+        {
+          "id": 3,
+          "device": "B",
+          "sec": 2,
+          "rolling": null,
+          "inputs": [],
+          "empty_frame": true
+        },
+        {
+          "id": 4,
+          "device": "A",
+          "sec": 3,
+          "rolling": 10,
+          "inputs": [
+            1
+          ],
+          "empty_frame": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": 1,
+          "sec": 1,
+          "rolling_total": 20,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 20,
+              "inputs": [
+                2
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            }
+          ],
+          "distinct_inputs": [
+            2
+          ],
+          "reused_inputs": []
+        },
+        {
+          "id": 2,
+          "sec": 1,
+          "rolling_total": 20,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 20,
+              "inputs": [
+                2
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            }
+          ],
+          "distinct_inputs": [
+            2
+          ],
+          "reused_inputs": []
+        },
+        {
+          "id": 3,
+          "sec": 2,
+          "rolling_total": 20,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 20,
+              "inputs": [
+                2
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            },
+            {
+              "inner_id": 3,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            }
+          ],
+          "distinct_inputs": [
+            2
+          ],
+          "reused_inputs": []
+        },
+        {
+          "id": 4,
+          "sec": 3,
+          "rolling_total": 10,
+          "via": [
+            {
+              "inner_id": 3,
+              "rolling": null,
+              "inputs": [],
+              "empty_frame": true
+            },
+            {
+              "inner_id": 4,
+              "rolling": 10,
+              "inputs": [
+                1
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1
+          ],
+          "reused_inputs": []
+        }
+      ],
+      "requested": {
+        "1": 20,
+        "3": 20
+      }
+    }
+  ],
+  "consistency": {
+    "allowed_combos_same_execution": [
+      [
+        10,
+        10
+      ],
+      [
+        20,
+        20
+      ]
+    ],
+    "forbidden_mixed_combos": [
+      [
+        10,
+        10
+      ],
+      [
+        10,
+        20
+      ],
+      [
+        20,
+        10
+      ],
+      [
+        20,
+        20
+      ]
+    ],
+    "rule": "内层并列次序在一次执行内固定，不能把一路径的 id=1 与另一路径的 id=3 拼成同一次输出"
+  }
+}

@@ -1,0 +1,200 @@
+{
+  "path": "A: 内层第二顺序 id ASC",
+  "inner_frame": "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW",
+  "inner_tiebreaker": [
+    1,
+    2
+  ],
+  "inner_partition_orders": {
+    "A": [
+      1,
+      2,
+      4
+    ],
+    "B": [
+      3
+    ]
+  },
+  "intermediate": [
+    {
+      "id": 1,
+      "device": "A",
+      "sec": 1,
+      "rolling": 10,
+      "inputs": [
+        1
+      ],
+      "empty_frame": false
+    },
+    {
+      "id": 2,
+      "device": "A",
+      "sec": 1,
+      "rolling": 30,
+      "inputs": [
+        1,
+        2
+      ],
+      "empty_frame": false
+    },
+    {
+      "id": 3,
+      "device": "B",
+      "sec": 2,
+      "rolling": 30,
+      "inputs": [
+        3
+      ],
+      "empty_frame": false
+    },
+    {
+      "id": 4,
+      "device": "A",
+      "sec": 3,
+      "rolling": 60,
+      "inputs": [
+        2,
+        4
+      ],
+      "empty_frame": false
+    }
+  ],
+  "outputs": [
+    {
+      "id": 1,
+      "sec": 1,
+      "rolling_total": 40,
+      "via": [
+        {
+          "inner_id": 1,
+          "rolling": 10,
+          "inputs": [
+            1
+          ],
+          "empty_frame": false
+        },
+        {
+          "inner_id": 2,
+          "rolling": 30,
+          "inputs": [
+            1,
+            2
+          ],
+          "empty_frame": false
+        }
+      ],
+      "distinct_inputs": [
+        1,
+        2
+      ],
+      "reused_inputs": [
+        1
+      ]
+    },
+    {
+      "id": 2,
+      "sec": 1,
+      "rolling_total": 40,
+      "via": [
+        {
+          "inner_id": 1,
+          "rolling": 10,
+          "inputs": [
+            1
+          ],
+          "empty_frame": false
+        },
+        {
+          "inner_id": 2,
+          "rolling": 30,
+          "inputs": [
+            1,
+            2
+          ],
+          "empty_frame": false
+        }
+      ],
+      "distinct_inputs": [
+        1,
+        2
+      ],
+      "reused_inputs": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "sec": 2,
+      "rolling_total": 70,
+      "via": [
+        {
+          "inner_id": 1,
+          "rolling": 10,
+          "inputs": [
+            1
+          ],
+          "empty_frame": false
+        },
+        {
+          "inner_id": 2,
+          "rolling": 30,
+          "inputs": [
+            1,
+            2
+          ],
+          "empty_frame": false
+        },
+        {
+          "inner_id": 3,
+          "rolling": 30,
+          "inputs": [
+            3
+          ],
+          "empty_frame": false
+        }
+      ],
+      "distinct_inputs": [
+        1,
+        2,
+        3
+      ],
+      "reused_inputs": [
+        1
+      ]
+    },
+    {
+      "id": 4,
+      "sec": 3,
+      "rolling_total": 90,
+      "via": [
+        {
+          "inner_id": 3,
+          "rolling": 30,
+          "inputs": [
+            3
+          ],
+          "empty_frame": false
+        },
+        {
+          "inner_id": 4,
+          "rolling": 60,
+          "inputs": [
+            2,
+            4
+          ],
+          "empty_frame": false
+        }
+      ],
+      "distinct_inputs": [
+        2,
+        3,
+        4
+      ],
+      "reused_inputs": []
+    }
+  ],
+  "requested": {
+    "1": 40,
+    "3": 70
+  }
+}

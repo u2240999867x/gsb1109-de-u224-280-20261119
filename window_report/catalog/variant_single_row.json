@@ -1,0 +1,284 @@
+{
+  "scenario": "变种：最外层 WHERE id = 1，只输出一行",
+  "note": "过滤在两层窗口之外；另一个输出未展示，也不改变前面层级已有的窗口与中间值",
+  "paths": [
+    {
+      "path": "A: 内层第二顺序 id ASC",
+      "displayed": [
+        {
+          "id": 1,
+          "sec": 1,
+          "rolling_total": 40,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 10,
+              "inputs": [
+                1
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": 30,
+              "inputs": [
+                1,
+                2
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1,
+            2
+          ],
+          "reused_inputs": [
+            1
+          ]
+        }
+      ],
+      "computed_but_not_displayed": [
+        {
+          "id": 2,
+          "sec": 1,
+          "rolling_total": 40,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 10,
+              "inputs": [
+                1
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": 30,
+              "inputs": [
+                1,
+                2
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1,
+            2
+          ],
+          "reused_inputs": [
+            1
+          ]
+        },
+        {
+          "id": 3,
+          "sec": 2,
+          "rolling_total": 70,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 10,
+              "inputs": [
+                1
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": 30,
+              "inputs": [
+                1,
+                2
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 3,
+              "rolling": 30,
+              "inputs": [
+                3
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1,
+            2,
+            3
+          ],
+          "reused_inputs": [
+            1
+          ]
+        },
+        {
+          "id": 4,
+          "sec": 3,
+          "rolling_total": 90,
+          "via": [
+            {
+              "inner_id": 3,
+              "rolling": 30,
+              "inputs": [
+                3
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 4,
+              "rolling": 60,
+              "inputs": [
+                2,
+                4
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            2,
+            3,
+            4
+          ],
+          "reused_inputs": []
+        }
+      ]
+    },
+    {
+      "path": "B: 无第二顺序时的另一合法次序",
+      "displayed": [
+        {
+          "id": 1,
+          "sec": 1,
+          "rolling_total": 50,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 30,
+              "inputs": [
+                2,
+                1
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": 20,
+              "inputs": [
+                2
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1,
+            2
+          ],
+          "reused_inputs": [
+            2
+          ]
+        }
+      ],
+      "computed_but_not_displayed": [
+        {
+          "id": 2,
+          "sec": 1,
+          "rolling_total": 50,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 30,
+              "inputs": [
+                2,
+                1
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": 20,
+              "inputs": [
+                2
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1,
+            2
+          ],
+          "reused_inputs": [
+            2
+          ]
+        },
+        {
+          "id": 3,
+          "sec": 2,
+          "rolling_total": 80,
+          "via": [
+            {
+              "inner_id": 1,
+              "rolling": 30,
+              "inputs": [
+                2,
+                1
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 2,
+              "rolling": 20,
+              "inputs": [
+                2
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 3,
+              "rolling": 30,
+              "inputs": [
+                3
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1,
+            2,
+            3
+          ],
+          "reused_inputs": [
+            2
+          ]
+        },
+        {
+          "id": 4,
+          "sec": 3,
+          "rolling_total": 80,
+          "via": [
+            {
+              "inner_id": 3,
+              "rolling": 30,
+              "inputs": [
+                3
+              ],
+              "empty_frame": false
+            },
+            {
+              "inner_id": 4,
+              "rolling": 50,
+              "inputs": [
+                1,
+                4
+              ],
+              "empty_frame": false
+            }
+          ],
+          "distinct_inputs": [
+            1,
+            3,
+            4
+          ],
+          "reused_inputs": []
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "scenario": "样本缺少一部分排序数据（id=2 的 sec 未知）",
+  "missing_order_rows": [
+    2
+  ],
+  "verdict": "共同次序不可确定：无法枚举合法路径，也不按输入文本次序定档",
+  "structural_only": {
+    "id": "行标识；最外层 ORDER BY id DESC 只控制展示顺序，与内层并列排序无关",
+    "device": "内层 w 的 PARTITION BY 键",
+    "org": "外层 w 的 PARTITION BY 键（本样本中全部相同）",
+    "sec": "两层窗口共用的 ORDER BY 键（内层 ROWS、外层 RANGE）",
+    "qty": "内层 SUM 的度量",
+    "rolling": "内层输出别名 = SUM(qty) OVER 内层 w；同时是外层 SUM 的度量",
+    "rolling_total": "外层输出别名 = SUM(rolling) OVER 外层 w",
+    "w": "两层各自命名的窗口，同名但作用域互不覆盖"
+  }
+}
