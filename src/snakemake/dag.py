@@ -1081,6 +1081,16 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         else:
             return self._jobid[job]
 
+    def recompute_planner(self, **kwargs):
+        """Return the planner belonging to this DAG's workflow."""
+        return self.workflow.recompute_planner(**kwargs)
+
+    def plan_recompute(self, config=None, **kwargs):
+        """Plan recomputations for the given config on this already built DAG."""
+        return self.recompute_planner().plan(config, **kwargs)
+
+    preview_recompute = plan_recompute
+
     async def update(
         self,
         jobs,

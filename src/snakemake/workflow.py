@@ -264,6 +264,8 @@ class Workflow(WorkflowExecutorInterface):
         ]
         self._output_file_cache = None
 
+        self._recompute_planner = None
+
         config = copy.deepcopy(self.config_settings.overwrite_config)
         self.globals["config"] = config
         self.pathvars.update(Pathvars.from_config(config))
@@ -1749,6 +1751,53 @@ class Workflow(WorkflowExecutorInterface):
 
     def register_pathvars(self, **items):
         self.pathvars.update(Pathvars.from_workflow(items))
+
+    def recompute_planner(
+        self,
+        *,
+        config=None,
+        base_config=None,
+        refresh_dag: bool = True,
+        reset: bool = False,
+    ):
+        """Return a planner for previewing recomputations on this workflow.
+
+        The planner keeps its caches on the workflow, so repeated previews with
+        different configurations reuse this already loaded Snakefile rather
+        than re-parsing it.
+
+        Arguments
+        ---------
+        config: optional config override used as the planner's base config.
+        base_config: optional explicit base config.
+        refresh_dag: whether completed checkpoints may refresh the real DAG.
+        reset: discard an existing planner and create a fresh one.
+        """
+        from snakemake.recompute import RecomputePlanner
+
+        if reset or self._recompute_planner is None:
+            self._recompute_planner = RecomputePlanner(
+                self,
+                config=config,
+                base_config=base_config,
+                refresh_dag=refresh_dag,
+            )
+        return self._recompute_planner
+
+    @property
+    def planner(self):
+        return self.recompute_planner()
+
+    def plan_recompute(self, config=None, **kwargs):
+        """Plan recomputations for the given config on the current DAG."""
+        if self.dag is None:
+            raise WorkflowError(
+                "A DAG must be built before a recompute plan can be created."
+            )
+        return self.recompute_planner().plan(config, **kwargs)
+
+    def preview_recompute(self, config=None, **kwargs):
+        return self.plan_recompute(config, **kwargs)
 
     def configfile(self, fp):
         """Update the global config with data from the given file."""

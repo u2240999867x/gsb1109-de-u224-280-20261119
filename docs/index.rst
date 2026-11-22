@@ -173,6 +173,7 @@ Resources
   executing/interoperability
   executing/monitoring
   executing/provenance
+  executing/recompute
 
 .. toctree::
     :caption: Defining workflows

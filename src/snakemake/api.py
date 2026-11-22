@@ -828,6 +828,36 @@ class DAGApi(ApiBase):
         self.workflow_api._workflow.list_changes(change_type=change_type)
 
     @_no_exec
+    def plan_recompute(
+        self,
+        config=None,
+        *,
+        replace: bool = False,
+        configfiles=None,
+    ):
+        """Plan recomputations for an alternate configuration without executing.
+
+        The workflow and DAG are reused as loaded; no Snakefile is re-parsed.
+
+        Arguments
+        ---------
+        config: mapping, path or ConfigSettings -- The configuration to preview.
+        replace: bool -- Whether to replace the workflow config instead of merging.
+        configfiles: optional sequence of additional config files.
+        """
+        workflow = self.workflow_api._workflow
+        if workflow.dag is None:
+            workflow._prepare_dag(
+                forceall=False, ignore_incomplete=False, lock_warn_only=True
+            )
+            workflow._build_dag()
+        return workflow.plan_recompute(
+            config, replace=replace, configfiles=configfiles
+        )
+
+    preview_recompute = plan_recompute
+
+    @_no_exec
     def list_untracked(self):
         """List the untracked files of the workflow."""
         self.workflow_api._workflow.list_untracked()

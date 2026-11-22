@@ -521,6 +521,18 @@ class Job(
             self._params = None
             self._params_and_resources_resetted = True
 
+    def plan_recompute(self, config=None, **kwargs):
+        """Return the recompute decision for this job in the given config."""
+        plan = self.dag.plan_recompute(config, **kwargs)
+        return plan.for_job(self)
+
+    def recompute_decision(self, config=None, **kwargs):
+        return self.plan_recompute(config, **kwargs).decision
+
+    @property
+    def recompute_planner(self):
+        return self.dag.recompute_planner()
+
     @property
     def software_env_spec(self) -> Optional[SoftwareEnvSpecBase]:
         if self._software_env_spec is None:
