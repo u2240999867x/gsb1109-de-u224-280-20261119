@@ -306,6 +306,11 @@ parser = Parser('SELECT /* Test */ foo FROM bar WHERE id in (1, 2, 56)')
 parser.generalize
 # 'SELECT foo FROM bar WHERE id in (XYZ)'
 
+# structural template for grouping query logs
+# (comparison values and bind values never appear in the key)
+Parser("SELECT * FROM t WHERE score > :lo AND score < :hi").template()
+# 'SELECT * FROM t WHERE score < :p1 AND score > :p2'
+
 # remove comments
 parser.without_comments
 # 'SELECT foo FROM bar WHERE id in (1, 2, 56)'

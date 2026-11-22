@@ -35,6 +35,7 @@ sql-metadata/
 │   ├── keywords_lists.py         # QueryType enum
 │   ├── utils.py                  # UniqueList, last_segment, shared helpers
 │   ├── generalizator.py          # Query anonymisation
+│   ├── templatizer.py            # Structural templates for log grouping
 │   └── __init__.py               # Exports: Parser, QueryType
 ├── test/                          # Test suite (25 test files)
 │   ├── test_with_statements.py

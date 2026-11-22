@@ -13,6 +13,7 @@ Thin facade that composes the specialised extractors via lazy properties:
 
 import logging
 import re
+from collections.abc import Iterable
 from typing import Any
 
 from sqlglot import exp
@@ -26,6 +27,7 @@ from sql_metadata.nested_resolver import NestedResolver
 from sql_metadata.query_type_extractor import QueryTypeExtractor
 from sql_metadata.sql_cleaner import SqlCleaner
 from sql_metadata.table_extractor import TableExtractor
+from sql_metadata.templatizer import Templatizer
 from sql_metadata.utils import UniqueList
 
 
@@ -517,6 +519,31 @@ class Parser:
         :rtype: str
         """
         return Generalizator(self._raw_query).generalize
+
+    def template(
+        self,
+        declared_paths: Iterable[str] | None = None,
+        ignore_in_list_size: bool = False,
+    ) -> str:
+        """Return the structural template used to group this query in logs.
+
+        Delegates to :class:`~sql_metadata.templatizer.Templatizer`; use
+        that class directly when the reliability flag and grouping issues
+        are needed in addition to the key.
+
+        :param declared_paths: Names of bindings whose values are JSON
+            paths declared as public structure (e.g. ``{"path"}``).
+        :type declared_paths: Iterable[str] | None
+        :param ignore_in_list_size: Collapse scalar ``IN (…)`` list and
+            ``VALUES (…)`` row counts so list size does not split groups.
+        :type ignore_in_list_size: bool
+        :rtype: str
+        """
+        return Templatizer(
+            self._raw_query,
+            declared_paths=declared_paths,
+            ignore_in_list_size=ignore_in_list_size,
+        ).template
 
     def _extract_values(self) -> list[Any]:
         """Extract literal values from INSERT/REPLACE query AST.

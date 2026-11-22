@@ -19,6 +19,7 @@ sql-metadata v3 is a Python library that parses SQL queries and extracts metadat
 | [`utils.py`](sql_metadata/utils.py) | `UniqueList` (deduplicating list), `last_segment`, `DOT_PLACEHOLDER` | — |
 | [`exceptions.py`](sql_metadata/exceptions.py) | Custom exception hierarchy | `InvalidQueryDefinition` |
 | [`generalizator.py`](sql_metadata/generalizator.py) | Query anonymisation for log aggregation | `Generalizator` |
+| [`templatizer.py`](sql_metadata/templatizer.py) | Structural templates for grouping query logs | `Templatizer` |
 
 ---
 
@@ -443,6 +444,8 @@ A collection of pure stateless functions (no class). Exploits the fact that sqlg
 
 **[`generalizator.py`](sql_metadata/generalizator.py)** — anonymises SQL for log aggregation: strips comments, replaces literals with `X`, numbers with `N`, collapses `IN(...)` lists to `(XYZ)`.
 
+**[`templatizer.py`](sql_metadata/templatizer.py)** — structural grouping templates for query logs: comparison values become `?` and bindings canonical `:p1…` names (only binding *equality structure* is kept), while structural literals (`date_trunc` granularity, JSON paths, `ORDER BY`/`GROUP BY` positions) stay in the key. Relation aliases are alpha-renamed scope-aware (shadowing subqueries stay distinguishable) and top-level `AND` items are sorted, so reports differing only in alias/parameter names or `AND` order share a template. JSON path bindings must be declared via `declared_paths`; undeclared ones are marked `[private-path]` and reported through `Templatizer.issues` with `reliable = False`. Scalar `IN`/`VALUES` list sizes can optionally be ignored (`ignore_in_list_size`).
+
 ---
 
 ## Traced Walkthrough
@@ -529,6 +532,7 @@ flowchart TB
     P --> QT["query_type_extractor.py"]
     P --> COM["comments.py"]
     P --> GEN["generalizator.py"]
+    P --> TPL["templatizer.py"]
     P --> KW["keywords_lists.py"]
     P --> UT["utils.py"]
 
