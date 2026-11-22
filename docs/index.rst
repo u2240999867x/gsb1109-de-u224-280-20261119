@@ -60,6 +60,7 @@ Contents
    modules
    bpmn/index
    core/index
+   inbound/index
 
 .. toctree::
    :maxdepth: 1
