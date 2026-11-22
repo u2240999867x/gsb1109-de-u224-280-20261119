@@ -1,0 +1,17 @@
+WARC/1.0
+WARC-Date: 2026-01-01T12:00:00Z
+WARC-Record-ID: <urn:uuid:incident-legacy-resp>
+WARC-Type: response
+WARC-Target-URI: http://shop.example/checkout.html
+WARC-Payload-Digest: sha1:5RYKBTZD4CA4E4GGFABOXI2NX62A5DUS
+WARC-Block-Digest: sha1:XZ4GJYVWDYPB4ICS7BRSFW6JJJKSBMG3
+Content-Type: application/http; msgtype=response
+Content-Length: 96
+
+HTTP/1.0 200 OK
+Content-Type: text/plain; charset=utf-8
+Content-Length: 16
+
+LEGACY-OLD-BODY
+
+

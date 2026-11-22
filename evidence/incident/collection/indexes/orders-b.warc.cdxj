@@ -1,0 +1,1 @@
+example,shop)/checkout.html?__wb_method=post&a&a 20260101120000 {"url": "http://shop.example/checkout.html", "mime": "text/plain", "status": "200", "digest": "DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK", "length": "442", "offset": "0", "method": "POST", "requestBody": "a&a", "filename": "orders-b.warc"}

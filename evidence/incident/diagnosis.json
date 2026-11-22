@@ -1,0 +1,194 @@
+{
+  "collection": "incident/collection",
+  "url": "http://shop.example/checkout.html",
+  "closest": "20260101120000",
+  "requests": {
+    "A": {
+      "raw_body_latin1": "a%26a",
+      "raw_hex": "6125323661",
+      "raw_length": 5,
+      "http_content_length": 5,
+      "true_key": "example,shop)/checkout.html?__wb_method=post&a&a",
+      "true_search_range": [
+        "example,shop)/checkout.html?__wb_method=post&a&a",
+        "example,shop)/checkout.html?__wb_method=post&a&a!"
+      ],
+      "key_from_declared_length": "example,shop)/checkout.html?__wb_method=post&a&a",
+      "decoded_form_from_declared_length": "a&a",
+      "exact_candidates": [
+        {
+          "urlkey": "example,shop)/checkout.html?__wb_method=post&a&a",
+          "timestamp": "20260101120000",
+          "url": "http://shop.example/checkout.html",
+          "mime": "text/plain",
+          "status": "200",
+          "digest": "DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK",
+          "length": "442",
+          "offset": "0",
+          "filename": "orders-b.warc",
+          "method": "POST",
+          "requestBody": "a&a"
+        },
+        {
+          "urlkey": "example,shop)/checkout.html?__wb_method=post&a&a",
+          "timestamp": "20260101120000",
+          "url": "http://shop.example/checkout.html",
+          "mime": "text/plain",
+          "status": "200",
+          "digest": "LRKCWWF6HDKQK3B2DOBI6JYPJ4UJNYK5",
+          "length": "442",
+          "offset": "0",
+          "filename": "orders-a.warc",
+          "method": "POST",
+          "requestBody": "a&a"
+        }
+      ],
+      "fuzzy_candidates": [
+        {
+          "urlkey": "example,shop)/checkout.html?__wb_method=post&a&a",
+          "timestamp": "20260101120000",
+          "url": "http://shop.example/checkout.html",
+          "mime": "text/plain",
+          "status": "200",
+          "digest": "DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK",
+          "length": "442",
+          "offset": "0",
+          "filename": "orders-b.warc",
+          "method": "POST",
+          "requestBody": "a&a"
+        },
+        {
+          "urlkey": "example,shop)/checkout.html?__wb_method=post&a&a",
+          "timestamp": "20260101120000",
+          "url": "http://shop.example/checkout.html",
+          "mime": "text/plain",
+          "status": "200",
+          "digest": "LRKCWWF6HDKQK3B2DOBI6JYPJ4UJNYK5",
+          "length": "442",
+          "offset": "0",
+          "filename": "orders-a.warc",
+          "method": "POST",
+          "requestBody": "a&a"
+        }
+      ],
+      "fuzzy_errors": "{}",
+      "direct": {
+        "status": "200 OK",
+        "warc_target_uri": "http://shop.example/checkout.html",
+        "memento_datetime": "Thu, 01 Jan 2026 12:00:00 GMT",
+        "selected_cdx": "example,shop)/checkout.html?__wb_method=post&a&a 20260101120000 {\"url\": \"http://shop.example/checkout.html\", \"mime\": \"text/plain\", \"status\": \"200\", \"digest\": \"DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK\", \"length\": \"442\", \"offset\": \"0\", \"method\": \"POST\", \"requestBody\": \"a&a\", \"filename\": \"orders-b.warc\", \"source\": \"incident\", \"source-coll\": \"incident\"}",
+        "body_latin1": "WARC/1.0\r\nWARC-Date: 2026-01-01T12:00:00Z\r\nWARC-Record-ID: <urn:uuid:incident-resp-b>\r\nWARC-Type: response\r\nWARC-Target-URI: http://shop.example/checkout.html\r\nWARC-Payload-Digest: sha1:DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK\r\nWARC-Block-Digest: sha1:R7SHQOEJDVQ26GHAJWXBS5BIEUTKT7TM\r\nContent-Type: application/http; msgtype=response\r\nContent-Length: 92\r\n\r\nHTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 12\r\n\r\nORDER-B-002\n",
+        "body_tail": ": 12\r\n\r\nORDER-B-002\n"
+      },
+      "postreq": {
+        "status": "200 OK",
+        "warc_target_uri": "http://shop.example/checkout.html",
+        "memento_datetime": "Thu, 01 Jan 2026 12:00:00 GMT",
+        "selected_cdx": "example,shop)/checkout.html?__wb_method=post&a&a 20260101120000 {\"url\": \"http://shop.example/checkout.html\", \"mime\": \"text/plain\", \"status\": \"200\", \"digest\": \"DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK\", \"length\": \"442\", \"offset\": \"0\", \"method\": \"POST\", \"requestBody\": \"a&a\", \"filename\": \"orders-b.warc\", \"source\": \"incident\", \"source-coll\": \"incident\"}",
+        "body_latin1": "WARC/1.0\r\nWARC-Date: 2026-01-01T12:00:00Z\r\nWARC-Record-ID: <urn:uuid:incident-resp-b>\r\nWARC-Type: response\r\nWARC-Target-URI: http://shop.example/checkout.html\r\nWARC-Payload-Digest: sha1:DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK\r\nWARC-Block-Digest: sha1:R7SHQOEJDVQ26GHAJWXBS5BIEUTKT7TM\r\nContent-Type: application/http; msgtype=response\r\nContent-Length: 92\r\n\r\nHTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 12\r\n\r\nORDER-B-002\n",
+        "body_tail": ": 12\r\n\r\nORDER-B-002\n"
+      },
+      "postreq_archived_header": {
+        "status": "200 OK",
+        "warc_target_uri": "http://shop.example/checkout.html",
+        "memento_datetime": "Thu, 01 Jan 2026 12:00:00 GMT",
+        "selected_cdx": "example,shop)/checkout.html?__wb_method=post&a&a 20260101120000 {\"url\": \"http://shop.example/checkout.html\", \"mime\": \"text/plain\", \"status\": \"200\", \"digest\": \"DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK\", \"length\": \"442\", \"offset\": \"0\", \"method\": \"POST\", \"requestBody\": \"a&a\", \"filename\": \"orders-b.warc\", \"source\": \"incident\", \"source-coll\": \"incident\"}",
+        "body_latin1": "WARC/1.0\r\nWARC-Date: 2026-01-01T12:00:00Z\r\nWARC-Record-ID: <urn:uuid:incident-resp-b>\r\nWARC-Type: response\r\nWARC-Target-URI: http://shop.example/checkout.html\r\nWARC-Payload-Digest: sha1:DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK\r\nWARC-Block-Digest: sha1:R7SHQOEJDVQ26GHAJWXBS5BIEUTKT7TM\r\nContent-Type: application/http; msgtype=response\r\nContent-Length: 92\r\n\r\nHTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 12\r\n\r\nORDER-B-002\n",
+        "body_tail": ": 12\r\n\r\nORDER-B-002\n"
+      },
+      "boundary": {
+        "layer_request_bytes": "orders-a.warc: the WARC request payload is the 5 raw bytes a%26a and is intact; it can be recovered by (filename, offset, length)",
+        "layer_http_headers": "orders-a.warc: HTTP Content-Length is 5 and matches the stored payload",
+        "layer_index": "key example,shop)/checkout.html?__wb_method=post&a&a has 2 rows; both point at distinct WARC offsets and carry indistinguishable requestBody values",
+        "layer_selection": "rows share timestamp 20260101120000, so closest distance ties; the earlier row in the merged CDX iterator wins (cdx_sort_closest position tie-break)"
+      }
+    },
+    "B": {
+      "raw_body_latin1": "a%26a=",
+      "raw_hex": "61253236613d",
+      "raw_length": 6,
+      "http_content_length": 5,
+      "true_key": "example,shop)/checkout.html?__wb_method=post&a&a=",
+      "true_search_range": [
+        "example,shop)/checkout.html?__wb_method=post&a&a=",
+        "example,shop)/checkout.html?__wb_method=post&a&a=!"
+      ],
+      "key_from_declared_length": "example,shop)/checkout.html?__wb_method=post&a&a",
+      "decoded_form_from_declared_length": "a&a",
+      "exact_candidates": [],
+      "fuzzy_candidates": [
+        {
+          "urlkey": "example,shop)/checkout.html",
+          "timestamp": "20260101120000",
+          "url": "http://shop.example/checkout.html",
+          "mime": "text/plain",
+          "status": "200",
+          "digest": "5RYKBTZD4CA4E4GGFABOXI2NX62A5DUS",
+          "length": "451",
+          "offset": "0",
+          "filename": "legacy-ro.warc",
+          "is_fuzzy": "1"
+        },
+        {
+          "urlkey": "example,shop)/checkout.html?__wb_method=post&a&a",
+          "timestamp": "20260101120000",
+          "url": "http://shop.example/checkout.html",
+          "mime": "text/plain",
+          "status": "200",
+          "digest": "DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK",
+          "length": "442",
+          "offset": "0",
+          "filename": "orders-b.warc",
+          "method": "POST",
+          "requestBody": "a&a",
+          "is_fuzzy": "1"
+        },
+        {
+          "urlkey": "example,shop)/checkout.html?__wb_method=post&a&a",
+          "timestamp": "20260101120000",
+          "url": "http://shop.example/checkout.html",
+          "mime": "text/plain",
+          "status": "200",
+          "digest": "LRKCWWF6HDKQK3B2DOBI6JYPJ4UJNYK5",
+          "length": "442",
+          "offset": "0",
+          "filename": "orders-a.warc",
+          "method": "POST",
+          "requestBody": "a&a",
+          "is_fuzzy": "1"
+        }
+      ],
+      "fuzzy_errors": "{}",
+      "direct": {
+        "status": "200 OK",
+        "warc_target_uri": "http://shop.example/checkout.html",
+        "memento_datetime": "Thu, 01 Jan 2026 12:00:00 GMT",
+        "selected_cdx": "example,shop)/checkout.html 20260101120000 {\"url\": \"http://shop.example/checkout.html\", \"mime\": \"text/plain\", \"status\": \"200\", \"digest\": \"5RYKBTZD4CA4E4GGFABOXI2NX62A5DUS\", \"length\": \"451\", \"offset\": \"0\", \"filename\": \"legacy-ro.warc\", \"source\": \"incident\", \"source-coll\": \"incident\", \"is_fuzzy\": \"1\"}",
+        "body_latin1": "WARC/1.0\r\nWARC-Date: 2026-01-01T12:00:00Z\r\nWARC-Record-ID: <urn:uuid:incident-legacy-resp>\r\nWARC-Type: response\r\nWARC-Target-URI: http://shop.example/checkout.html\r\nWARC-Payload-Digest: sha1:5RYKBTZD4CA4E4GGFABOXI2NX62A5DUS\r\nWARC-Block-Digest: sha1:XZ4GJYVWDYPB4ICS7BRSFW6JJJKSBMG3\r\nContent-Type: application/http; msgtype=response\r\nContent-Length: 96\r\n\r\nHTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 16\r\n\r\nLEGACY-OLD-BODY\n",
+        "body_tail": "\r\n\r\nLEGACY-OLD-BODY\n"
+      },
+      "postreq": {
+        "status": "200 OK",
+        "warc_target_uri": "http://shop.example/checkout.html",
+        "memento_datetime": "Thu, 01 Jan 2026 12:00:00 GMT",
+        "selected_cdx": "example,shop)/checkout.html 20260101120000 {\"url\": \"http://shop.example/checkout.html\", \"mime\": \"text/plain\", \"status\": \"200\", \"digest\": \"5RYKBTZD4CA4E4GGFABOXI2NX62A5DUS\", \"length\": \"451\", \"offset\": \"0\", \"filename\": \"legacy-ro.warc\", \"source\": \"incident\", \"source-coll\": \"incident\", \"is_fuzzy\": \"1\"}",
+        "body_latin1": "WARC/1.0\r\nWARC-Date: 2026-01-01T12:00:00Z\r\nWARC-Record-ID: <urn:uuid:incident-legacy-resp>\r\nWARC-Type: response\r\nWARC-Target-URI: http://shop.example/checkout.html\r\nWARC-Payload-Digest: sha1:5RYKBTZD4CA4E4GGFABOXI2NX62A5DUS\r\nWARC-Block-Digest: sha1:XZ4GJYVWDYPB4ICS7BRSFW6JJJKSBMG3\r\nContent-Type: application/http; msgtype=response\r\nContent-Length: 96\r\n\r\nHTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 16\r\n\r\nLEGACY-OLD-BODY\n",
+        "body_tail": "\r\n\r\nLEGACY-OLD-BODY\n"
+      },
+      "postreq_archived_header": {
+        "status": "200 OK",
+        "warc_target_uri": "http://shop.example/checkout.html",
+        "memento_datetime": "Thu, 01 Jan 2026 12:00:00 GMT",
+        "selected_cdx": "example,shop)/checkout.html?__wb_method=post&a&a 20260101120000 {\"url\": \"http://shop.example/checkout.html\", \"mime\": \"text/plain\", \"status\": \"200\", \"digest\": \"DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK\", \"length\": \"442\", \"offset\": \"0\", \"method\": \"POST\", \"requestBody\": \"a&a\", \"filename\": \"orders-b.warc\", \"source\": \"incident\", \"source-coll\": \"incident\"}",
+        "body_latin1": "WARC/1.0\r\nWARC-Date: 2026-01-01T12:00:00Z\r\nWARC-Record-ID: <urn:uuid:incident-resp-b>\r\nWARC-Type: response\r\nWARC-Target-URI: http://shop.example/checkout.html\r\nWARC-Payload-Digest: sha1:DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK\r\nWARC-Block-Digest: sha1:R7SHQOEJDVQ26GHAJWXBS5BIEUTKT7TM\r\nContent-Type: application/http; msgtype=response\r\nContent-Length: 92\r\n\r\nHTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 12\r\n\r\nORDER-B-002\n",
+        "body_tail": ": 12\r\n\r\nORDER-B-002\n"
+      },
+      "boundary": {
+        "layer_request_bytes": "orders-b.warc: the WARC request payload is the full 6 bytes a%26a=; the trailing = is recoverable only from the WARC payload",
+        "layer_http_headers": "orders-b.warc: HTTP Content-Length is 5, so every header-driven reader (including cdx-indexer -p) reads only a%26a and never sees =; from this layer the two requests are indistinguishable",
+        "layer_index": "the true key example,shop)/checkout.html?__wb_method=post&a&a= is absent; the row was filed under the shared key example,shop)/checkout.html?__wb_method=post&a&a",
+        "layer_selection": "exact lookup is empty; fuzzy lookup matches the plain-URL legacy row and two POST rows, and returns the legacy row first"
+      }
+    }
+  }
+}

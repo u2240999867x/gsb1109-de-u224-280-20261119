@@ -1,0 +1,73 @@
+{
+  "request_records": {
+    "legacy-ro.warc": [],
+    "orders-a.warc": [
+      {
+        "warc": "orders-a.warc",
+        "record_id": "<urn:uuid:incident-req-a>",
+        "concurrent_to": "<urn:uuid:incident-resp-a>",
+        "warc_date": "2026-01-01T12:00:00Z",
+        "raw_body_latin1": "a%26a",
+        "raw_body_hex": "6125323661",
+        "raw_length": 5,
+        "sha256": "3323c2acc1dde25996596d227149209ef109fe91c016bb8cd8cf6ff54f0d1012",
+        "http_content_length": "5",
+        "key_from_full_body": "example,shop)/checkout.html?__wb_method=post&a&a",
+        "key_from_header_length": "example,shop)/checkout.html?__wb_method=post&a&a"
+      }
+    ],
+    "orders-b.warc": [
+      {
+        "warc": "orders-b.warc",
+        "record_id": "<urn:uuid:incident-req-b>",
+        "concurrent_to": "<urn:uuid:incident-resp-b>",
+        "warc_date": "2026-01-01T12:00:00Z",
+        "raw_body_latin1": "a%26a=",
+        "raw_body_hex": "61253236613d",
+        "raw_length": 6,
+        "sha256": "4e521bcd4b2180132a17345b002248cce16b114193e537d178b777946c05a316",
+        "http_content_length": "5",
+        "key_from_full_body": "example,shop)/checkout.html?__wb_method=post&a&a=",
+        "key_from_header_length": "example,shop)/checkout.html?__wb_method=post&a&a"
+      }
+    ]
+  },
+  "record_pairs": {
+    "legacy-ro.warc": [
+      {
+        "type": "response",
+        "record_id": "<urn:uuid:incident-legacy-resp>",
+        "concurrent_to": null,
+        "payload_digest": "sha1:5RYKBTZD4CA4E4GGFABOXI2NX62A5DUS"
+      }
+    ],
+    "orders-a.warc": [
+      {
+        "type": "response",
+        "record_id": "<urn:uuid:incident-resp-a>",
+        "concurrent_to": null,
+        "payload_digest": "sha1:LRKCWWF6HDKQK3B2DOBI6JYPJ4UJNYK5"
+      },
+      {
+        "type": "request",
+        "record_id": "<urn:uuid:incident-req-a>",
+        "concurrent_to": "<urn:uuid:incident-resp-a>",
+        "payload_digest": "sha1:4RERM4QDUDS27K7F3EODTH7ZH6CBSEPU"
+      }
+    ],
+    "orders-b.warc": [
+      {
+        "type": "response",
+        "record_id": "<urn:uuid:incident-resp-b>",
+        "concurrent_to": null,
+        "payload_digest": "sha1:DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK"
+      },
+      {
+        "type": "request",
+        "record_id": "<urn:uuid:incident-req-b>",
+        "concurrent_to": "<urn:uuid:incident-resp-b>",
+        "payload_digest": "sha1:BZSF66BSX6TTLFE3WEI7L2MZ7KIEYUC2"
+      }
+    ]
+  }
+}

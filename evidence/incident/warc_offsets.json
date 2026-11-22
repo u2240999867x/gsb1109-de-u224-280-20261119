@@ -1,0 +1,83 @@
+{
+  "legacy-ro.warc": [
+    {
+      "warc": "legacy-ro.warc",
+      "record_offset": 0,
+      "record_block_length": 96,
+      "record_end": 451,
+      "record_id": "<urn:uuid:incident-legacy-resp>",
+      "record_type": "response",
+      "concurrent_to": null,
+      "target_uri": "http://shop.example/checkout.html",
+      "date": "2026-01-01T12:00:00Z",
+      "payload_digest": "sha1:5RYKBTZD4CA4E4GGFABOXI2NX62A5DUS",
+      "sha256": "ef90cfc66bb738cdf90cddd1c5dff772fcaaf18c97cb68d43cd73e2c50c7a76b"
+    }
+  ],
+  "orders-a.warc": [
+    {
+      "warc": "orders-a.warc",
+      "record_offset": 0,
+      "record_block_length": 92,
+      "record_end": 442,
+      "record_id": "<urn:uuid:incident-resp-a>",
+      "record_type": "response",
+      "concurrent_to": null,
+      "target_uri": "http://shop.example/checkout.html",
+      "date": "2026-01-01T12:00:00Z",
+      "payload_digest": "sha1:LRKCWWF6HDKQK3B2DOBI6JYPJ4UJNYK5",
+      "sha256": "ebec642b10a55d1ae2cd3a5154cd437b2b7ce20b05c8894b2ff649ca0b7640cf"
+    },
+    {
+      "warc": "orders-a.warc",
+      "record_offset": 446,
+      "record_block_length": 125,
+      "record_end": 967,
+      "record_id": "<urn:uuid:incident-req-a>",
+      "record_type": "request",
+      "concurrent_to": "<urn:uuid:incident-resp-a>",
+      "target_uri": "http://shop.example/checkout.html",
+      "date": "2026-01-01T12:00:00Z",
+      "payload_digest": "sha1:4RERM4QDUDS27K7F3EODTH7ZH6CBSEPU",
+      "sha256": "d3ba37ce8a2905588c0f56f528afd1b6660e28cd0eca38728cd1f6dc3d8bf886",
+      "body_offset": 962,
+      "body_length": 5,
+      "body_hex": "6125323661",
+      "body_latin1": "a%26a",
+      "http_content_length": "5"
+    }
+  ],
+  "orders-b.warc": [
+    {
+      "warc": "orders-b.warc",
+      "record_offset": 0,
+      "record_block_length": 92,
+      "record_end": 442,
+      "record_id": "<urn:uuid:incident-resp-b>",
+      "record_type": "response",
+      "concurrent_to": null,
+      "target_uri": "http://shop.example/checkout.html",
+      "date": "2026-01-01T12:00:00Z",
+      "payload_digest": "sha1:DY5ZGSMPPWPVHQ7XHQUIVNNCKAHCGRZK",
+      "sha256": "65db0e248bfee4d71bec5db4c75dc859a5589c12580d349943a0240bb4db805d"
+    },
+    {
+      "warc": "orders-b.warc",
+      "record_offset": 446,
+      "record_block_length": 126,
+      "record_end": 968,
+      "record_id": "<urn:uuid:incident-req-b>",
+      "record_type": "request",
+      "concurrent_to": "<urn:uuid:incident-resp-b>",
+      "target_uri": "http://shop.example/checkout.html",
+      "date": "2026-01-01T12:00:00Z",
+      "payload_digest": "sha1:BZSF66BSX6TTLFE3WEI7L2MZ7KIEYUC2",
+      "sha256": "32fa4585b7a68e163777103e370e78e0e3f2116ea298f34f72b0dd858785ba33",
+      "body_offset": 962,
+      "body_length": 6,
+      "body_hex": "61253236613d",
+      "body_latin1": "a%26a=",
+      "http_content_length": "5"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+WARC/1.0
+WARC-Date: 2026-01-01T12:00:00Z
+WARC-Record-ID: <urn:uuid:incident-resp-a>
+WARC-Type: response
+WARC-Target-URI: http://shop.example/checkout.html
+WARC-Payload-Digest: sha1:LRKCWWF6HDKQK3B2DOBI6JYPJ4UJNYK5
+WARC-Block-Digest: sha1:GX3SXL7GGZBR4RQDCCY5WXB753XBOOWT
+Content-Type: application/http; msgtype=response
+Content-Length: 92
+
+HTTP/1.0 200 OK
+Content-Type: text/plain; charset=utf-8
+Content-Length: 12
+
+ORDER-A-000
+
+
+WARC/1.0
+WARC-Date: 2026-01-01T12:00:00Z
+WARC-Record-ID: <urn:uuid:incident-req-a>
+WARC-Concurrent-To: <urn:uuid:incident-resp-a>
+WARC-Type: request
+WARC-Target-URI: http://shop.example/checkout.html
+WARC-Payload-Digest: sha1:4RERM4QDUDS27K7F3EODTH7ZH6CBSEPU
+WARC-Block-Digest: sha1:4Z6XMU3ZGXRQSVH63HSMO6JF7LV3CPOU
+Content-Type: application/http; msgtype=request
+Content-Length: 125
+
+POST /checkout.html HTTP/1.0
+Host: shop.example
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 5
+
+a%26a
+

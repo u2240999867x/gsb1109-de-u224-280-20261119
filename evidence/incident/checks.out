@@ -1,0 +1,71 @@
+== base
+  A direct                  200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq                 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B direct                  200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq                 200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+== reindex_b_only
+  A direct                  200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq                 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B direct                  200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq                 200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+== fix_b_only
+  A direct                  200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq                 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B direct                  200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq                 200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+== fix_b_and_reindex
+  A direct                  200 OK warc=orders-a.warc   body=': 12\r\n\r\nORDER-A-000\n'
+  A postreq                 200 OK warc=orders-a.warc   body=': 12\r\n\r\nORDER-A-000\n'
+  A postreq_archived_header 200 OK warc=orders-a.warc   body=': 12\r\n\r\nORDER-A-000\n'
+  B direct                  200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B postreq                 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B postreq_archived_header 200 OK warc=orders-a.warc   body=': 12\r\n\r\nORDER-A-000\n'
+== reindex_a_only
+  A direct                  200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq                 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B direct                  200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq                 200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+== reindex_all
+  A direct                  200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq                 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B direct                  200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq                 200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+== positive_a
+  A direct                  200 OK warc=orders-a.warc   body=': 12\r\n\r\nORDER-A-000\n'
+  A postreq                 200 OK warc=orders-a.warc   body=': 12\r\n\r\nORDER-A-000\n'
+  A postreq_archived_header 200 OK warc=orders-a.warc   body=': 12\r\n\r\nORDER-A-000\n'
+  B direct                  200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq                 200 OK warc=legacy-ro.warc  body='\r\n\r\nLEGACY-OLD-BODY\n'
+  B postreq_archived_header 200 OK warc=orders-a.warc   body=': 12\r\n\r\nORDER-A-000\n'
+== positive_b
+  A direct                  200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq                 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  A postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B direct                  200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B postreq                 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+  B postreq_archived_header 200 OK warc=orders-b.warc   body=': 12\r\n\r\nORDER-B-002\n'
+== checks
+  B_via_postreq_with_archived_header_selects_orders_b        PASS
+  base_A_selects_orders_b                                    PASS
+  base_B_selects_legacy                                      PASS
+  base_direct_matches_postreq_for_A                          PASS
+  base_direct_matches_postreq_for_B                          PASS
+  fix_b_and_reindex_resolves_A_to_A                          PASS
+  fix_b_and_reindex_resolves_B_to_B                          PASS
+  fix_b_without_reindex_unchanged_at_all_entry_points        PASS
+  positive_a_resolves_A                                      PASS
+  positive_b_resolves_B                                      PASS
+  reindex_a_only_unchanged_at_all_entry_points               PASS
+  reindex_all_unchanged_at_all_entry_points                  PASS
+  reindex_b_only_unchanged_at_all_entry_points               PASS
+wrote /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-208/workspace/evidence/incident/results.json
