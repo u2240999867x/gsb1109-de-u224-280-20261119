@@ -302,6 +302,17 @@ class SchedulingSettings(SettingsBase):
         Deprecated, use snakemake.scheduling.greedy.Settings instead and pass it as greedy_scheduler_settings to DAGApi.execute_workflow().
     subsample:
         Set the number of jobs to be considered for scheduling. If number of ready jobs is greater than this value, this number of jobs is randomly chosen for scheduling; if number of ready jobs is lower, this option has no effect. This can be useful on very large DAGs, where the scheduler can take some time selecting which jobs to run."
+    deadlines:
+        Optional absolute deadlines for the deadline scheduler. Entries can be
+        strings of the form ``RULE[:WILDCARD=VALUE,...]@TIME``, Deadline
+        objects, or mappings (see ``snakemake.scheduling.deadline``). Providing
+        deadlines selects the ``deadline`` scheduler unless another scheduler
+        is requested explicitly.
+    deadline_file:
+        Optional JSON/YAML file with absolute deadlines.
+    dispatch_ledger:
+        Optional path of the persistent dispatch ledger used by the deadline
+        scheduler. Defaults to ``.snakemake/dispatch/ledger.json``.
     """
 
     prioritytargets: AnySet[str] = frozenset()
@@ -314,6 +325,9 @@ class SchedulingSettings(SettingsBase):
     subsample: Optional[int] = None
     max_jobs_per_second: Optional[int] = None
     max_jobs_per_timespan: Optional[MaxJobsPerTimespan] = None
+    deadlines: tuple = ()
+    deadline_file: Optional[Path] = None
+    dispatch_ledger: Optional[Path] = None
 
     def __post_init__(self):
         self.greediness = self._get_greediness()

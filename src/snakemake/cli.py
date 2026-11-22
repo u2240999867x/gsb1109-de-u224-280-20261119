@@ -74,6 +74,7 @@ from snakemake.settings.enums import ChangeType
 from snakemake.target_jobs import parse_target_jobs_cli_args
 from snakemake.utils import available_cpu_count, update_config
 from snakemake.scheduling.milp import SchedulerSettings as MILPSchedulerSettings
+from snakemake.scheduling import register_builtin_schedulers
 
 
 def parse_size_in_bytes(value):
@@ -421,6 +422,7 @@ def get_argument_parser(
         SchedulerPluginRegistry(),
         SoftwareDeploymentPluginRegistry(),
     ]
+    register_builtin_schedulers()
     if recollect_plugins:
         for plugin_registry in plugin_registries:
             plugin_registry.collect_plugins()

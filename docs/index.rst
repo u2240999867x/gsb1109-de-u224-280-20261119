@@ -167,6 +167,7 @@ Resources
   :maxdepth: 1
 
   executing/cli
+  executing/deadline_dispatch
   executing/grouping
   executing/caching
   executing/executors

@@ -30,6 +30,13 @@ from snakemake_interface_scheduler_plugins.registry import SchedulerPluginRegist
 from snakemake.exceptions import RuleException, WorkflowError, print_exception
 from snakemake.logging import logger
 from snakemake.scheduling.greedy import SchedulerSettings as GreedySchedulerSettings
+from snakemake.scheduling.dispatch import (
+    ACCEPTED,
+    FINISHED,
+    DispatchController,
+    DispatchLedger,
+    job_identity,
+)
 
 from snakemake.settings.enums import Quietness
 from snakemake.settings.types import MaxJobsPerTimespan, SharedFSUsage
@@ -168,6 +175,21 @@ class JobScheduler(JobSchedulerExecutorInterface):
         self._job_selector = scheduler.select_jobs
         self._scheduler = scheduler
 
+        self._dispatch_controller = None
+        # Attempt numbers of submissions currently in flight, per job object.
+        # A completion notification for a job must be attributed to the exact
+        # attempt that was submitted, not to a possibly advanced job.attempt.
+        self._in_flight_attempts = {}
+        self._dispatch_receipts_unsupported = False
+        if self._uses_deadline_dispatch():
+            self._dispatch_controller = self._make_dispatch_controller()
+            if not self.workflow.remote_execution_settings.immediate_submit:
+                # Confirmations of acceptance have to become durable before a
+                # completion notification for the same attempt can arrive. In
+                # immediate-submit mode, acceptance is recorded by the regular
+                # finish callback (which also compacts the ledger).
+                self.submit_callback = self._dispatch_accepted
+
         self._user_kill = None
         try:
             signal.signal(signal.SIGTERM, self.exit_gracefully)
@@ -176,6 +198,102 @@ class JobScheduler(JobSchedulerExecutorInterface):
             # This can only happen with --gui, in which case it is fine for now.
             pass
         self._open_jobs.release()
+
+    def _uses_deadline_dispatch(self) -> bool:
+        """Whether the optional deadline dispatcher is active."""
+        if self.dryrun or self.touch:
+            return False
+        return bool(getattr(self._scheduler, "is_deadline_scheduler", False))
+
+    def _make_dispatch_controller(self) -> DispatchController:
+        settings = self.workflow.scheduling_settings
+        ledger_path = settings.dispatch_ledger
+        if ledger_path is None:
+            ledger_path = self.workflow.persistence.path / "dispatch" / "ledger.json"
+        limit = settings.max_jobs_per_timespan
+        ledger = DispatchLedger(
+            path=ledger_path,
+            max_jobs_per_window=None if limit is None else limit.max_jobs,
+            window=1.0 if limit is None else limit.timespan,
+        )
+        controller = DispatchController(
+            total_resources=self.global_resources,
+            ledger=ledger,
+            deadline_registry=self._scheduler.registry,
+        )
+        self._dispatch_controller = controller
+        return controller
+
+    def dispatch_status_provider(self):
+        provider = getattr(self._executor, "dispatch_status", None)
+        return provider if callable(provider) else None
+
+    def _dispatch_accepted(self, job):
+        """Submission callback: record actual executor acceptance."""
+        self.dispatch_accept(job)
+
+    def _submitted_attempt(self, job):
+        """Return the attempt that was submitted for this job object, if known."""
+        return self._in_flight_attempts.get(job)
+
+    def dispatch_accept(self, job, at=None):
+        """Record that the executor accepted a planned submission."""
+        if self._dispatch_controller is None:
+            return None
+        entry = self._dispatch_controller.accept(job, at=at)
+        return None if entry is None else entry
+
+    def dispatch_not_accepted(self, job, note=None) -> bool:
+        if self._dispatch_controller is None:
+            return False
+        return self._dispatch_controller.not_accepted(job, note=note)
+
+    def dispatch_finished(self, job, attempt=None, at=None) -> bool:
+        """Record completion of a specific attempt (idempotent)."""
+        if self._dispatch_controller is None:
+            return False
+        if attempt is None:
+            attempt = self._submitted_attempt(job)
+        if attempt is not None:
+            job = _AttemptView(job, attempt)
+        return self._dispatch_controller.finish(job, at=at)
+
+    def dispatch_failed(self, job, attempt=None, at=None) -> bool:
+        """Record failure of a specific attempt (idempotent).
+
+        A notification for a superseded attempt is ignored. It must not free
+        the memory of the current attempt, nor trigger another retry.
+        """
+        if self._dispatch_controller is None:
+            return False
+        if attempt is None:
+            attempt = self._submitted_attempt(job)
+        if attempt is not None:
+            job = _AttemptView(job, attempt)
+        return self._dispatch_controller.fail(job, at=at)
+
+    def dispatch_should_process(self, job, attempt=None) -> bool:
+        """Whether a completion/error notification belongs to the current attempt."""
+        if self._dispatch_controller is None:
+            return True
+        return self._dispatch_controller.should_process(job, attempt=attempt)
+
+    def dispatch_reconcile(self, status, at=None):
+        if self._dispatch_controller is None:
+            return None
+        result = self._dispatch_controller.reconcile(status, now=at)
+        # Evidence may have released a reservation; try scheduling again.
+        self._open_jobs.release()
+        return result
+
+    def dispatch_snapshot(self):
+        if self._dispatch_controller is None:
+            return None
+        return self._dispatch_controller.ledger.permit_snapshot()
+
+    def _compact_dispatch_ledger(self):
+        if self._dispatch_controller is not None:
+            self._dispatch_controller.ledger.forget_final()
 
     def executor_error_callback(self, exception):
         with self._lock:
@@ -291,6 +409,7 @@ class JobScheduler(JobSchedulerExecutorInterface):
                             )
                         )
                         return False
+                    self._compact_dispatch_ledger()
                     return not errors
 
                 # continue if no new job needs to be executed
@@ -308,6 +427,10 @@ class JobScheduler(JobSchedulerExecutorInterface):
                 if self.dryrun:
                     run = needrun
                 else:
+                    # Jobs accepted before a restart are still running remotely;
+                    # mark them running so they are never submitted again.
+                    self._consume_unresolved(needrun)
+
                     # Reset params and resources because they might still contain TBDs
                     # or old values from before files have been regenerated.
                     # Now, they can be recalculated as all input is present and up to date.
@@ -410,6 +533,17 @@ class JobScheduler(JobSchedulerExecutorInterface):
                         self._schedule_reevalutation(
                             "rate_limit", self.job_rate_limiter.time_until_free()
                         )
+                    if self._dispatch_controller is not None and (
+                        self._has_permit_deferred(needrun)
+                    ):
+                        # A deferred remote job may become dispatchable once an
+                        # accepted submission leaves the sliding window. If the
+                        # computed delay is zero, poll briefly for acceptance
+                        # evidence instead of spinning.
+                        delay = self._dispatch_controller.time_until_permit()
+                        self._schedule_reevalutation(
+                            "dispatch_permit", delay if delay > 0 else 1.0
+                        )
         except (KeyboardInterrupt, SystemExit):
             logger.info(
                 "Terminating processes on user request, this might take some time."
@@ -421,6 +555,92 @@ class JobScheduler(JobSchedulerExecutorInterface):
             # as well, so that no unmanaged jobs remain.
             self._executor.cancel()
             raise e
+
+    def _consume_unresolved(self, needrun):
+        """Resolve remote state after a restart and never submit it again.
+
+        Accepted jobs are marked as running so they are not submitted a second
+        time. Pending reservations are reconciled against executor receipts when
+        possible; entries without evidence stay reserved and the scheduler is
+        woken up periodically to look for evidence.
+        """
+        controller = self._dispatch_controller
+        if controller is None:
+            return
+        ledger = controller.ledger
+        if not ledger.active_entries():
+            return
+        provider = getattr(self._executor, "dispatch_status", None)
+        if not callable(provider):
+            if not self._dispatch_receipts_unsupported:
+                logger.warning(
+                    "Executor does not support dispatch receipts; pending "
+                    f"reservations ({len(ledger.pending_entries())}) are kept "
+                    "until they can be resolved."
+                )
+                self._dispatch_receipts_unsupported = True
+            return
+        self._dispatch_receipts_unsupported = False
+
+        pending = ledger.pending_entries()
+        if pending:
+            try:
+                status = provider(list(pending))
+            except Exception as e:  # noqa: BLE001 - recovery must stay safe
+                logger.warning(
+                    "Could not query dispatch receipts; keeping pending "
+                    f"reservations ({e})."
+                )
+            else:
+                result = controller.reconcile(status)
+                if result["accepted"] or result["released"]:
+                    logger.info(
+                        "Resolved dispatch state: "
+                        f"{len(result['accepted'])} accepted, "
+                        f"{len(result['released'])} not accepted, "
+                        f"{len(result['unknown'])} awaiting evidence."
+                    )
+
+        jobs_by_key = {
+            job_identity(job): job for job in self.workflow.dag.needrun_jobs()
+        }
+        changed = False
+        for entry in list(ledger.entries):
+            if entry.state != ACCEPTED:
+                continue
+            job = jobs_by_key.get(entry.key)
+            if job is None:
+                # The outputs are already present, so the accepted remote attempt
+                # must have completed while we were down. Release its memory and
+                # permit; a later duplicate notification stays ignored because the
+                # entry remains finalized.
+                ledger.finish(entry.key, attempt=entry.attempt, state=FINISHED)
+                continue
+            with self._lock:
+                if job not in self.running:
+                    self.running.add(job)
+                    self.workflow.dag.register_running({job})
+                    self._in_flight_attempts[job] = entry.attempt
+                    # These resources are held by the remote attempt; account
+                    # for them so that the later completion releases exactly
+                    # what was consumed. An attempt in flight is attributed to
+                    # its recorded attempt number.
+                    self.update_available_resources([_AttemptView(job, entry.attempt)])
+                    changed = True
+        if changed:
+            logger.info(
+                "Found accepted remote jobs after restart; waiting for them to "
+                "finish instead of submitting them again."
+            )
+        if ledger.pending_entries() and not self.running:
+            delay = getattr(self.workflow.execution_settings, "latency_wait", 1)
+            self._schedule_reevalutation("dispatch_pending", max(delay, 1))
+
+    def _has_permit_deferred(self, jobs) -> bool:
+        """Whether a ready remote job is blocked only by the permit window."""
+        if self._dispatch_controller is None:
+            return False
+        return self._dispatch_controller.permit_deferred(jobs)
 
     def _schedule_reevalutation(self, reason: str, delay: float) -> None:
         """Wake up the scheduler after the given delay.
@@ -551,6 +771,9 @@ class JobScheduler(JobSchedulerExecutorInterface):
         self._run_performed = True
         if executor is None:
             executor = self._executor
+        if self._dispatch_controller is not None:
+            for job in jobs:
+                self._in_flight_attempts[job] = job.attempt
         executor.run_jobs(jobs)
 
     def get_executor(self, job):
@@ -565,12 +788,22 @@ class JobScheduler(JobSchedulerExecutorInterface):
         for name, value in job.scheduler_resources.items():
             if name in self.resources and name != "_job_count":
                 self.resources[name] += value
-
     def _proceed(self, job):
         """Do stuff after job is finished."""
         with self._lock:
+            attempt = self._submitted_attempt(job)
+            if not self.dispatch_should_process(job, attempt=attempt):
+                # Duplicate or stale notification (e.g. a replayed completion
+                # for an attempt that has been superseded). It must not free
+                # memory for the current attempt or trigger another retry.
+                return
+            if self._dispatch_controller is not None:
+                # A completion proves acceptance even if the submission callback
+                # was lost (e.g. across a restart). finish() records the
+                # acceptance and then releases the attempt, idempotently.
+                self.dispatch_finished(job, attempt=attempt)
+            self._in_flight_attempts.pop(job, None)
             self._tofinish.append(job)
-
             if self.dryrun:
                 if len(self.running) - len(self._tofinish) - len(self._toerror) <= 0:
                     # During dryrun, only release when all running jobs are done.
@@ -583,6 +816,14 @@ class JobScheduler(JobSchedulerExecutorInterface):
 
     def error_callback(self, job):
         with self._lock:
+            attempt = self._submitted_attempt(job)
+            if not self.dispatch_should_process(job, attempt=attempt):
+                # A replay of an old failure must neither free current memory
+                # nor cause another attempt.
+                return
+            if self._dispatch_controller is not None:
+                self.dispatch_failed(job, attempt=attempt)
+            self._in_flight_attempts.pop(job, None)
             self._toerror.append(job)
             self._open_jobs.release()
 
@@ -619,6 +860,12 @@ class JobScheduler(JobSchedulerExecutorInterface):
         """Select the jobs to run, within the free resources and the rate limit."""
         for job in jobs:
             self.validate_job(job)
+
+        if self._dispatch_controller is not None:
+            self.workflow.async_run(self.update_input_sizes(jobs))
+            selected = self._dispatch_controller.select(list(jobs))
+            self.update_available_resources(selected)
+            return selected
 
         self.workflow.async_run(self.update_input_sizes(jobs))
 
@@ -703,6 +950,46 @@ class JobScheduler(JobSchedulerExecutorInterface):
                 total=len(self.workflow.dag),
             ),
         )
+
+
+class _AttemptView:
+    """Expose a job with a specific attempt number (for stale notifications)."""
+
+    __slots__ = ("_job", "_attempt")
+
+    def __init__(self, job, attempt: int):
+        self._job = job
+        self._attempt = attempt
+
+    def __getattr__(self, name):
+        if name == "attempt":
+            return self._attempt
+        return getattr(self._job, name)
+
+    @property
+    def is_group(self):
+        value = getattr(self._job, "is_group", False)
+        return value() if callable(value) else value
+
+    @property
+    def jobs(self):
+        jobs = getattr(self._job, "jobs", ())
+        return jobs() if callable(jobs) else jobs
+
+    @property
+    def groupid(self):
+        return getattr(self._job, "groupid", None)
+
+    @property
+    def rule(self):
+        return getattr(self._job, "rule", None)
+
+    @property
+    def wildcards_dict(self):
+        return getattr(self._job, "wildcards_dict", None)
+
+    def uuid(self):
+        return self._job.uuid()
 
 
 class JobRateLimiter:

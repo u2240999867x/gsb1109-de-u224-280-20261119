@@ -42,6 +42,7 @@ from snakemake.settings.types import (
     SharedFSUsage,
 )
 from snakemake.scheduling.greedy import SchedulerSettings as GreedySchedulerSettings
+from snakemake.scheduling import register_builtin_schedulers
 from snakemake.scheduling.milp import SchedulerSettings as IlpSchedulerSettings
 
 from snakemake_interface_executor_plugins.settings import ExecMode, ExecutorSettingsBase
@@ -671,6 +672,17 @@ class DAGApi(ApiBase):
         if scheduling_settings.greediness is not None:
             greedy_scheduler_settings.greediness = scheduling_settings.greediness
 
+        if (
+            scheduler == "ilp"
+            and scheduler_settings is None
+            and (scheduling_settings.deadlines or scheduling_settings.deadline_file)
+            and actual_executor not in ("touch", "dryrun")
+            and not remote_execution_settings.immediate_submit
+        ):
+            # Deadlines imply the deadline scheduler unless the caller picked a
+            # scheduler explicitly. Workflows without deadlines are unaffected.
+            scheduler = "deadline"
+
         if scheduler == "ilp":
             if scheduler_settings is None:
                 scheduler_settings = IlpSchedulerSettings()
@@ -684,8 +696,8 @@ class DAGApi(ApiBase):
                 scheduler = "greedy"
                 scheduler_settings = greedy_scheduler_settings
 
+        register_builtin_schedulers()
         scheduler_plugin = SchedulerPluginRegistry().get_plugin(scheduler)
-
         workflow = self.workflow_api._workflow
         workflow.execution_settings = execution_settings
         workflow.remote_execution_settings = remote_execution_settings

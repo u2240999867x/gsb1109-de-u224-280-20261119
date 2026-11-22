@@ -487,8 +487,10 @@ class Job(
 
     @attempt.setter
     def attempt(self, attempt):
-        # reset resources
+        # reset resources, including the cached scheduler resources; resources
+        # may depend on the attempt number (e.g. mem_mb=lambda w, attempt: ...).
         self._resources = None
+        self._scheduler_resources = None
         self._attempt = attempt
 
     @property
@@ -1705,8 +1707,9 @@ class GroupJob(AbstractJob, GroupJobExecutorInterface, GroupJobSchedulerInterfac
 
     @attempt.setter
     def attempt(self, attempt):
-        # reset resources
+        # reset resources, including the cached scheduler resources
         self._resources = None
+        self._scheduler_resources = None
         for job in self.jobs:
             job.attempt = attempt
         self._attempt = attempt
