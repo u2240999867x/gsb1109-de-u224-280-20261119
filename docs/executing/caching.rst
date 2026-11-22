@@ -52,6 +52,49 @@ Note that rules with multiple output files are only eligible for caching if they
 Also note that the rules need to retrieve all their parameters via the ``params`` directive (except input files).
 It is not allowed to directly use ``wildcards``, ``config`` or any global variable in the shell command or script, because these are not captured in the hash (otherwise, reuse would be unnecessarily limited).
 
+Input roles and cache keys
+--------------------------
+
+The provenance hash is derived from the contents of the primary inputs, never
+from their paths: moving an input file to another directory while keeping its
+bytes and its role unchanged yields the same cache key. When inputs are given
+explicit names (e.g. ``input: master=..., exclusions=...``), each input is
+hashed together with its role name. Swapping two differently named inputs
+therefore changes the key even if both file contents stay the same, while
+unnamed inputs keep the historical order-independent behavior. Changing any
+``params`` value (such as a validity threshold) likewise changes the key and
+forces recomputation.
+
+Atomic grouped releases
+-----------------------
+
+All outputs of a cacheable rule are treated as one immutable *generation*
+under the provenance hash. A generation becomes visible only after every
+output has been staged into a private directory and a release manifest has
+been committed atomically; readers therefore always observe a complete
+generation, never a half-written mix of outputs. Each cache key stores its
+generations under ``generations/<hash>/<release id>/`` with a ``RELEASE``
+manifest, while the historical flat ``<hash><ext>`` entries are kept as
+symlinks into the currently released generation.
+
+Working directories pin the generation they first observe in
+``.snakemake/cache_pins/``. When a repair publishes a new generation for an
+existing key, already running readers keep using the complete generation they
+started with (including every grouped output), while newly started readers
+obtain the new generation. A publisher that is interrupted after writing only
+part of a generation never commits a manifest, so the partial generation
+remains a cache miss and the previous complete generation stays readable.
+Publishing takes a short per-key lock only while swapping metadata; copying
+output data does not block readers of an already complete generation.
+
+Setting ``SNAKEMAKE_CACHE_WAIT_FILE`` to a path makes a publisher pause after
+placing the first output of a new generation until that path appears. This is
+a test/debug hook for reproducing interrupted or slow repairs.
+
+A forced run (``--forcerun``/``--forceall``) bypasses cache retrieval and
+recomputes the affected rules, but still publishes the fresh results back to
+the cache as a new generation.
+
 Also note that Snakemake will store everything in the cache as readable and writeable for **all users** on the system (except in the remote case, where permissions are not enforced and depend on your storage configuration).
 Hence, caching is not intended for private data, just for steps that deal with publicly available resources.
 

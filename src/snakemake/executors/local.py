@@ -237,8 +237,12 @@ class Executor(RealExecutor):
             and job.rule.cache
             and job.rule.cache.output
         )
+        # A forced run (--forcerun/--forceall) must actually recompute the
+        # job even if a complete cache generation is available. The freshly
+        # computed outputs are still published back to the cache below.
+        forced = bool(getattr(self.workflow.dag.reason(job), "forced", False))
         try:
-            if cache:
+            if cache and not forced:
                 await job.rule.cache.fetch(job)
                 return
         except CacheMissException:
