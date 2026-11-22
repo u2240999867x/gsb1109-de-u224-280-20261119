@@ -1,0 +1,5 @@
+batch: north
+region: north
+checkpoint_material: roster
+producer_regions: north|south
+audit_previous: True

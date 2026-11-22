@@ -1,0 +1,626 @@
+[
+  {
+    "case": "1_siteA_layer2_pending",
+    "checkpoint_final": [
+      {
+        "rule": "pick_regions",
+        "wildcards": {
+          "batch": "north"
+        },
+        "verdict": "incomplete",
+        "missing": [
+          "diag_workflow/state/north.regions"
+        ]
+      },
+      {
+        "rule": "expand_region",
+        "wildcards": {
+          "region": "north"
+        },
+        "verdict": "incomplete",
+        "missing": [
+          "diag_workflow/state/north.targets"
+        ]
+      }
+    ],
+    "first_failed_input_edge": {
+      "rule": "expand_region",
+      "index": 0,
+      "path": "diag_workflow/data/north/records.tsv"
+    },
+    "missing_input": [
+      {
+        "rule": "expand_region",
+        "files": [
+          "diag_workflow/data/north/records.tsv"
+        ]
+      },
+      {
+        "rule": "expand_region",
+        "files": [
+          "diag_workflow/data/north/records.tsv"
+        ]
+      }
+    ],
+    "exception_classes": [
+      "MissingInputException"
+    ],
+    "constraint_rejections": [
+      {
+        "rule": "produce_data",
+        "target": "diag_workflow/data/north/records.tsv",
+        "constraints": {
+          "region": "south"
+        },
+        "pattern": "diag_workflow/data/{region,south}/records.tsv"
+      }
+    ],
+    "roster_opens": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      }
+    ],
+    "read_sources": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      }
+    ]
+  },
+  {
+    "case": "2_after_checkpoint_only",
+    "checkpoint_final": [
+      {
+        "rule": "pick_regions",
+        "wildcards": {
+          "batch": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      },
+      {
+        "rule": "expand_region",
+        "wildcards": {
+          "region": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      }
+    ],
+    "first_failed_input_edge": {
+      "rule": "consume",
+      "index": 0,
+      "path": "diag_workflow/data/north/records.tsv"
+    },
+    "missing_input": [
+      {
+        "rule": "consume",
+        "files": [
+          "diag_workflow/data/north/records.tsv"
+        ]
+      },
+      {
+        "rule": "consume",
+        "files": [
+          "diag_workflow/data/north/records.tsv"
+        ]
+      }
+    ],
+    "exception_classes": [
+      "MissingInputException"
+    ],
+    "constraint_rejections": [
+      {
+        "rule": "produce_data",
+        "target": "diag_workflow/data/north/records.tsv",
+        "constraints": {
+          "region": "south"
+        },
+        "pattern": "diag_workflow/data/{region,south}/records.tsv"
+      }
+    ],
+    "roster_opens": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      }
+    ],
+    "read_sources": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      }
+    ]
+  },
+  {
+    "case": "3_constraint_only_pending",
+    "checkpoint_final": [
+      {
+        "rule": "pick_regions",
+        "wildcards": {
+          "batch": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      },
+      {
+        "rule": "expand_region",
+        "wildcards": {
+          "region": "north"
+        },
+        "verdict": "incomplete",
+        "missing": [
+          "diag_workflow/state/north.targets"
+        ]
+      }
+    ],
+    "first_failed_input_edge": {
+      "rule": null,
+      "index": null,
+      "path": null
+    },
+    "missing_input": [],
+    "exception_classes": [],
+    "constraint_rejections": [],
+    "roster_opens": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      }
+    ],
+    "read_sources": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      }
+    ]
+  },
+  {
+    "case": "4_siteB_both_done_constraint_rejects",
+    "checkpoint_final": [
+      {
+        "rule": "pick_regions",
+        "wildcards": {
+          "batch": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      },
+      {
+        "rule": "expand_region",
+        "wildcards": {
+          "region": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      }
+    ],
+    "first_failed_input_edge": {
+      "rule": "consume",
+      "index": 0,
+      "path": "diag_workflow/data/north/records.tsv"
+    },
+    "missing_input": [
+      {
+        "rule": "consume",
+        "files": [
+          "diag_workflow/data/north/records.tsv"
+        ]
+      },
+      {
+        "rule": "consume",
+        "files": [
+          "diag_workflow/data/north/records.tsv"
+        ]
+      }
+    ],
+    "exception_classes": [
+      "MissingInputException"
+    ],
+    "constraint_rejections": [
+      {
+        "rule": "produce_data",
+        "target": "diag_workflow/data/north/records.tsv",
+        "constraints": {
+          "region": "south"
+        },
+        "pattern": "diag_workflow/data/{region,south}/records.tsv"
+      }
+    ],
+    "roster_opens": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      }
+    ],
+    "read_sources": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      }
+    ]
+  },
+  {
+    "case": "5_both_fixed",
+    "checkpoint_final": [
+      {
+        "rule": "pick_regions",
+        "wildcards": {
+          "batch": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      },
+      {
+        "rule": "expand_region",
+        "wildcards": {
+          "region": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      }
+    ],
+    "first_failed_input_edge": {
+      "rule": null,
+      "index": null,
+      "path": null
+    },
+    "missing_input": [],
+    "exception_classes": [],
+    "constraint_rejections": [],
+    "roster_opens": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      }
+    ],
+    "read_sources": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      }
+    ]
+  },
+  {
+    "case": "6_previous_opens_but_not_basis",
+    "checkpoint_final": [
+      {
+        "rule": "pick_regions",
+        "wildcards": {
+          "batch": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      },
+      {
+        "rule": "expand_region",
+        "wildcards": {
+          "region": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      }
+    ],
+    "first_failed_input_edge": {
+      "rule": null,
+      "index": null,
+      "path": null
+    },
+    "missing_input": [],
+    "exception_classes": [],
+    "constraint_rejections": [],
+    "roster_opens": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      }
+    ],
+    "read_sources": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      }
+    ]
+  },
+  {
+    "case": "7_stale_targets_dry_run_skips",
+    "checkpoint_final": [
+      {
+        "rule": "pick_regions",
+        "wildcards": {
+          "batch": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      },
+      {
+        "rule": "expand_region",
+        "wildcards": {
+          "region": "north"
+        },
+        "verdict": "incomplete",
+        "missing": [
+          "diag_workflow/state/north.targets"
+        ]
+      }
+    ],
+    "first_failed_input_edge": {
+      "rule": null,
+      "index": null,
+      "path": null
+    },
+    "missing_input": [],
+    "exception_classes": [],
+    "constraint_rejections": [],
+    "roster_opens": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      }
+    ],
+    "read_sources": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      }
+    ]
+  },
+  {
+    "case": "8_stale_targets_recomputed",
+    "checkpoint_final": [
+      {
+        "rule": "pick_regions",
+        "wildcards": {
+          "batch": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      },
+      {
+        "rule": "expand_region",
+        "wildcards": {
+          "region": "north"
+        },
+        "verdict": "complete",
+        "missing": []
+      }
+    ],
+    "first_failed_input_edge": {
+      "rule": null,
+      "index": null,
+      "path": null
+    },
+    "missing_input": [],
+    "exception_classes": [],
+    "constraint_rejections": [],
+    "roster_opens": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "mode": "r"
+      }
+    ],
+    "read_sources": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "exists": true,
+        "digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990"
+      },
+      {
+        "path": "diag_workflow/roster/north.tsv",
+        "exists": true,
+        "digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      },
+      {
+        "path": "diag_workflow/state/north.targets",
+        "role": "targets",
+        "derived_from": "diag_workflow/roster/north.tsv"
+      },
+      {
+        "path": "diag_workflow/previous/north.tsv",
+        "role": "previous_roster",
+        "derived_from": null
+      }
+    ]
+  }
+]

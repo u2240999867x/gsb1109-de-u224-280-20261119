@@ -1,0 +1,27 @@
+Assuming unrestricted shared filesystem usage.
+
+SNAKEMAKE
+=========
+  Date: 2026-11-23 03:39:15
+  Workflow ID: 71ae1d0a-eb38-4452-85e5-76a49bce497d
+  Platform: macOS-27.0-arm64-arm-64bit
+  Host: 192.168.0.106
+  User: guo
+  Snakemake version: 10.0.0a
+  Python version: 3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]
+  Command: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/.venv/bin/snakemake --configfile /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/config.yaml --cores 1 --scheduler greedy --dry-run
+  Snakefile: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/Snakefile
+  Base directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Run directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Working directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Config file(s): [PosixPath('/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/config.yaml')]
+  Config MD5: ab3387fc2466fc21d71446b551c37336
+
+Building DAG of jobs...
+Updating checkpoint dependencies.
+MissingInputException in rule consume in file "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/Snakefile", line 136:
+Missing input files for rule consume:
+    output: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/results/north.done
+    wildcards: region=north
+    affected files:
+        /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv

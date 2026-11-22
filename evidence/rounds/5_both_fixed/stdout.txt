@@ -1,0 +1,69 @@
+Assuming unrestricted shared filesystem usage.
+
+SNAKEMAKE
+=========
+  Date: 2026-11-23 03:39:15
+  Workflow ID: 1ac4cf1f-78a1-4054-8b11-33a9fd894e1a
+  Platform: macOS-27.0-arm64-arm-64bit
+  Host: 192.168.0.106
+  User: guo
+  Snakemake version: 10.0.0a
+  Python version: 3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]
+  Command: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/.venv/bin/snakemake --configfile /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/config.yaml --cores 1 --scheduler greedy --dry-run
+  Snakefile: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/Snakefile
+  Base directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Run directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Working directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Config file(s): [PosixPath('/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/config.yaml')]
+  Config MD5: 421c5970f79b6c9853b7a60f0708e403
+
+Building DAG of jobs...
+Updating checkpoint dependencies.
+Job stats:
+job             count
+------------  -------
+produce_data        1
+consume             1
+all                 1
+total               3
+
+
+[Mon Nov 23 03:39:15 2026]
+rule produce_data:
+    input: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/roster/north.tsv
+    output: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv
+    jobid: 6
+    reason: Missing output files: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv
+    wildcards: region=north
+    resources: tmpdir=/Users/guo/.local/share/gsb-1109/claude-code/workers/GSB1109-20261119-U224-DE-PY-226-S-1/tmp, shell_exec=/bin/bash
+[Mon Nov 23 03:39:15 2026]
+rule consume:
+    input: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv
+    output: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/results/north.done
+    jobid: 2
+    reason: Missing output files: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/results/north.done; Input files updated by another job: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv
+    wildcards: region=north
+    resources: tmpdir=/Users/guo/.local/share/gsb-1109/claude-code/workers/GSB1109-20261119-U224-DE-PY-226-S-1/tmp, shell_exec=/bin/bash
+[Mon Nov 23 03:39:15 2026]
+rule all:
+    input: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/state/north.targets, /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/results/north.done
+    jobid: 0
+    reason: Input files updated by another job: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/results/north.done
+    resources: tmpdir=/Users/guo/.local/share/gsb-1109/claude-code/workers/GSB1109-20261119-U224-DE-PY-226-S-1/tmp, shell_exec=/bin/bash
+Job stats:
+job             count
+------------  -------
+produce_data        1
+consume             1
+all                 1
+total               3
+
+Reasons:
+    (check individual jobs above for details)
+    input files updated by another job:
+        all, consume
+    output files have to be generated:
+        consume, produce_data
+1 jobs have missing provenance/metadata so that it in part cannot be used to trigger re-runs.
+Rules with missing metadata: expand_region
+This was a dry-run (flag -n). The order of jobs does not reflect the order of execution.

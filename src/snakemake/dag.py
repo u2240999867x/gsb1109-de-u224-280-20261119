@@ -85,6 +85,7 @@ from snakemake.jobs import (
 from snakemake.settings.types import SharedFSUsage
 from snakemake.logging import logger
 from snakemake.output_index import OutputIndex
+from snakemake import diag_trace
 from snakemake.sourcecache import LocalSourceFile, SourceFile
 from snakemake.settings.enums import ChangeType
 
@@ -1140,6 +1141,7 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                 MissingInputException,
                 WorkflowError,
             ) as ex:
+                diag_trace.trace_exception(ex)
                 exceptions.append(ex)
                 discarded_jobs.add(job)
             except (CyclicGraphException,) as ex:
@@ -1243,7 +1245,14 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         missing_input = set()
         producer = dict()
         exceptions = dict()
-        for res in potential_dependencies:
+        for index, res in enumerate(potential_dependencies):
+            diag_trace.trace_input_edge(
+                job.rule.name,
+                index,
+                res.file,
+                job.wildcards_dict,
+                "has_producer" if res.jobs else "no_producer",
+            )
             if create_inventory:
                 # If possible, obtain inventory information starting from
                 # given file and store it in the IOCache.
@@ -1257,6 +1266,16 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                 if self.workflow.is_main_process and not await res.file.exists():
                     # file not found, hence missing input
                     missing_input.add(res.file)
+                    diag_trace.trace_missing_input(
+                        job.rule.name, [res.file], job.wildcards_dict
+                    )
+                    diag_trace.trace_input_edge(
+                        job.rule.name,
+                        index,
+                        res.file,
+                        job.wildcards_dict,
+                        "first_missing",
+                    )
                 if not is_flagged(res.file, "before_update"):
                     # record info that there is no known producer, but only
                     # do that for files that are not flagged as before_update
@@ -1332,6 +1351,9 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                     if await out.exists() and out not in incomplete_outputs:
                         self._evicted_checkpoint_outputs.add(out)
             self.delete_job(job, recursive=False)  # delete job from tree
+            diag_trace.trace_missing_input(
+                job.rule.name, missing_input, job.wildcards_dict
+            )
             raise MissingInputException(job, missing_input)
 
     async def update_needrun(self, create_inventory=False):
@@ -2579,7 +2601,37 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         return await self.new_job(targetrule)
 
     async def file2jobs(self, targetfile, wildcards_dict=None):
-        rules = self.output_index.match_producers(targetfile)
+        producers = self.output_index.match_producers(targetfile)
+        if diag_trace.enabled():
+            candidates = self.output_index.match(targetfile)
+            rule_details = sorted(
+                (
+                    {
+                        "rule": rule.name,
+                        "products": [
+                            {
+                                "pattern": str(product),
+                                "constraints": {
+                                    name: constraint.pattern
+                                    for name, constraint in product.wildcard_constraints().items()
+                                },
+                                "matches": bool(product.match(targetfile)),
+                            }
+                            for product in rule.products()
+                        ],
+                    }
+                    for rule in candidates
+                ),
+                key=lambda item: item["rule"],
+            )
+            diag_trace.trace_rule_match(
+                targetfile,
+                candidates,
+                producers,
+                candidates - producers,
+                rule_details,
+            )
+        rules = producers
         jobs = []
         exceptions = list()
         for rule in rules:

@@ -1,0 +1,154 @@
+import os
+import sys
+
+ROOT = os.path.abspath(".")
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+
+from roster import roster_entries, sha256_file  # noqa: E402
+
+BATCH = config["batch"]
+REGION = config["region"]
+CHECKPOINT_MATERIAL = config["checkpoint_material"]
+PRODUCER_REGIONS = config["producer_regions"]
+AUDIT_PREVIOUS = config.get("audit_previous", False)
+
+CURRENT_ROSTER = f"{ROOT}/roster/{REGION}.tsv"
+PREVIOUS_ROSTER = f"{ROOT}/previous/{REGION}.tsv"
+
+try:
+    from snakemake import diag_trace
+except ImportError:  # standalone parser use
+    diag_trace = None
+
+_audited = set()
+
+
+def audit_previous(region):
+    """Open the previous-round roster as an observation, never as a basis.
+
+    The return value is deliberately unused by any target derivation. The
+    trace records whether the read actually happened and what it contained.
+    """
+    if not AUDIT_PREVIOUS:
+        return
+    path = os.path.abspath(f"{ROOT}/previous/{region}.tsv")
+    if path in _audited:
+        return
+    _audited.add(path)
+    try:
+        digest = sha256_file(path)
+        with open(path) as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        if diag_trace is not None:
+            diag_trace.trace_read_source(path, exists=False)
+        return
+    if diag_trace is not None:
+        diag_trace.trace_read_source(
+            path, exists=True, digest=digest, size=os.path.getsize(path)
+        )
+        diag_trace.trace_artifact(
+            path, role="previous_roster", entries=roster_entries(lines)
+        )
+
+
+def regions_from_batch(wildcards):
+    out = checkpoints.pick_regions.get(batch=BATCH).output[0]
+    with open(out) as handle:
+        return [
+            f"{ROOT}/state/{region}.targets"
+            for region in (line.strip() for line in handle)
+            if region
+        ]
+
+
+rule all:
+    input:
+        regions_from_batch,
+        lambda wildcards: [f"{ROOT}/results/{BATCH}.done"]
+
+
+checkpoint pick_regions:
+    input:
+        f"{ROOT}/batch/{{batch}}.tsv"
+    output:
+        f"{ROOT}/state/{{batch}}.regions"
+    run:
+        with open(input[0]) as handle:
+            regions = [line.strip() for line in handle if line.strip()]
+        with open(output[0], "w") as handle:
+            handle.write("\n".join(regions) + "\n")
+        if diag_trace is not None:
+            diag_trace.trace_artifact(
+                output[0], role="regions", entries=regions
+            )
+
+
+def expand_material(wildcards):
+    # Observation only: this opens the previous roster in the *same* run so the
+    # trace can answer whether it was accessed. Its content never feeds the
+    # returned material below.
+    audit_previous(wildcards.region)
+    current = os.path.abspath(f"{ROOT}/roster/{wildcards.region}.tsv")
+    if diag_trace is not None:
+        exists = os.path.exists(current)
+        diag_trace.trace_read_source(
+            current,
+            exists=exists,
+            digest=sha256_file(current) if exists else None,
+            size=os.path.getsize(current) if exists else None,
+        )
+    if CHECKPOINT_MATERIAL == "data":
+        return [f"{ROOT}/data/{wildcards.region}/records.tsv", current]
+    if CHECKPOINT_MATERIAL == "roster":
+        return [current]
+    raise ValueError(f"unknown checkpoint_material: {CHECKPOINT_MATERIAL}")
+
+
+checkpoint expand_region:
+    input:
+        expand_material
+    output:
+        f"{ROOT}/state/{{region}}.targets"
+    run:
+        roster = next(str(f) for f in input if str(f).endswith(".tsv"))
+        targets = [f"{ROOT}/data/{wildcards.region}/records.tsv"]
+        entries = roster_entries(open(roster).readlines())
+        assert entries, f"current roster is empty: {roster}"
+        with open(output[0], "w") as handle:
+            handle.write("\n".join(targets) + "\n")
+        if diag_trace is not None:
+            diag_trace.trace_artifact(
+                output[0],
+                role="targets",
+                derived_from=os.path.abspath(roster),
+                derived_from_sha256=sha256_file(roster),
+                entries=targets,
+            )
+
+
+def real_targets(wildcards):
+    out = checkpoints.expand_region.get(region=wildcards.region).output[0]
+    with open(out) as handle:
+        return [line.strip() for line in handle if line.strip()]
+
+
+rule consume:
+    input:
+        real_targets
+    output:
+        f"{ROOT}/results/{{region}}.done"
+    shell:
+        "touch {output}"
+
+
+
+rule produce_data:
+    input:
+        f"{ROOT}/roster/{{region}}.tsv"
+    output:
+        f"{ROOT}/data/{{region}}/records.tsv"
+    wildcard_constraints:
+        region=PRODUCER_REGIONS
+    shell:
+        "touch {output}"

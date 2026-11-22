@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 from snakemake.exceptions import IncompleteCheckpointException, WorkflowError
 from snakemake.io import checkpoint_target
 from snakemake.logging import logger
+from snakemake import diag_trace
 
 if TYPE_CHECKING:
     from snakemake.rules import Rule
@@ -66,12 +67,30 @@ class Checkpoint:
         if self.checkpoints.created_output:
             missing_output = set(output) - set(self.checkpoints.created_output)
             if not missing_output:
+                diag_trace.trace_checkpoint_get(
+                    self.rule.name,
+                    wildcards,
+                    self.checkpoints.created_output,
+                    missing_output,
+                    "complete",
+                )
                 return CheckpointJob(self.rule, output)
             else:
+                diag_trace.trace_checkpoint_get(
+                    self.rule.name,
+                    wildcards,
+                    self.checkpoints.created_output,
+                    missing_output,
+                    "incomplete",
+                )
                 logger.debug(
                     f"Missing checkpoint output for {self.rule.name} "
                     f"(wildcards: {wildcards}): {','.join(missing_output)} of {','.join(output)}"
                 )
+        else:
+            diag_trace.trace_checkpoint_get(
+                self.rule.name, wildcards, self.checkpoints.created_output, output, "incomplete"
+            )
 
         raise IncompleteCheckpointException(self.rule, checkpoint_target(output[0]))
 

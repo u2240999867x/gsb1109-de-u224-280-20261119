@@ -80,6 +80,7 @@ from snakemake.exceptions import (
     is_file_not_found_error,
 )
 from snakemake.logging import logger
+from snakemake import diag_trace
 from snakemake.common.misc import (
     ON_WINDOWS,
     get_function_params,
@@ -1291,7 +1292,9 @@ class Rule(RuleInterface):
         """
         try:
             for o in self.products():
-                if o.match(requested_output):
+                match = o.match(requested_output)
+                diag_trace.trace_regex_outcome(self.name, o, requested_output, None)
+                if match:
                     return True
             return False
         except sre_constants.error as ex:
@@ -1333,7 +1336,11 @@ class Rule(RuleInterface):
 
                             def check_constraint(wildcard, value):
                                 constraint = constraints.get(wildcard)
-                                return constraint is None or constraint.match(value)
+                                matched = constraint is None or constraint.match(value)
+                                diag_trace.trace_regex_outcome(
+                                    self.name, o, value, constraint
+                                )
+                                return matched
 
                             if all(
                                 check_constraint(name, value)

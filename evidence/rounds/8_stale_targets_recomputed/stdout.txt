@@ -1,0 +1,89 @@
+Assuming unrestricted shared filesystem usage.
+
+SNAKEMAKE
+=========
+  Date: 2026-11-23 03:39:16
+  Workflow ID: 0d04e111-6fbc-41f0-9d60-111803a98105
+  Platform: macOS-27.0-arm64-arm-64bit
+  Host: 192.168.0.106
+  User: guo
+  Snakemake version: 10.0.0a
+  Python version: 3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]
+  Command: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/.venv/bin/snakemake --configfile /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/config.yaml --cores 1 --scheduler greedy
+  Snakefile: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/Snakefile
+  Base directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Run directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Working directory: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow
+  Config file(s): [PosixPath('/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/config.yaml')]
+  Config MD5: 421c5970f79b6c9853b7a60f0708e403
+
+Building DAG of jobs...
+Updating checkpoint dependencies.
+Provided cores: 1 (use --cores to define parallelism)
+Rules claiming more threads will be scaled down.
+Job stats:
+job              count
+-------------  -------
+expand_region        1
+consume              1
+all                  1
+total                3
+
+Select jobs to execute...
+Execute 1 jobs...
+
+[Mon Nov 23 03:39:16 2026]
+localcheckpoint expand_region:
+    input: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/roster/north.tsv
+    output: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/state/north.targets
+    jobid: 3
+    reason: Updated input files: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/roster/north.tsv
+    wildcards: region=north
+    resources: tmpdir=/Users/guo/.local/share/gsb-1109/claude-code/workers/GSB1109-20261119-U224-DE-PY-226-S-1/tmp, shell_exec=/bin/bash
+DAG of jobs will be updated after completion.
+[Mon Nov 23 03:39:17 2026]
+Finished jobid: 3 (Rule: expand_region)
+1 of 3 steps (33%) done
+Updating checkpoint dependencies.
+Select jobs to execute...
+Execute 1 jobs...
+
+[Mon Nov 23 03:39:17 2026]
+localrule produce_data:
+    input: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/roster/north.tsv
+    output: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv
+    jobid: 9
+    reason: Missing output files: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv; Updated input files: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/roster/north.tsv
+    wildcards: region=north
+    resources: tmpdir=/Users/guo/.local/share/gsb-1109/claude-code/workers/GSB1109-20261119-U224-DE-PY-226-S-1/tmp, shell_exec=/bin/bash
+[Mon Nov 23 03:39:17 2026]
+Finished jobid: 9 (Rule: produce_data)
+2 of 4 steps (50%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Mon Nov 23 03:39:17 2026]
+localrule consume:
+    input: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv
+    output: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/results/north.done
+    jobid: 2
+    reason: Input files updated by another job: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv
+    wildcards: region=north
+    resources: tmpdir=/Users/guo/.local/share/gsb-1109/claude-code/workers/GSB1109-20261119-U224-DE-PY-226-S-1/tmp, shell_exec=/bin/bash
+[Mon Nov 23 03:39:17 2026]
+Finished jobid: 2 (Rule: consume)
+3 of 4 steps (75%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Mon Nov 23 03:39:17 2026]
+localrule all:
+    input: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/state/north.targets, /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/results/north.done
+    jobid: 0
+    reason: Input files updated by another job: /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/results/north.done
+    resources: tmpdir=/Users/guo/.local/share/gsb-1109/claude-code/workers/GSB1109-20261119-U224-DE-PY-226-S-1/tmp, shell_exec=/bin/bash
+[Mon Nov 23 03:39:17 2026]
+Finished jobid: 0 (Rule: all)
+4 of 4 steps (100%) done
+Complete log(s): /Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/.snakemake/log/2026-11-23T033916.802416.snakemake.log
+Elapsed time: 0:00:00.463410

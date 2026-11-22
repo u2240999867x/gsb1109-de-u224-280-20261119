@@ -1,0 +1,572 @@
+[
+  {
+    "case": "1_siteA_layer2_pending",
+    "snapshot": "layer2_pending",
+    "config": {
+      "checkpoint_material": "data",
+      "producer_regions": "south"
+    },
+    "returncode": 1,
+    "first_missing_rule": "expand_region",
+    "first_missing_path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv",
+    "expected_rule": "expand_region",
+    "expected_checkpoint_complete": false,
+    "checkpoint_verdicts": [
+      [
+        "expand_region",
+        "incomplete"
+      ],
+      [
+        "pick_regions",
+        "incomplete"
+      ]
+    ],
+    "checkpoint_jobs_scheduled": [],
+    "previous_roster_read": true,
+    "previous_roster_digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "current_roster_digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+    "previous_roster_digest_actual": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "prefix_suffix_rejected": [
+      {
+        "target": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv",
+        "candidates": [
+          "produce_data"
+        ],
+        "rejected": [
+          "produce_data"
+        ]
+      }
+    ],
+    "derived_artifacts": [
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 21,
+        "wildcards": null
+      }
+    ],
+    "targets_content": null,
+    "intervention": {
+      "snapshot": "layer2_pending",
+      "changed": {
+        "checkpoint_material": "data",
+        "producer_regions": "south"
+      },
+      "dry_run": true
+    }
+  },
+  {
+    "case": "2_after_checkpoint_only",
+    "snapshot": "layer2_done_target_missing",
+    "config": {
+      "checkpoint_material": "roster",
+      "producer_regions": "south"
+    },
+    "returncode": 1,
+    "first_missing_rule": "consume",
+    "first_missing_path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv",
+    "expected_rule": "consume",
+    "expected_checkpoint_complete": true,
+    "checkpoint_verdicts": [
+      [
+        "expand_region",
+        "complete"
+      ],
+      [
+        "expand_region",
+        "incomplete"
+      ],
+      [
+        "pick_regions",
+        "complete"
+      ],
+      [
+        "pick_regions",
+        "incomplete"
+      ]
+    ],
+    "checkpoint_jobs_scheduled": [],
+    "previous_roster_read": true,
+    "previous_roster_digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "current_roster_digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+    "previous_roster_digest_actual": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "prefix_suffix_rejected": [
+      {
+        "target": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv",
+        "candidates": [
+          "produce_data"
+        ],
+        "rejected": [
+          "produce_data"
+        ]
+      }
+    ],
+    "derived_artifacts": [
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 21,
+        "wildcards": null
+      }
+    ],
+    "targets_content": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv\n",
+    "intervention": {
+      "snapshot": "layer2_done_target_missing",
+      "changed": {
+        "checkpoint_material": "roster",
+        "producer_regions": "south"
+      },
+      "dry_run": true
+    }
+  },
+  {
+    "case": "3_constraint_only_pending",
+    "snapshot": "layer2_pending",
+    "config": {
+      "checkpoint_material": "data",
+      "producer_regions": "north|south"
+    },
+    "returncode": 0,
+    "first_missing_rule": null,
+    "first_missing_path": null,
+    "expected_rule": null,
+    "expected_checkpoint_complete": false,
+    "checkpoint_verdicts": [
+      [
+        "expand_region",
+        "incomplete"
+      ],
+      [
+        "pick_regions",
+        "complete"
+      ],
+      [
+        "pick_regions",
+        "incomplete"
+      ]
+    ],
+    "checkpoint_jobs_scheduled": [],
+    "previous_roster_read": true,
+    "previous_roster_digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "current_roster_digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+    "previous_roster_digest_actual": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "prefix_suffix_rejected": [],
+    "derived_artifacts": [
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 21,
+        "wildcards": null
+      }
+    ],
+    "targets_content": null,
+    "intervention": {
+      "snapshot": "layer2_pending",
+      "changed": {
+        "checkpoint_material": "data",
+        "producer_regions": "north|south"
+      },
+      "dry_run": true
+    }
+  },
+  {
+    "case": "4_siteB_both_done_constraint_rejects",
+    "snapshot": "layer2_done_target_missing",
+    "config": {
+      "checkpoint_material": "roster",
+      "producer_regions": "south"
+    },
+    "returncode": 1,
+    "first_missing_rule": "consume",
+    "first_missing_path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv",
+    "expected_rule": "consume",
+    "expected_checkpoint_complete": true,
+    "checkpoint_verdicts": [
+      [
+        "expand_region",
+        "complete"
+      ],
+      [
+        "expand_region",
+        "incomplete"
+      ],
+      [
+        "pick_regions",
+        "complete"
+      ],
+      [
+        "pick_regions",
+        "incomplete"
+      ]
+    ],
+    "checkpoint_jobs_scheduled": [],
+    "previous_roster_read": true,
+    "previous_roster_digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "current_roster_digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+    "previous_roster_digest_actual": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "prefix_suffix_rejected": [
+      {
+        "target": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv",
+        "candidates": [
+          "produce_data"
+        ],
+        "rejected": [
+          "produce_data"
+        ]
+      }
+    ],
+    "derived_artifacts": [
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 21,
+        "wildcards": null
+      }
+    ],
+    "targets_content": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv\n",
+    "intervention": {
+      "snapshot": "layer2_done_target_missing",
+      "changed": {
+        "checkpoint_material": "roster",
+        "producer_regions": "south"
+      },
+      "dry_run": true
+    }
+  },
+  {
+    "case": "5_both_fixed",
+    "snapshot": "layer2_done_target_missing",
+    "config": {
+      "checkpoint_material": "roster",
+      "producer_regions": "north|south"
+    },
+    "returncode": 0,
+    "first_missing_rule": null,
+    "first_missing_path": null,
+    "expected_rule": null,
+    "expected_checkpoint_complete": null,
+    "checkpoint_verdicts": [
+      [
+        "expand_region",
+        "complete"
+      ],
+      [
+        "expand_region",
+        "incomplete"
+      ],
+      [
+        "pick_regions",
+        "complete"
+      ],
+      [
+        "pick_regions",
+        "incomplete"
+      ]
+    ],
+    "checkpoint_jobs_scheduled": [],
+    "previous_roster_read": true,
+    "previous_roster_digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "current_roster_digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+    "previous_roster_digest_actual": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "prefix_suffix_rejected": [],
+    "derived_artifacts": [
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 21,
+        "wildcards": null
+      }
+    ],
+    "targets_content": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv\n",
+    "intervention": {
+      "snapshot": "layer2_done_target_missing",
+      "changed": {
+        "checkpoint_material": "roster",
+        "producer_regions": "north|south"
+      },
+      "dry_run": true
+    }
+  },
+  {
+    "case": "6_previous_opens_but_not_basis",
+    "snapshot": "layer2_done_target_missing",
+    "config": {
+      "checkpoint_material": "roster",
+      "producer_regions": "north|south",
+      "audit_previous": true
+    },
+    "returncode": 0,
+    "first_missing_rule": null,
+    "first_missing_path": null,
+    "expected_rule": null,
+    "expected_checkpoint_complete": null,
+    "checkpoint_verdicts": [
+      [
+        "expand_region",
+        "complete"
+      ],
+      [
+        "expand_region",
+        "incomplete"
+      ],
+      [
+        "pick_regions",
+        "complete"
+      ],
+      [
+        "pick_regions",
+        "incomplete"
+      ]
+    ],
+    "checkpoint_jobs_scheduled": [],
+    "previous_roster_read": true,
+    "previous_roster_digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "current_roster_digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+    "previous_roster_digest_actual": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "prefix_suffix_rejected": [],
+    "derived_artifacts": [
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 21,
+        "wildcards": null
+      }
+    ],
+    "targets_content": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv\n",
+    "intervention": {
+      "snapshot": "layer2_done_target_missing",
+      "changed": {
+        "checkpoint_material": "roster",
+        "producer_regions": "north|south"
+      },
+      "dry_run": true
+    }
+  },
+  {
+    "case": "7_stale_targets_dry_run_skips",
+    "snapshot": "stale_targets_with_result",
+    "config": {
+      "checkpoint_material": "roster",
+      "producer_regions": "north|south",
+      "audit_previous": true
+    },
+    "returncode": 0,
+    "first_missing_rule": null,
+    "first_missing_path": null,
+    "expected_rule": null,
+    "expected_checkpoint_complete": null,
+    "checkpoint_verdicts": [
+      [
+        "expand_region",
+        "incomplete"
+      ],
+      [
+        "pick_regions",
+        "complete"
+      ],
+      [
+        "pick_regions",
+        "incomplete"
+      ]
+    ],
+    "checkpoint_jobs_scheduled": [],
+    "previous_roster_read": true,
+    "previous_roster_digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "current_roster_digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+    "previous_roster_digest_actual": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "prefix_suffix_rejected": [],
+    "derived_artifacts": [
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 21,
+        "wildcards": null
+      }
+    ],
+    "targets_content": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/south/records.tsv\n",
+    "intervention": {
+      "snapshot": "stale_targets_with_result",
+      "changed": {
+        "checkpoint_material": "roster",
+        "producer_regions": "north|south"
+      },
+      "dry_run": true
+    }
+  },
+  {
+    "case": "8_stale_targets_recomputed",
+    "snapshot": "stale_targets_with_result",
+    "config": {
+      "checkpoint_material": "roster",
+      "producer_regions": "north|south",
+      "audit_previous": true
+    },
+    "returncode": 0,
+    "first_missing_rule": null,
+    "first_missing_path": null,
+    "expected_rule": null,
+    "expected_checkpoint_complete": null,
+    "checkpoint_verdicts": [
+      [
+        "expand_region",
+        "complete"
+      ],
+      [
+        "expand_region",
+        "incomplete"
+      ],
+      [
+        "pick_regions",
+        "complete"
+      ],
+      [
+        "pick_regions",
+        "incomplete"
+      ]
+    ],
+    "checkpoint_jobs_scheduled": [
+      "expand_region:"
+    ],
+    "previous_roster_read": true,
+    "previous_roster_digest": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "current_roster_digest": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+    "previous_roster_digest_actual": "ab47c45a21ee54cfa9238ee44a4f0103d2bcd7881943cc05ad91dd2c986f0990",
+    "prefix_suffix_rejected": [],
+    "derived_artifacts": [
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 21,
+        "wildcards": null
+      },
+      {
+        "entries": [
+          {
+            "fields": [
+              "data/south/records.tsv"
+            ],
+            "scope": "north"
+          }
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/previous/north.tsv",
+        "phase": "startup",
+        "role": "previous_roster",
+        "rule": null,
+        "seq": 8,
+        "wildcards": null
+      },
+      {
+        "derived_from": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/roster/north.tsv",
+        "derived_from_sha256": "2f8e6b1f8620ca0e52974054b7bfabb2e9ffec8619a7e26111792d95add94205",
+        "entries": [
+          "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv"
+        ],
+        "event": "artifact",
+        "path": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/state/north.targets",
+        "phase": "startup",
+        "role": "targets",
+        "rule": null,
+        "seq": 16,
+        "wildcards": null
+      }
+    ],
+    "targets_content": "/Users/guo/Documents/GSB/1109/batches/accounts55-u224-20261123/control/questions/GSB1109-20261119-U224-DE-PY-226/workspace/diag_workflow/data/north/records.tsv\n",
+    "intervention": {
+      "snapshot": "stale_targets_with_result",
+      "changed": {
+        "checkpoint_material": "roster",
+        "producer_regions": "north|south"
+      },
+      "dry_run": false
+    }
+  }
+]
