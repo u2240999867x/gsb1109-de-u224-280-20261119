@@ -317,6 +317,56 @@ parser.comments
 
 See `test/test_normalization.py` file for more examples of a bit more complex queries.
 
+## Analyzing session audit logs
+
+`Parser` works on one SQL statement at a time.  Auditing concurrent
+sessions needs session/transaction context: temporary tables rebound behind
+savepoints, per-statement versus fixed read views, and logs that only
+guarantee statement order *within* a session.  The `audit` module layers
+that reasoning on top of `Parser` without changing any `Parser` behavior.
+
+```python
+from sql_metadata import AuditLog, IsolationLevel, SessionAuditAnalyzer
+
+rows = [
+    # session/transaction-tagged log rows; multi-statement SQL is split
+    # safely (semicolons inside strings and comments are respected)
+    {"id": "a-commit", "session": "writer", "transaction": "t1",
+     "sql": "BEGIN; "
+            "CREATE TEMPORARY TABLE stage AS SELECT * FROM source_b; "
+            "TRUNCATE TABLE p; INSERT INTO p SELECT * FROM stage; COMMIT"},
+    {"id": "b-audit-1", "session": "reader", "transaction": "t2",
+     "sql": "CREATE TEMPORARY TABLE stage AS SELECT * FROM source_other; "
+            "INSERT INTO audit_1 SELECT * FROM p"},
+    {"id": "b-audit-2", "session": "reader", "transaction": "t2",
+     "sql": "INSERT INTO audit_2 SELECT * FROM stage",
+     # cross-session order must be declared, never guessed
+     "happens_before": ["a-commit"]},
+]
+
+log = AuditLog(rows)
+result = SessionAuditAnalyzer(log).analyze(
+    writer_session="writer",
+    reader_session="reader",
+    permanent_table="p",
+    baseline_source="seed_old",
+    isolation=IsolationLevel.READ_COMMITTED,
+)
+
+[pair.name for pair in result.possibilities]
+# ['old-then-new', 'both-new']  — every consistent audit pairing for the level
+result.shared_ordering        # ('a-commit before b-audit-2',)
+result.unknown_orderings      # ('b-audit-1 vs a-commit',)
+[
+    (b.name, b.source) for b in result.effective_temp_bindings
+]  # surviving temp bindings after savepoint replay
+```
+
+Under `READ COMMITTED` each statement takes a fresh snapshot; under
+`REPEATABLE READ` one read view is fixed at the first query, so an
+old-then-new split across the audits is rejected.  See
+`test/test_audit.py` for the full two-session savepoint scenario.
+
 ## Migrating from `sql_metadata` 1.x / 2.x
 
 The `sql_metadata.compat` module (previously provided for v1 → v2 migration) has been **removed in v3**.  Port your code to the class-based `Parser` API shown in the examples above:
