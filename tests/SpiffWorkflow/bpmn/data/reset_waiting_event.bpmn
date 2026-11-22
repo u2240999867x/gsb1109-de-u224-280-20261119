@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="defs" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Evt_Process" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"><bpmn:outgoing>Flow_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:userTask id="User_1" name="User_1"><bpmn:incoming>Flow_0</bpmn:incoming><bpmn:outgoing>Flow_1</bpmn:outgoing></bpmn:userTask>
+    <bpmn:intermediateCatchEvent id="Catch_1" name="Catch_1"><bpmn:incoming>Flow_1</bpmn:incoming><bpmn:outgoing>Flow_2</bpmn:outgoing><bpmn:messageEventDefinition messageRef="Msg_1"/></bpmn:intermediateCatchEvent>
+    <bpmn:userTask id="After" name="After"><bpmn:incoming>Flow_2</bpmn:incoming><bpmn:outgoing>Flow_3</bpmn:outgoing></bpmn:userTask>
+    <bpmn:endEvent id="End_1"><bpmn:incoming>Flow_3</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_0" sourceRef="StartEvent_1" targetRef="User_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="User_1" targetRef="Catch_1"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Catch_1" targetRef="After"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="After" targetRef="End_1"/>
+  </bpmn:process>
+  <bpmn:message id="Msg_1" name="Msg_1"/>
+</bpmn:definitions>

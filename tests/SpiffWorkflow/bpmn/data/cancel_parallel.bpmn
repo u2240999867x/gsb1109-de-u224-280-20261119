@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="defs" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Cancel_Parallel" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"><bpmn:outgoing>Flow_1</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:parallelGateway id="Split"><bpmn:incoming>Flow_1</bpmn:incoming><bpmn:outgoing>Flow_2</bpmn:outgoing><bpmn:outgoing>Flow_3</bpmn:outgoing><bpmn:outgoing>Flow_4</bpmn:outgoing></bpmn:parallelGateway>
+    <bpmn:userTask id="Task_A" name="Task_A"><bpmn:incoming>Flow_2</bpmn:incoming><bpmn:outgoing>Flow_5</bpmn:outgoing></bpmn:userTask>
+    <bpmn:userTask id="Task_B" name="Task_B"><bpmn:incoming>Flow_3</bpmn:incoming><bpmn:outgoing>Flow_6</bpmn:outgoing></bpmn:userTask>
+    <bpmn:intermediateCatchEvent id="Task_C" name="Task_C"><bpmn:incoming>Flow_4</bpmn:incoming><bpmn:outgoing>Flow_7</bpmn:outgoing><bpmn:messageEventDefinition messageRef="Msg_C"/></bpmn:intermediateCatchEvent>
+    <bpmn:parallelGateway id="Join"><bpmn:incoming>Flow_5</bpmn:incoming><bpmn:incoming>Flow_6</bpmn:incoming><bpmn:incoming>Flow_7</bpmn:incoming><bpmn:outgoing>Flow_8</bpmn:outgoing></bpmn:parallelGateway>
+    <bpmn:endEvent id="End_1"><bpmn:incoming>Flow_8</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Split"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Split" targetRef="Task_A"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Split" targetRef="Task_B"/>
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Split" targetRef="Task_C"/>
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="Task_A" targetRef="Join"/>
+    <bpmn:sequenceFlow id="Flow_6" sourceRef="Task_B" targetRef="Join"/>
+    <bpmn:sequenceFlow id="Flow_7" sourceRef="Task_C" targetRef="Join"/>
+    <bpmn:sequenceFlow id="Flow_8" sourceRef="Join" targetRef="End_1"/>
+  </bpmn:process>
+  <bpmn:message id="Msg_C" name="Msg_C"/>
+</bpmn:definitions>

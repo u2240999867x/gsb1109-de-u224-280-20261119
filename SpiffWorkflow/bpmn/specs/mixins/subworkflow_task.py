@@ -40,9 +40,17 @@ class SubWorkflowTask(TaskSpec):
         self.transaction = transaction
 
     def _on_subworkflow_completed(self, subworkflow, my_task):
+        # Only the subprocess currently associated with this task may advance it.
+        # A late completion from a previous round (for example, a subprocess that
+        # was cancelled or replaced by a reset) must not release this task's slot,
+        # and a completion can never change a task that has already finished.
+        if my_task.workflow.top_workflow.subprocesses.get(my_task.id) is not subworkflow:
+            return
+        if my_task.has_state(TaskState.FINISHED_MASK):
+            return
         self.update_data(my_task, subworkflow)
         # I don't like manually moving back to ready, but don't want to run it
-        # Ideally, update hook would create the subprocess and return True, _run would start the subprocess and 
+        # Ideally, update hook would create the subprocess and return True, _run would start the subprocess and
         # return None (so that the state would transition to started), and the completed event for this task
         # could be used to run post-completed actions automatically.
         # However, until I align the events with state transitions, I don't want to encourage external use of

@@ -356,15 +356,33 @@ class Task:
         - `None`: mark the task STARTED
 
         Returns:
-            The value returned by the `TaskSpec`'s run method.
+            The value returned by the `TaskSpec`'s run method, or None if the
+            task was not run.
+
+        Notes:
+            Running a finished (completed, cancelled, or errored) task has no
+            effect; a finished task can never be run again, so replays of
+            already delivered results are harmless.
 
         See `TaskState` for more information about states.
         """
+        if self.has_state(TaskState.FINISHED_MASK):
+            logger.warning(
+                f'Ignoring run of task in state {TaskState.get_name(self.state)}',
+                extra=self.collect_log_extras(),
+            )
+            return None
         retval = self.task_spec._run(self)
         if retval is None:
             self._set_state(TaskState.STARTED)
         elif retval is False:
             self.error()
+        elif self.has_state(TaskState.CANCELLED):
+            # The task was cancelled as a result of its own run (eg, a Cancel
+            # task cancels the workflow, including itself); the run still
+            # completes it.
+            self._set_state(TaskState.COMPLETED)
+            self.task_spec._on_complete(self)
         else:
             self.complete()
         return retval
@@ -380,12 +398,34 @@ class Task:
             self.task_spec._on_cancel(self)
 
     def complete(self) -> None:
-        """Marks this task complete."""
+        """Marks this task complete.
+
+        Completing a finished (completed, cancelled, or errored) task has no
+        effect; a late confirmation cannot change a result that has already
+        been determined, so the caller can identify it as one that requires
+        reconciliation from the task's unchanged state.
+        """
+        if self.has_state(TaskState.FINISHED_MASK):
+            logger.warning(
+                f'Ignoring completion of task in state {TaskState.get_name(self.state)}',
+                extra=self.collect_log_extras(),
+            )
+            return
         self._set_state(TaskState.COMPLETED)
         self.task_spec._on_complete(self)
 
     def error(self) -> None:
-        """Marks this task as error."""
+        """Marks this task as error.
+
+        Putting a finished (completed, cancelled, or errored) task in the
+        ERROR state has no effect; a determined result cannot be changed.
+        """
+        if self.has_state(TaskState.FINISHED_MASK):
+            logger.warning(
+                f'Ignoring error of task in state {TaskState.get_name(self.state)}',
+                extra=self.collect_log_extras(),
+            )
+            return
         self._set_state(TaskState.ERROR)
         self.task_spec._on_error(self)
 

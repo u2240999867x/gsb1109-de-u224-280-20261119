@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="defs" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Top_Process" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"><bpmn:outgoing>Flow_1</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:callActivity id="Call_Sub" name="Call_Sub" calledElement="Sub_Process"><bpmn:incoming>Flow_1</bpmn:incoming><bpmn:outgoing>Flow_2</bpmn:outgoing></bpmn:callActivity>
+    <bpmn:endEvent id="End_1"><bpmn:incoming>Flow_2</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Call_Sub"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Call_Sub" targetRef="End_1"/>
+  </bpmn:process>
+  <bpmn:process id="Sub_Process" isExecutable="true">
+    <bpmn:startEvent id="Sub_Start"><bpmn:outgoing>Flow_3</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:userTask id="Sub_User" name="Sub_User"><bpmn:incoming>Flow_3</bpmn:incoming><bpmn:outgoing>Flow_4</bpmn:outgoing></bpmn:userTask>
+    <bpmn:endEvent id="Sub_End"><bpmn:incoming>Flow_4</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Sub_Start" targetRef="Sub_User"/>
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Sub_User" targetRef="Sub_End"/>
+  </bpmn:process>
+</bpmn:definitions>

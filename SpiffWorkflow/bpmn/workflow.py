@@ -54,6 +54,7 @@ class BpmnWorkflow(BpmnBaseWorkflow):
         self.correlations = {}
         self.event_manager = EventManager(self)
         super().__init__(spec, **kwargs)
+        self.task_removed_event.connect(self._remove_task_from_event_manager)
 
         for obj in self.spec.data_objects:
             self.data['data_objects'][obj] = None
@@ -85,12 +86,26 @@ class BpmnWorkflow(BpmnBaseWorkflow):
 
     def create_subprocess(self, my_task, spec_name):
         # This creates a subprocess for an existing task
+        existing = self.subprocesses.get(my_task.id)
+        if existing is not None and not existing.completed:
+            # A task's slot can only be reassigned once the previous subprocess
+            # has finished (or its cancellation has been confirmed)
+            raise WorkflowException(
+                f'Task {my_task.task_spec.name} already has an active subprocess',
+                task_spec=my_task.task_spec,
+            )
         subprocess = BpmnSubWorkflow(
             self.subprocess_specs[spec_name],
             parent_task_id=my_task.id,
             top_workflow=self)
         self.subprocesses[my_task.id] = subprocess
         return subprocess
+
+    def _remove_task_from_event_manager(self, workflow, task):
+        # Tasks removed from the tree (eg, by a reset or cancel) must no longer
+        # catch events; otherwise a stale registration could consume an event
+        # intended for a subsequent round.
+        self.event_manager.remove_task(task)
 
     def get_subprocess(self, my_task):
         return self.subprocesses.get(my_task.id)
