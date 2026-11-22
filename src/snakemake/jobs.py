@@ -45,6 +45,12 @@ from snakemake.io import (
     get_flag_value,
     wait_for_files,
 )
+from snakemake.persistence import MetadataRecord
+from snakemake.persistence.update_attempts import (
+    UpdateAttemptStore,
+    file_stat,
+    maybe_crash,
+)
 from snakemake.iocontainers import ResourceList, Wildcards
 from snakemake.settings.types import SharedFSUsage
 from snakemake.resources import GroupResources, Resources
@@ -225,6 +231,9 @@ class Job(
         "_queue_input",
         "_aux_resources",
         "_non_derived_params",
+        "_update_attempt_id",
+        "_update_attempt_started",
+        "_previous_metadata",
     ]
 
     def __init__(
@@ -281,6 +290,9 @@ class Job(
 
         self._attempt = self.dag.workflow.attempt
         self._aux_resources = dict()
+        self._update_attempt_id = None
+        self._update_attempt_started = False
+        self._previous_metadata = {}
 
         # TODO get rid of these
         self.temp_output, self.protected_output = set(), set()
@@ -663,6 +675,172 @@ class Job(
         return f_
 
     @property
+    def update_outputs(self) -> list[_IOFile]:
+        return [f for f in self.output if is_flagged(f, "update")]
+
+    def _update_store(self) -> UpdateAttemptStore:
+        return self.dag.workflow.persistence.update_attempts
+
+    def _unit_outputs(self) -> list[_IOFile]:
+        """The complete set of outputs that must commit together.
+
+        The unit is one job attempt, not a Snakemake group: the requirement is
+        that all outputs *declared by the attempt* become consumable in one
+        step.  Jobs inside a Snakemake group keep their own records.
+        """
+        return list(self.output)
+
+    def _ensure_attempt_record(self, store: UpdateAttemptStore) -> str:
+        if self._update_attempt_id is not None:
+            return self._update_attempt_id
+        run_id = self.dag.workflow.run_id
+        group_key = self.unit_key
+        attempt_id = UpdateAttemptStore.attempt_id(run_id, group_key, self.attempt)
+        self._update_attempt_id = attempt_id
+        return attempt_id
+
+    @property
+    def unit_key(self) -> str:
+        """Stable identity of the commit unit across retries and restarts."""
+        return f"job:{self.uuid()}"
+
+    def _previous_metadata_snapshot(self) -> dict[str, dict]:
+        result = {}
+        for f in self._unit_outputs():
+            record = self.dag.workflow.persistence.metadata(f)
+            if record is not None:
+                result[str(f)] = record.model_dump()
+        return result
+
+    def _record_pre_existing_outputs(self, store: UpdateAttemptStore) -> None:
+        attempt_id = self._ensure_attempt_record(store)
+        for f in self._unit_outputs():
+            stat_info = file_stat(f)
+            store.set_pre_existing(attempt_id, str(f), stat_info)
+            if not self.shadow_dir and is_flagged(f, "update"):
+                # Without a shadow directory the job writes directly to the
+                # final path, so the pre-attempt stat is its comparison seed.
+                store.set_seed(attempt_id, str(f), "previous_file", stat_info)
+
+    def _seed_update_candidate(self, store: UpdateAttemptStore) -> None:
+        """Place the last committed bytes into the isolated shadow candidate.
+
+        The on-disk file must not be trusted here: after a failure it may have
+        been restored from a backup, or it may hold bytes from an attempt that
+        never reached a group commit.  Only the snapshot belonging to the latest
+        complete group (or, when no attempt was ever seen, the pre-existing
+        original) is used.
+        """
+        if not self.shadow_dir:
+            return
+        attempt_id = self._ensure_attempt_record(store)
+        for f in self.update_outputs:
+            shadow_path = os.path.join(self.shadow_dir, str(f))
+            seed_path = None
+            source = None
+            if store.group_has_uncommitted_attempt(
+                self.unit_key, exclude_attempt_id=attempt_id
+            ):
+                seed_path = store.snapshot_for(self.unit_key, str(f))
+                source = seed_path
+            elif os.path.exists(str(f)):
+                # No previous uncommitted attempt; the current bytes are the
+                # version this attempt is allowed to build upon.
+                source = str(f)
+            if source is None:
+                continue
+            os.makedirs(os.path.dirname(shadow_path) or ".", exist_ok=True)
+            try:
+                if os.path.isdir(source) and not os.path.islink(source):
+                    if os.path.exists(shadow_path):
+                        shutil.rmtree(shadow_path)
+                    shutil.copytree(source, shadow_path, copy_function=shutil.copy2)
+                else:
+                    if os.path.lexists(shadow_path):
+                        os.remove(shadow_path)
+                    shutil.copy2(source, shadow_path)
+            except OSError as err:  # pragma: no cover - permissions
+                raise WorkflowError(
+                    f"Failed to prepare isolated update candidate for {f}: {err}",
+                    rule=self.rule,
+                )
+            persisted = store.save_seed(attempt_id, str(f), shadow_path)
+            store.set_seed(
+                attempt_id,
+                str(f),
+                "committed_snapshot" if seed_path else "previous_file",
+                file_stat(shadow_path),
+            )
+
+    def _observe_candidates(self, store: UpdateAttemptStore) -> None:
+        """Record what the attempt actually left in its isolated candidate."""
+        attempt_id = self._update_attempt_id
+        if attempt_id is None:
+            record = store.attempt_for(
+                self.dag.workflow.run_id, self.unit_key
+            ) or store.attempt_for(None, self.unit_key)
+            if record is None:
+                return
+            attempt_id = record.get("attempt_id")
+            self._update_attempt_id = attempt_id
+        for f in self.update_outputs:
+            if self.shadow_dir:
+                # The isolated candidate is the only place this attempt was
+                # allowed to write.  The final path may already have been
+                # restored and must not be mistaken for the attempt's output.
+                location = os.path.join(self.shadow_dir, str(f))
+            else:
+                location = str(f)
+            persisted = store.save_candidate(attempt_id, str(f), location)
+            if persisted is None:
+                # The attempt never produced this (update) output.  Record that
+                # explicitly so a later restore of another output cannot be
+                # read as production of this one.
+                store.set_candidate(attempt_id, str(f), file_stat(location))
+                continue
+            # Compare the same path before/after the attempt.  A persisted copy
+            # would always differ in inode/ctime and thus fake a write.
+            store.set_candidate(
+                attempt_id,
+                str(f),
+                file_stat(location),
+                candidate_location=persisted,
+            )
+            # The candidate bytes and their stat are durable at this point.
+            # This barrier therefore models a crash after the isolated write
+            # but before any commit record exists.
+            maybe_crash("candidate_written")
+
+    def _register_output(self, f: _IOFile) -> None:
+        store = self._update_store()
+        attempt_id = self._ensure_attempt_record(store)
+        store.register_output(attempt_id, str(f), file_stat(f))
+        maybe_crash("output_registered")
+
+    def _commit_group(self) -> bool:
+        """Write the consumable group record after all outputs registered."""
+        store = self._update_store()
+        attempt_id = self._ensure_attempt_record(store)
+        record = store.read_attempt(attempt_id)
+        if record is None:
+            return False
+        outputs = {}
+        for f in self._unit_outputs():
+            stat_info = file_stat(f)
+            if not stat_info.get("exists"):
+                return False
+            outputs[str(f)] = dict(stat_info, local_path=str(f))
+        committed = store.write_group(
+            group_id=self.unit_key,
+            attempt_id=attempt_id,
+            run_id=self.dag.workflow.run_id,
+            job_id=str(self.jobid),
+            rule=self.rule.name,
+            outputs=outputs,
+        )
+        return committed is not None
+
+    @property
     async def output_mintime(self):
         """Return oldest output file."""
 
@@ -808,6 +986,8 @@ class Job(
             if self.benchmark:
                 self.benchmark.prepare()
 
+        self._begin_update_attempt()
+
         # wait for input files, respecting keep_storage_local
         try:
             await wait_for_files(
@@ -832,7 +1012,6 @@ class Job(
             dir=self.rule.workflow.persistence.shadow_path
         )
         cwd = os.getcwd()
-
         # "minimal" creates symlinks only to the input files in the shadow directory
         # "copy-minimal" creates copies instead
         if (
@@ -904,6 +1083,31 @@ class Job(
                     relative_source = os.path.relpath(source)
                     link = os.path.join(self.shadow_dir, relative_source)
                     os.symlink(source, link)
+
+        self._seed_update_candidate(self._update_store())
+
+    def _begin_update_attempt(self) -> None:
+        """Record the attempt even if it crashes before any output appears."""
+        if self.is_norun or not self.update_outputs:
+            return
+        store = self._update_store()
+        attempt_id = self._ensure_attempt_record(store)
+        self._previous_metadata = self._previous_metadata_snapshot()
+        store.begin(
+            attempt_id=attempt_id,
+            run_id=self.dag.workflow.run_id,
+            group_id=self.unit_key,
+            job_id=str(self.jobid),
+            rule=self.rule.name,
+            attempt=self.attempt,
+            shadow=bool(self.is_shadow),
+            outputs=[str(f) for f in self._unit_outputs()],
+            update_outputs=[str(f) for f in self.update_outputs],
+            previous_metadata=self._previous_metadata,
+        )
+        self._update_attempt_started = True
+        self._record_pre_existing_outputs(store)
+        maybe_crash("attempt_started")
 
     def is_pipe_or_service_input(self, path) -> bool:
         for dep, files in self.dag.dependencies[self].items():
@@ -1178,10 +1382,61 @@ class Job(
                 or (self.dag.workflow.remote_exec and not shared_input_output)
                 or self.is_local
             ):
+                # Persist what the attempt really wrote before restoring or
+                # unshadowing.  This is what keeps the evidence alive when the
+                # visible file is put back to its previous bytes afterwards.
+                self._observe_candidates(self._update_store())
                 for f in self.output:
                     if is_flagged(f, "update"):
                         if error:
-                            if self.dag.workflow.persistence.restore_output(Path(f)):
+                            store = self._update_store()
+                            prior = store.recorded_restore(
+                                self._update_attempt_id,
+                                str(f),
+                                run_id=self.dag.workflow.run_id,
+                                unit_key=self.unit_key,
+                            )
+                            if prior is not None:
+                                # postprocess(error=True) can run more than once
+                                # for the same attempt.  Do not try to restore a
+                                # backup that has already been consumed, and do
+                                # not let the second pass delete the restored file.
+                                skip_cleanup_outputs.add(f)
+                                continue
+                            backup = Path(
+                                self.dag.workflow.persistence._get_backup_path(Path(f))
+                            )
+                            before = file_stat(f)
+                            restored = self.dag.workflow.persistence.restore_output(
+                                Path(f)
+                            )
+                            reason = "job_failure"
+                            if not restored:
+                                # The ordinary backup can be missing (e.g. the
+                                # job ran in a killed subprocess).  Fall back to
+                                # the bytes recorded before this attempt, so the
+                                # previous snapshot stays usable.
+                                source = store.restore_pre_attempt(
+                                    self._update_attempt_id, str(f)
+                                )
+                                if source is not None:
+                                    restored = True
+                                    backup = Path(source)
+                                    reason = "job_failure_journal"
+                            store.record_restore(
+                                attempt_id=self._update_attempt_id,
+                                path=str(f),
+                                backup=str(backup),
+                                restored=restored,
+                                before_stat=before,
+                                after_stat=file_stat(f),
+                                run_id=self.dag.workflow.run_id,
+                                unit_key=self.unit_key,
+                                reason=reason,
+                            )
+                            store.note_restore(self._update_attempt_id, str(f), restored)
+                            maybe_crash("output_restored")
+                            if restored:
                                 logger.warning(
                                     f"Restored previous version of {fmt_iofile(f)} "
                                     "(updating job failed)."
@@ -1216,6 +1471,9 @@ class Job(
                         f"Keeping shadow directory: {kept_directory}.\n"
                         + "Run snakemake with --cleanup-shadow to clean up shadow directories."
                     )
+                # Barrier: visible bytes have been moved into place but the
+                # complete group record has not been written yet.
+                maybe_crash("candidate_unshadowed")
 
                 if (
                     not error
@@ -1259,6 +1517,26 @@ class Job(
                 "({}). Please ensure write permissions for the "
                 "directory {}".format(e, self.dag.workflow.persistence.path)
             )
+
+        if error:
+            if self._update_attempt_started:
+                self._update_store().finish(
+                    self._update_attempt_id, success=False, error="job failed"
+                )
+                maybe_crash("attempt_failed")
+        else:
+            # Register every declared output before the group record.  A crash
+            # between two registrations leaves files on disk for which no
+            # complete group exists; the next run must not reuse them.
+            if self._update_attempt_started:
+                for f in self._unit_outputs():
+                    self._register_output(f)
+                maybe_crash("before_group_commit")
+                complete = self._commit_group()
+                self._update_store().finish(
+                    self._update_attempt_id, success=complete
+                )
+                maybe_crash("group_committed")
 
         if error and not self.dag.workflow.execution_settings.keep_incomplete:
             await self.cleanup(skip_cleanup_outputs)

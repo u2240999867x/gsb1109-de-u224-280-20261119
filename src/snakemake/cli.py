@@ -1282,6 +1282,17 @@ def get_argument_parser(
             "workflow. This can be used e.g. for identifying leftover files. Hidden files "
             "and directories are ignored.",
         )
+        group_utils.add_argument(
+            "--update-status",
+            nargs="*",
+            metavar="FILE",
+            default=None,
+            help="Print, as JSON, the three separate views of update() evidence: "
+            "what is currently consumable, what each attempt did (including bytes "
+            "written in isolated shadow candidates that were later restored), and "
+            "which restore actions happened. Optionally restrict to the given "
+            "output files.",
+        )
         group_delete_output = group_utils.add_mutually_exclusive_group()
         group_delete_output.add_argument(
             "--delete-all-output",
@@ -2315,6 +2326,8 @@ def args_to_api(args, parser):
                         dag_api.list_changes(ChangeType.PARAMS)
                     elif args.list_untracked:
                         dag_api.list_untracked()
+                    elif args.update_status is not None:
+                        dag_api.update_status(args.update_status or None)
                     elif args.summary:
                         dag_api.summary()
                     elif args.detailed_summary:

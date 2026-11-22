@@ -7,6 +7,7 @@ from typing import ClassVar
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import hashlib
+import json
 import re
 import os
 import subprocess
@@ -25,6 +26,7 @@ from datetime import datetime
 import tarfile
 import tempfile
 from typing import Callable, Dict, Iterable, List, Optional, Set, Union, Any
+import uuid
 
 from snakemake.deployment import EnvSpecs
 from snakemake.io.flags.access_patterns import AccessPatternFactory
@@ -232,6 +234,9 @@ class Workflow(WorkflowExecutorInterface):
         self._storage_registry = StorageRegistry(self)
         self._source_archive = None
         self._checkpoints = Checkpoints()
+        # Stable identity of this workflow invocation.  It distinguishes
+        # attempts from different runs in the update-attempt journal.
+        self._run_id = uuid.uuid4().hex
 
         self._async_runners = dict()
         self._async_executor = ThreadPoolExecutor()
@@ -282,11 +287,15 @@ class Workflow(WorkflowExecutorInterface):
         return runner.run(coro)
 
     @property
+    def run_id(self) -> str:
+        """Stable identity of this workflow invocation."""
+        return self._run_id
+
+    @property
     def info_header(self):
         import sys
         import getpass
         from snakemake import __version__
-        import uuid
         import json
         import hashlib
 
@@ -1041,6 +1050,33 @@ class Workflow(WorkflowExecutorInterface):
         items = self.async_run(self.dag.get_outputs_with_changes(change_type))
         if items:
             print(*items, sep="\n")
+
+    def update_status(self, paths: List[str] | None = None):
+        """Print the three separate views of update-attempt evidence.
+
+        The output deliberately distinguishes what is currently consumable from
+        what an attempt did and from which restore actions happened.  A path
+        that exists is not by itself evidence that this round produced it.
+        """
+        assert self.dag_settings is not None
+        self._prepare_dag(
+            forceall=False, ignore_incomplete=True, lock_warn_only=True
+        )
+        # Deliberately do not build the DAG: this report is read-only and must
+        # not trigger interrupted-attempt recovery or any other side effect.
+        store = self.persistence.update_attempts
+        report = store.report(paths=paths)
+        print(
+            json.dumps(
+                {
+                    "consumable": report["consumable"],
+                    "attempts": report["attempts"],
+                    "restores": report["restores"],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
 
     def archive(self, path: Path):
         """Archive the workflow.

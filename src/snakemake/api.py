@@ -833,6 +833,16 @@ class DAGApi(ApiBase):
         self.workflow_api._workflow.list_untracked()
 
     @_no_exec
+    def update_status(self, paths: Optional[List[str]] = None):
+        """Print the separate views of update-attempt evidence.
+
+        Arguments
+        ---------
+        paths: list of str -- Restrict the report to these output paths.
+        """
+        self.workflow_api._workflow.update_status(paths=paths)
+
+    @_no_exec
     def summary(self, detailed: bool = False):
         """Summarize the workflow.
 

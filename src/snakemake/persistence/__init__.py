@@ -23,6 +23,7 @@ from sqlmodel import SQLModel, Field
 
 from snakemake.io import get_flag_value, is_flagged, _IOFile, IOCache
 from snakemake.logging import logger
+from snakemake.persistence.update_attempts import UpdateAttemptStore
 import snakemake.exceptions
 
 RECORD_FORMAT_VERSION = 7
@@ -147,9 +148,9 @@ class FileBackupMixin:
         backup_path = self._get_backup_path(path)
         backup_path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_dir():
-            shutil.copytree(path, backup_path)
+            shutil.copytree(path, backup_path, copy_function=shutil.copy2)
         else:
-            shutil.copy(path, backup_path)
+            shutil.copy2(path, backup_path)
 
     def restore_output(self, path: Path) -> bool:
         backup_path = self._get_backup_path(path)
@@ -159,11 +160,11 @@ class FileBackupMixin:
         elif backup_path.is_dir():
             if path.exists():
                 shutil.rmtree(path)
-            shutil.copytree(backup_path, path)
+            shutil.copytree(backup_path, path, copy_function=shutil.copy2)
             shutil.rmtree(backup_path)
             return True
         else:
-            shutil.copy(backup_path, path)
+            shutil.copy2(backup_path, path)
             backup_path.unlink()
             return True
 
@@ -195,6 +196,7 @@ class PersistenceBase(
         else:
             self._path = path
         os.makedirs(self.path, exist_ok=True)
+        self.update_attempts = UpdateAttemptStore(self.path)
 
         self.dag = dag
 
@@ -381,6 +383,16 @@ class PersistenceBase(
         key = self._get_key(target)
         self._unmark_incomplete(key)
         return self._delete_record(key)
+
+    def unmark_incomplete(self, target: Any) -> None:
+        """Clear the incomplete marker without touching the metadata record.
+
+        Used when an interrupted update attempt has been rolled back to the
+        last complete group: the visible bytes are known-good even though the
+        attempt itself did not finish.
+        """
+        self._clear_cache()
+        self._unmark_incomplete(self._get_key(target))
 
     def started(self, job: Any, external_jobid: str | None = None) -> None:
         self._clear_cache()

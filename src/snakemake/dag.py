@@ -66,6 +66,7 @@ from snakemake.exceptions import (
 from snakemake.settings.types import PrintDag
 from snakemake.io import (
     _IOFile,
+    IOFile,
     PeriodicityDetector,
     flags,
     get_flag_value,
@@ -272,6 +273,8 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
             self.forcefiles.update(job.output)
 
         self.cleanup()
+
+        self.recover_interrupted_update_attempts()
 
         await self.check_incomplete()
 
@@ -513,6 +516,39 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
     def update_output_index(self):
         """Update the OutputIndex."""
         self.output_index = OutputIndex(self.rules)
+
+    def recover_interrupted_update_attempts(self) -> None:
+        """Recover update outputs whose attempt never reached a group commit.
+
+        A visible file is not proof that the current round produced it: it can
+        be the last committed snapshot (after a failed attempt was restored) or
+        a leftover of a crash.  Only paths backed by a complete group record
+        may be treated as reusable.  Everything else is forced to run again.
+        """
+        store = self.workflow.persistence.update_attempts
+        if not store.has_uncommitted_attempt():
+            return
+        all_outputs = [str(f) for job in self.jobs for f in job.output]
+        recovered = store.recover_interrupted(valid_outputs=all_outputs)
+        if not recovered:
+            return
+        for path, state in recovered.items():
+            logger.warning(
+                f"Update output {path} had no complete commit record ({state}); "
+                "it will not be reused by this run."
+            )
+            if state in (
+                "restored_from_previous_commit",
+                "left_untouched",
+                "not_produced",
+            ):
+                # The visible bytes are the last complete group (or an
+                # untouched pre-existing file), so they are safe to leave on
+                # disk.  The incomplete marker of the abandoned attempt would
+                # otherwise abort the restart before the rerun can happen.
+                self.workflow.persistence.unmark_incomplete(IOFile(path))
+        self.forcefiles.update(recovered)
+        self.workflow.persistence.deactivate_cache()
 
     async def check_incomplete(self):
         """Check if any output files are incomplete. This is done by looking up

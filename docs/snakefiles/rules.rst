@@ -3663,6 +3663,47 @@ This ensures that Snakemake does not search for a producing job but instead cons
 As can be seen, this way it is even possible to break a cyclic dependency.
 An important helper for setting up the logic of ``before_update`` is the :ref:`exists function <snakefiles-semantic-helpers-exists>`, which allows to e.g. condition the consideration of the file that shall be used before the update by its actual existence before the update.
 
+Attempt evidence and group commits
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A readable file is not proof that the *current* attempt produced it: a failed
+attempt is rolled back to the previous bytes, and a file may have existed before
+the workflow started. Snakemake therefore keeps a separate journal for jobs with
+``update()`` outputs in ``.snakemake/update_attempts/``:
+
+* One record per attempt, capturing whether each declared output pre-existed,
+  the bytes the isolated ``shadow:`` candidate was seeded from, what the
+  candidate actually contained afterwards (content hash, size, mtime and
+  inode/ctime), and which outputs were registered.
+* A *consumable* record per attempt, written only after **all** outputs declared
+  by the attempt have been registered. A crash between two registrations leaves
+  outputs on disk without such a record; those are never reused and are forced
+  to run again on the next invocation.
+* An append-only log of backup restores, so that a path that is readable again
+  because it was restored is not mistaken for production by the current round.
+
+When a job declares several outputs (for example an orders table and an
+exceptions table), all of them are part of the same commit unit. The commit
+record is only written once every one of them is present and registered; this
+is what a downstream consumer may rely on.
+
+Under the ``shadow:`` directive, ``update()`` outputs are seeded into the
+isolated candidate from the last complete commit (or from the pre-existing file),
+not from whatever bytes happen to be at the final path after an interrupted run.
+The evidence written before restoring or unshadowing therefore survives even
+when the visible file ends up byte-for-byte identical to its previous version.
+
+Inspect the three separate views with:
+
+.. code-block:: console
+
+    $ snakemake --update-status [FILE ...]
+
+This prints JSON with ``consumable`` (which complete group backs the currently
+readable bytes, plus whether this round produced them), ``attempts`` (what each
+attempt did) and ``restores`` (which backup actions happened). Without file
+arguments, all recorded outputs are reported.
+
 .. _snakefiles-procedural-rules:
 
 Procedural rule definition
