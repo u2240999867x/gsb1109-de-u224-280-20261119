@@ -1,6 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 from .core import *
+from .archive import *
 from .graph import *
 from .sources import *
 from .sinks import *

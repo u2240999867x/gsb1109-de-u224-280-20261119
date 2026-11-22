@@ -19,6 +19,7 @@ Stream
    collect
    combine_latest
    delay
+   DeviceHourArchive
    filter
    flatten
    map
