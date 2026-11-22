@@ -73,6 +73,14 @@ Diffs
 
    diffs
 
+Backfill Coordination
+---------------------
+
+.. toctree::
+   :maxdepth: 2
+
+   backfill
+
 Logging
 -------
 
