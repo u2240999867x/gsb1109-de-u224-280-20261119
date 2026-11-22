@@ -1,0 +1,259 @@
+{
+  "description": "Order records for the old schema and the same orders with the renamed columns. Every 'old' record and its 'new' twin are the same business order, so the legacy rule on the old record and the migrated rule on the new record must agree.",
+  "columns": {
+    "old": [
+      "rate",
+      "total",
+      "fee"
+    ],
+    "new": [
+      "rate",
+      "total",
+      "entry"
+    ]
+  },
+  "defaults": {
+    "note": "rate total fee",
+    "partner": {
+      "rate": 3,
+      "total": 9,
+      "fee": 5
+    },
+    "orders": [
+      {
+        "amount": 10,
+        "qty": 6,
+        "slices": [
+          1,
+          2
+        ]
+      },
+      {
+        "amount": 20,
+        "qty": 2,
+        "slices": [
+          0,
+          3
+        ]
+      }
+    ]
+  },
+  "records": [
+    {
+      "id": "standard_match",
+      "note": "standard selector picks the old rate value, which is the new total column; every clause holds",
+      "old": {
+        "rate": 17,
+        "total": 120,
+        "fee": 5,
+        "selector": "standard"
+      },
+      "new": {
+        "rate": 120,
+        "total": 17,
+        "entry": 5,
+        "selector": "standard"
+      }
+    },
+    {
+      "id": "swap_distinct",
+      "note": "rate and total differ and lie on opposite sides of the comparison; a naive sequential replace of rate->total then total->rate turns this into 'total < total' and evaluates False",
+      "old": {
+        "rate": 17,
+        "total": 95,
+        "fee": 5,
+        "selector": "standard"
+      },
+      "new": {
+        "rate": 95,
+        "total": 17,
+        "entry": 5,
+        "selector": "standard"
+      }
+    },
+    {
+      "id": "promo_match",
+      "note": "promo selector picks the old total value, which is the new rate column",
+      "old": {
+        "rate": 17,
+        "total": 120,
+        "fee": 5,
+        "selector": "promo"
+      },
+      "new": {
+        "rate": 120,
+        "total": 17,
+        "entry": 5,
+        "selector": "promo"
+      }
+    },
+    {
+      "id": "negative_fee",
+      "note": "the free field fails its guard; fee -> entry must still read the outer input",
+      "old": {
+        "rate": 17,
+        "total": 120,
+        "fee": -1,
+        "selector": "standard"
+      },
+      "new": {
+        "rate": 120,
+        "total": 17,
+        "entry": -1,
+        "selector": "standard"
+      }
+    },
+    {
+      "id": "partner_has_same_names",
+      "note": "partner.rate / partner.total / partner.fee are attributes of another object and must not be renamed",
+      "old": {
+        "rate": 17,
+        "total": 120,
+        "fee": 5,
+        "selector": "standard",
+        "partner": {
+          "rate": 99,
+          "total": 1,
+          "fee": 5
+        }
+      },
+      "new": {
+        "rate": 120,
+        "total": 17,
+        "entry": 5,
+        "selector": "standard",
+        "partner": {
+          "rate": 99,
+          "total": 1,
+          "fee": 5
+        }
+      }
+    },
+    {
+      "id": "outer_entry_field_used_in_body",
+      "note": "the outer field 'entry' (old fee) is read inside the comprehension body and condition, where the local variable of the same name would otherwise capture it",
+      "old": {
+        "rate": 17,
+        "total": 120,
+        "fee": 5,
+        "selector": "standard",
+        "orders": [
+          {
+            "amount": 10,
+            "qty": 6,
+            "slices": [
+              1,
+              2
+            ]
+          },
+          {
+            "amount": 20,
+            "qty": 2,
+            "slices": [
+              0,
+              3
+            ]
+          }
+        ]
+      },
+      "new": {
+        "rate": 120,
+        "total": 17,
+        "entry": 5,
+        "selector": "standard",
+        "orders": [
+          {
+            "amount": 10,
+            "qty": 6,
+            "slices": [
+              1,
+              2
+            ]
+          },
+          {
+            "amount": 20,
+            "qty": 2,
+            "slices": [
+              0,
+              3
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "inner_local_collision",
+      "note": "an inner comprehension binds the new column name and also tests the outer column; renaming the local is what keeps the two values apart",
+      "old": {
+        "rate": 17,
+        "total": 120,
+        "fee": 5,
+        "selector": "standard",
+        "orders": [
+          {
+            "amount": 10,
+            "qty": 6,
+            "slices": [
+              1,
+              2,
+              3
+            ]
+          }
+        ]
+      },
+      "new": {
+        "rate": 120,
+        "total": 17,
+        "entry": 5,
+        "selector": "standard",
+        "orders": [
+          {
+            "amount": 10,
+            "qty": 6,
+            "slices": [
+              1,
+              2,
+              3
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "no_orders_match",
+      "note": "the comprehension is empty, so $sum is 0 and the whole rule is false under both texts",
+      "old": {
+        "rate": 17,
+        "total": 120,
+        "fee": 5,
+        "selector": "standard",
+        "orders": [
+          {
+            "amount": 20,
+            "qty": 1,
+            "slices": [
+              1,
+              2
+            ]
+          }
+        ]
+      },
+      "new": {
+        "rate": 120,
+        "total": 17,
+        "entry": 5,
+        "selector": "standard",
+        "orders": [
+          {
+            "amount": 20,
+            "qty": 1,
+            "slices": [
+              1,
+              2
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

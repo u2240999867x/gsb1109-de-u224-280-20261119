@@ -1,0 +1,13 @@
+rate < total
+and fee >= 0
+and note == "rate total fee"
+and partner.rate < partner.total
+and partner.fee == fee
+and { "standard": rate, "promo": total }[selector] >= fee
+and $sum([
+      entry.amount * fee + rate
+      for entry in orders
+      if entry.qty > fee
+         and $sum([ rate - total for rate in entry.slices if rate > 0 ]) < 0
+    ]) > 0
+# rate, total and fee in this trailing comment are literal words

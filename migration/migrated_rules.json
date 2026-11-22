@@ -1,0 +1,651 @@
+{
+  "order_rules_a": {
+    "publishable": true,
+    "source": "rate < total\nand fee >= 0\nand note == \"rate total fee\"\nand partner.rate < partner.total\nand partner.fee == fee\nand { \"standard\": rate, \"promo\": total }[selector] >= fee\nand $sum([\n      entry.amount * fee + rate\n      for entry in orders\n      if entry.qty > fee\n         and $sum([ rate - total for rate in entry.slices if rate > 0 ]) < 0\n    ]) > 0\n# rate, total and fee in this trailing comment are literal words\n",
+    "migrated": "total < rate\nand entry >= 0\nand note == \"rate total fee\"\nand partner.rate < partner.total\nand partner.fee == entry\nand { \"standard\": total, \"promo\": rate }[selector] >= entry\nand $sum([\n      entry_local.amount * entry + total\n      for entry_local in orders\n      if entry_local.qty > entry\n         and $sum([ rate_local - rate for rate_local in entry_local.slices if rate_local > 0 ]) < 0\n    ]) > 0\n# rate, total and fee in this trailing comment are literal words\n",
+    "changes": [
+      {
+        "rule": "order_rules_a",
+        "token_index": 0,
+        "offset": 0,
+        "line": 1,
+        "column": 1,
+        "before": "rate",
+        "after": "total",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "rate < total"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 2,
+        "offset": 7,
+        "line": 1,
+        "column": 8,
+        "before": "total",
+        "after": "rate",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "rate < total"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 4,
+        "offset": 17,
+        "line": 2,
+        "column": 5,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "and fee >= 0"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 24,
+        "offset": 107,
+        "line": 5,
+        "column": 20,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "and partner.fee == fee"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 29,
+        "offset": 129,
+        "line": 6,
+        "column": 19,
+        "before": "rate",
+        "after": "total",
+        "role": "field",
+        "reason": "selector key 'standard' selects the new field 'total'",
+        "original_line": "and { \"standard\": rate, \"promo\": total }[selector] >= fee"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 33,
+        "offset": 144,
+        "line": 6,
+        "column": 34,
+        "before": "total",
+        "after": "rate",
+        "role": "field",
+        "reason": "selector key 'promo' selects the new field 'rate'",
+        "original_line": "and { \"standard\": rate, \"promo\": total }[selector] >= fee"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 39,
+        "offset": 165,
+        "line": 6,
+        "column": 55,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "and { \"standard\": rate, \"promo\": total }[selector] >= fee"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 44,
+        "offset": 186,
+        "line": 8,
+        "column": 7,
+        "before": "entry",
+        "after": "entry_local",
+        "role": "local",
+        "reason": "outer comprehension local renamed so the new free field 'entry' keeps the outer-input value instead of the inner assignment",
+        "original_line": "      entry.amount * fee + rate"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 48,
+        "offset": 201,
+        "line": 8,
+        "column": 22,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "      entry.amount * fee + rate"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 50,
+        "offset": 207,
+        "line": 8,
+        "column": 28,
+        "before": "rate",
+        "after": "total",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "      entry.amount * fee + rate"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 52,
+        "offset": 222,
+        "line": 9,
+        "column": 11,
+        "before": "entry",
+        "after": "entry_local",
+        "role": "declaration",
+        "reason": "outer comprehension local renamed so the new free field 'entry' keeps the outer-input value instead of the inner assignment",
+        "original_line": "      for entry in orders"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 56,
+        "offset": 247,
+        "line": 10,
+        "column": 10,
+        "before": "entry",
+        "after": "entry_local",
+        "role": "local",
+        "reason": "outer comprehension local renamed so the new free field 'entry' keeps the outer-input value instead of the inner assignment",
+        "original_line": "      if entry.qty > fee"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 60,
+        "offset": 259,
+        "line": 10,
+        "column": 22,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "      if entry.qty > fee"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 65,
+        "offset": 283,
+        "line": 11,
+        "column": 21,
+        "before": "rate",
+        "after": "rate_local",
+        "role": "local",
+        "reason": "inner comprehension local renamed so the swapped column 'rate' is not captured by the inner assignment",
+        "original_line": "         and $sum([ rate - total for rate in entry.slices if rate > 0 ]) < 0"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 67,
+        "offset": 290,
+        "line": 11,
+        "column": 28,
+        "before": "total",
+        "after": "rate",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "         and $sum([ rate - total for rate in entry.slices if rate > 0 ]) < 0"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 69,
+        "offset": 300,
+        "line": 11,
+        "column": 38,
+        "before": "rate",
+        "after": "rate_local",
+        "role": "declaration",
+        "reason": "inner comprehension local renamed so the swapped column 'rate' is not captured by the inner assignment",
+        "original_line": "         and $sum([ rate - total for rate in entry.slices if rate > 0 ]) < 0"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 71,
+        "offset": 308,
+        "line": 11,
+        "column": 46,
+        "before": "entry",
+        "after": "entry_local",
+        "role": "local",
+        "reason": "outer comprehension local renamed so the new free field 'entry' keeps the outer-input value instead of the inner assignment",
+        "original_line": "         and $sum([ rate - total for rate in entry.slices if rate > 0 ]) < 0"
+      },
+      {
+        "rule": "order_rules_a",
+        "token_index": 75,
+        "offset": 324,
+        "line": 11,
+        "column": 62,
+        "before": "rate",
+        "after": "rate_local",
+        "role": "local",
+        "reason": "inner comprehension local renamed so the swapped column 'rate' is not captured by the inner assignment",
+        "original_line": "         and $sum([ rate - total for rate in entry.slices if rate > 0 ]) < 0"
+      }
+    ],
+    "diagnostics": {
+      "rule": "order_rules_a",
+      "selector_map": {
+        "standard": "total",
+        "promo": "rate"
+      },
+      "selector_declaration": {
+        "standard": {
+          "old": "rate",
+          "new": "total"
+        },
+        "promo": {
+          "old": "total",
+          "new": "rate"
+        }
+      },
+      "selector_lookups": [
+        {
+          "line": 6,
+          "column": 42,
+          "keys": [
+            "standard",
+            "promo"
+          ],
+          "declared": [
+            "standard",
+            "promo"
+          ],
+          "mapping": {
+            "standard": "total",
+            "promo": "rate"
+          },
+          "values": {
+            "standard": "rate",
+            "promo": "total"
+          },
+          "unresolved": []
+        }
+      ],
+      "unresolved": [],
+      "local_renames": {
+        "entry": "entry_local",
+        "rate": "rate_local"
+      }
+    },
+    "selector_map": {
+      "standard": "total",
+      "promo": "rate"
+    }
+  },
+  "order_rules_b": {
+    "publishable": true,
+    "source": "rate < total\nand fee >= 0\nand note == \"rate total fee\"\nand partner.rate < partner.total\nand partner.fee == fee\nand { \"standard\": rate, \"promo\": total }[selector] >= fee\nand $sum([\n      entry.amount * fee + rate\n      for entry in orders\n      if entry.qty > fee\n         and $sum([ unit - total for unit in entry.slices if unit > 0 ]) < 0\n    ]) > 0\n# rate, total and fee in this trailing comment are literal words\n",
+    "migrated": "total < rate\nand entry >= 0\nand note == \"rate total fee\"\nand partner.rate < partner.total\nand partner.fee == entry\nand { \"standard\": total, \"promo\": rate }[selector] >= entry\nand $sum([\n      entry_local.amount * entry + total\n      for entry_local in orders\n      if entry_local.qty > entry\n         and $sum([ unit - rate for unit in entry_local.slices if unit > 0 ]) < 0\n    ]) > 0\n# rate, total and fee in this trailing comment are literal words\n",
+    "changes": [
+      {
+        "rule": "order_rules_b",
+        "token_index": 0,
+        "offset": 0,
+        "line": 1,
+        "column": 1,
+        "before": "rate",
+        "after": "total",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "rate < total"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 2,
+        "offset": 7,
+        "line": 1,
+        "column": 8,
+        "before": "total",
+        "after": "rate",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "rate < total"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 4,
+        "offset": 17,
+        "line": 2,
+        "column": 5,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "and fee >= 0"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 24,
+        "offset": 107,
+        "line": 5,
+        "column": 20,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "and partner.fee == fee"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 29,
+        "offset": 129,
+        "line": 6,
+        "column": 19,
+        "before": "rate",
+        "after": "total",
+        "role": "field",
+        "reason": "selector key 'standard' selects the new field 'total'",
+        "original_line": "and { \"standard\": rate, \"promo\": total }[selector] >= fee"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 33,
+        "offset": 144,
+        "line": 6,
+        "column": 34,
+        "before": "total",
+        "after": "rate",
+        "role": "field",
+        "reason": "selector key 'promo' selects the new field 'rate'",
+        "original_line": "and { \"standard\": rate, \"promo\": total }[selector] >= fee"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 39,
+        "offset": 165,
+        "line": 6,
+        "column": 55,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "and { \"standard\": rate, \"promo\": total }[selector] >= fee"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 44,
+        "offset": 186,
+        "line": 8,
+        "column": 7,
+        "before": "entry",
+        "after": "entry_local",
+        "role": "local",
+        "reason": "outer comprehension local renamed so the new free field 'entry' keeps the outer-input value instead of the inner assignment",
+        "original_line": "      entry.amount * fee + rate"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 48,
+        "offset": 201,
+        "line": 8,
+        "column": 22,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "      entry.amount * fee + rate"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 50,
+        "offset": 207,
+        "line": 8,
+        "column": 28,
+        "before": "rate",
+        "after": "total",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "      entry.amount * fee + rate"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 52,
+        "offset": 222,
+        "line": 9,
+        "column": 11,
+        "before": "entry",
+        "after": "entry_local",
+        "role": "declaration",
+        "reason": "outer comprehension local renamed so the new free field 'entry' keeps the outer-input value instead of the inner assignment",
+        "original_line": "      for entry in orders"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 56,
+        "offset": 247,
+        "line": 10,
+        "column": 10,
+        "before": "entry",
+        "after": "entry_local",
+        "role": "local",
+        "reason": "outer comprehension local renamed so the new free field 'entry' keeps the outer-input value instead of the inner assignment",
+        "original_line": "      if entry.qty > fee"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 60,
+        "offset": 259,
+        "line": 10,
+        "column": 22,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "      if entry.qty > fee"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 67,
+        "offset": 290,
+        "line": 11,
+        "column": 28,
+        "before": "total",
+        "after": "rate",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "         and $sum([ unit - total for unit in entry.slices if unit > 0 ]) < 0"
+      },
+      {
+        "rule": "order_rules_b",
+        "token_index": 71,
+        "offset": 308,
+        "line": 11,
+        "column": 46,
+        "before": "entry",
+        "after": "entry_local",
+        "role": "local",
+        "reason": "outer comprehension local renamed so the new free field 'entry' keeps the outer-input value instead of the inner assignment",
+        "original_line": "         and $sum([ unit - total for unit in entry.slices if unit > 0 ]) < 0"
+      }
+    ],
+    "diagnostics": {
+      "rule": "order_rules_b",
+      "selector_map": {
+        "standard": "total",
+        "promo": "rate"
+      },
+      "selector_declaration": {
+        "standard": {
+          "old": "rate",
+          "new": "total"
+        },
+        "promo": {
+          "old": "total",
+          "new": "rate"
+        }
+      },
+      "selector_lookups": [
+        {
+          "line": 6,
+          "column": 42,
+          "keys": [
+            "standard",
+            "promo"
+          ],
+          "declared": [
+            "standard",
+            "promo"
+          ],
+          "mapping": {
+            "standard": "total",
+            "promo": "rate"
+          },
+          "values": {
+            "standard": "rate",
+            "promo": "total"
+          },
+          "unresolved": []
+        }
+      ],
+      "unresolved": [],
+      "local_renames": {
+        "entry": "entry_local"
+      }
+    },
+    "selector_map": {
+      "standard": "total",
+      "promo": "rate"
+    }
+  },
+  "order_rules_undeclared": {
+    "publishable": false,
+    "source": "rate < total\nand fee >= 0\nand { \"standard\": rate, \"promo\": total, \"clearance\": rate }[selector] >= fee\n# this rule is intentionally blocked: \"clearance\" is not a declared selector value\n",
+    "migrated": "total < rate\nand entry >= 0\nand { \"standard\": total, \"promo\": rate, \"clearance\": rate }[selector] >= entry\n# this rule is intentionally blocked: \"clearance\" is not a declared selector value\n",
+    "changes": [
+      {
+        "rule": "order_rules_undeclared",
+        "token_index": 0,
+        "offset": 0,
+        "line": 1,
+        "column": 1,
+        "before": "rate",
+        "after": "total",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "rate < total"
+      },
+      {
+        "rule": "order_rules_undeclared",
+        "token_index": 2,
+        "offset": 7,
+        "line": 1,
+        "column": 8,
+        "before": "total",
+        "after": "rate",
+        "role": "field",
+        "reason": "top-level order column swapped",
+        "original_line": "rate < total"
+      },
+      {
+        "rule": "order_rules_undeclared",
+        "token_index": 4,
+        "offset": 17,
+        "line": 2,
+        "column": 5,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "and fee >= 0"
+      },
+      {
+        "rule": "order_rules_undeclared",
+        "token_index": 11,
+        "offset": 44,
+        "line": 3,
+        "column": 19,
+        "before": "rate",
+        "after": "total",
+        "role": "field",
+        "reason": "selector key 'standard' selects the new field 'total'",
+        "original_line": "and { \"standard\": rate, \"promo\": total, \"clearance\": rate }[selector] >= fee"
+      },
+      {
+        "rule": "order_rules_undeclared",
+        "token_index": 15,
+        "offset": 59,
+        "line": 3,
+        "column": 34,
+        "before": "total",
+        "after": "rate",
+        "role": "field",
+        "reason": "selector key 'promo' selects the new field 'rate'",
+        "original_line": "and { \"standard\": rate, \"promo\": total, \"clearance\": rate }[selector] >= fee"
+      },
+      {
+        "rule": "order_rules_undeclared",
+        "token_index": 25,
+        "offset": 99,
+        "line": 3,
+        "column": 74,
+        "before": "fee",
+        "after": "entry",
+        "role": "field",
+        "reason": "free-field input renamed",
+        "original_line": "and { \"standard\": rate, \"promo\": total, \"clearance\": rate }[selector] >= fee"
+      }
+    ],
+    "diagnostics": {
+      "rule": "order_rules_undeclared",
+      "selector_map": {
+        "standard": "total",
+        "promo": "rate"
+      },
+      "selector_declaration": {
+        "standard": {
+          "old": "rate",
+          "new": "total"
+        },
+        "promo": {
+          "old": "total",
+          "new": "rate"
+        }
+      },
+      "selector_lookups": [
+        {
+          "line": 3,
+          "column": 61,
+          "keys": [
+            "standard",
+            "promo",
+            "clearance"
+          ],
+          "declared": [
+            "standard",
+            "promo"
+          ],
+          "mapping": {
+            "standard": "total",
+            "promo": "rate"
+          },
+          "values": {
+            "standard": "rate",
+            "promo": "total",
+            "clearance": "rate"
+          },
+          "unresolved": [
+            "clearance"
+          ]
+        }
+      ],
+      "unresolved": [
+        {
+          "kind": "selector-key",
+          "key": "clearance",
+          "line": 3,
+          "column": 41,
+          "lookup_line": 3,
+          "lookup_column": 61,
+          "reason": "selector value 'clearance' is not in the business-declared map; the reference at line 3, column 61 has no unambiguous target and was left unchanged",
+          "old_rule": "order_rules_undeclared",
+          "old_rule_text": "rate < total\nand fee >= 0\nand { \"standard\": rate, \"promo\": total, \"clearance\": rate }[selector] >= fee\n# this rule is intentionally blocked: \"clearance\" is not a declared selector value\n",
+          "old_reference": "\"clearance\": rate }[selector]"
+        }
+      ],
+      "local_renames": {}
+    },
+    "selector_map": {
+      "standard": "total",
+      "promo": "rate"
+    }
+  }
+}

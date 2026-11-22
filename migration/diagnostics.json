@@ -1,0 +1,150 @@
+{
+  "order_rules_a": {
+    "rule": "order_rules_a",
+    "selector_map": {
+      "standard": "total",
+      "promo": "rate"
+    },
+    "selector_declaration": {
+      "standard": {
+        "old": "rate",
+        "new": "total"
+      },
+      "promo": {
+        "old": "total",
+        "new": "rate"
+      }
+    },
+    "selector_lookups": [
+      {
+        "line": 6,
+        "column": 42,
+        "keys": [
+          "standard",
+          "promo"
+        ],
+        "declared": [
+          "standard",
+          "promo"
+        ],
+        "mapping": {
+          "standard": "total",
+          "promo": "rate"
+        },
+        "values": {
+          "standard": "rate",
+          "promo": "total"
+        },
+        "unresolved": []
+      }
+    ],
+    "unresolved": [],
+    "local_renames": {
+      "entry": "entry_local",
+      "rate": "rate_local"
+    }
+  },
+  "order_rules_b": {
+    "rule": "order_rules_b",
+    "selector_map": {
+      "standard": "total",
+      "promo": "rate"
+    },
+    "selector_declaration": {
+      "standard": {
+        "old": "rate",
+        "new": "total"
+      },
+      "promo": {
+        "old": "total",
+        "new": "rate"
+      }
+    },
+    "selector_lookups": [
+      {
+        "line": 6,
+        "column": 42,
+        "keys": [
+          "standard",
+          "promo"
+        ],
+        "declared": [
+          "standard",
+          "promo"
+        ],
+        "mapping": {
+          "standard": "total",
+          "promo": "rate"
+        },
+        "values": {
+          "standard": "rate",
+          "promo": "total"
+        },
+        "unresolved": []
+      }
+    ],
+    "unresolved": [],
+    "local_renames": {
+      "entry": "entry_local"
+    }
+  },
+  "order_rules_undeclared": {
+    "rule": "order_rules_undeclared",
+    "selector_map": {
+      "standard": "total",
+      "promo": "rate"
+    },
+    "selector_declaration": {
+      "standard": {
+        "old": "rate",
+        "new": "total"
+      },
+      "promo": {
+        "old": "total",
+        "new": "rate"
+      }
+    },
+    "selector_lookups": [
+      {
+        "line": 3,
+        "column": 61,
+        "keys": [
+          "standard",
+          "promo",
+          "clearance"
+        ],
+        "declared": [
+          "standard",
+          "promo"
+        ],
+        "mapping": {
+          "standard": "total",
+          "promo": "rate"
+        },
+        "values": {
+          "standard": "rate",
+          "promo": "total",
+          "clearance": "rate"
+        },
+        "unresolved": [
+          "clearance"
+        ]
+      }
+    ],
+    "unresolved": [
+      {
+        "kind": "selector-key",
+        "key": "clearance",
+        "line": 3,
+        "column": 41,
+        "lookup_line": 3,
+        "lookup_column": 61,
+        "reason": "selector value 'clearance' is not in the business-declared map; the reference at line 3, column 61 has no unambiguous target and was left unchanged",
+        "old_rule": "order_rules_undeclared",
+        "old_rule_text": "rate < total\nand fee >= 0\nand { \"standard\": rate, \"promo\": total, \"clearance\": rate }[selector] >= fee\n# this rule is intentionally blocked: \"clearance\" is not a declared selector value\n",
+        "old_reference": "\"clearance\": rate }[selector]"
+      }
+    ],
+    "local_renames": {}
+  }
+}

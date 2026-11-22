@@ -1,0 +1,4 @@
+rate < total
+and fee >= 0
+and { "standard": rate, "promo": total, "clearance": rate }[selector] >= fee
+# this rule is intentionally blocked: "clearance" is not a declared selector value
