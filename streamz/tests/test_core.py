@@ -658,6 +658,31 @@ def test_buffer_ref_counts():
     assert all(r.count == 0 for r in refs)
 
 
+@gen_test()
+def test_buffer_survives_downstream_error():
+    # a raising downstream must neither kill the buffer callback nor leak
+    # the references of the elements flowing through it
+    source = Stream(asynchronous=True)
+    buf = source.buffer(5)
+    seen = []
+    buf.sink(seen.append)
+
+    async def fail(x):
+        raise RuntimeError('boom')
+
+    buf.sink(fail)
+
+    for i in range(3):
+        yield source.emit(i)
+
+    r = RefCounter()
+    yield source.emit(3, metadata=[{'ref': r}])
+    yield gen.sleep(0.05)
+
+    assert seen == [0, 1, 2, 3]
+    assert r.count == 0
+
+
 def test_zip():
     a = Stream()
     b = Stream()

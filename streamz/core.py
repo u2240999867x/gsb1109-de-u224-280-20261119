@@ -1569,8 +1569,17 @@ class buffer(Stream):
     def cb(self):
         while True:
             x, metadata = yield self.queue.get()
-            yield self._emit(x, metadata=metadata)
-            self._release_refs(metadata)
+            try:
+                yield self._emit(x, metadata=metadata)
+            except Exception as e:
+                # A failing downstream must not kill the buffer callback,
+                # otherwise every later element would be stuck in the queue
+                # and its references would never be released.
+                logger.exception(e)
+                for m in metadata:
+                    m.setdefault('errors', []).append(e)
+            finally:
+                self._release_refs(metadata)
 
 
 @Stream.register_api()

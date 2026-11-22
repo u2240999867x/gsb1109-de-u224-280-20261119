@@ -277,6 +277,19 @@ class from_http_server(Source):
     Each connection will emit one event, containing the body data of
     the request
 
+    A request is only answered once the data has been fully processed by
+    every downstream node. Downstream failures are reported back to the
+    client as a ``500`` response instead of being silently treated as
+    success.
+
+    ``stop()`` performs an orderly shutdown: it first stops accepting new
+    requests, then waits for every request that has already been accepted
+    to finish draining through the pipeline (a successful enqueue into an
+    upstream ``buffer`` does not count as completion) before closing the
+    open connections. After ``stop()`` has returned, ``start()`` listens
+    again on the same port; late callbacks from requests of the previous
+    generation can never touch the new server.
+
     Parameters
     ----------
     port : int
@@ -296,37 +309,143 @@ class from_http_server(Source):
 
     """
 
-    def __init__(self, port, path='/.*', server_kwargs=None, **kwargs):
+    def __init__(self, port, path='/.*', server_kwargs=None, bind=True,
+                 **kwargs):
         self.port = port
         self.path = path
         self.server_kwargs = server_kwargs or {}
+        self.bind = bind
         self.server = None
+        # metadata of requests accepted by the currently listening generation
+        self._inflight = {}
+        # bumped on every (re)start; requests are pinned to one generation
+        self._generation = 0
+        # set as soon as shutdown begins, before new requests are rejected
+        self._shutting_down = False
         super().__init__(**kwargs)
 
     def run(self):
+        if self.stopped:
+            # stop() won a start/stop race before this callback ran
+            return
         from tornado.web import Application, RequestHandler
         from tornado.httpserver import HTTPServer
 
-        class Handler(RequestHandler):
-            source = self
+        source = self
+        self._generation += 1
+        self._shutting_down = False
+        generation = self._generation
 
+        class Handler(RequestHandler):
             async def post(self):
-                await asyncio.gather(*self.source._emit(self.request.body))
-                self.write('OK')
+                if source._shutting_down or source.stopped \
+                        or source._generation != generation:
+                    # shutdown has begun, or this is a late delivery on a
+                    # connection of a superseded server generation
+                    self.set_status(503)
+                    self.write('server is shutting down')
+                    return
+                done = asyncio.get_running_loop().create_future()
+
+                def _finish():
+                    if not done.done():
+                        done.set_result(None)
+
+                ref = RefCounter(cb=_finish, loop=source.loop)
+                metadata = [{'ref': ref, 'done': done}]
+                request_id = id(metadata[0])
+                source._inflight[request_id] = metadata[0]
+                try:
+                    try:
+                        # wait for hand-off into the pipeline (e.g. a
+                        # buffer), not for the downstream writes to complete
+                        await asyncio.gather(
+                            *source._emit(self.request.body,
+                                          metadata=metadata)
+                        )
+                        if ref.count <= 0:
+                            # nothing downstream is tracking this request
+                            _finish()
+                        # now wait until every downstream write has really
+                        # finished; buffer enqueue alone is not completion
+                        await done
+                    except Exception as e:
+                        # a downstream reached directly (no buffer) raises
+                        # here; record it so the client gets verifiable
+                        # evidence instead of a generic error page
+                        metadata[0].setdefault('errors', []).append(e)
+                    errors = metadata[0].get('errors')
+                    if errors:
+                        self.set_status(500)
+                        self.write(
+                            'downstream write failed: %s'
+                            % '; '.join(repr(e) for e in errors)
+                        )
+                    else:
+                        self.write('OK')
+                finally:
+                    source._inflight.pop(request_id, None)
 
         application = Application([
             (self.path, Handler),
         ])
         server = HTTPServer(application, **self.server_kwargs)
-        server.listen(self.port)
+        if self.bind:
+            server.listen(self.port)
         self.server = server
 
-    def stop(self):
-        """Shutdown HTTP server"""
-        if not self.stopped:
-            self.server.stop()
-            self.server = None
+    def attach(self, sock, address=None):
+        """Hand an already connected socket to the running server
+
+        This is the same connection hand-off performed for sockets
+        accepted on the listening port. It allows driving the server over
+        an externally created connection, e.g. in sandboxes where binding
+        a TCP port is not permitted.
+        """
+        if self.server is None:
+            raise RuntimeError('server is not running')
+
+        def _on_loop():
+            from tornado.iostream import IOStream
+            self.server.handle_stream(IOStream(sock), address)
+
+        self.loop.add_callback(_on_loop)
+
+    async def _drain(self, timeout=30):
+        deadline = asyncio.get_running_loop().time() + timeout
+        while self._inflight:
+            await asyncio.sleep(0.01)
+            if asyncio.get_running_loop().time() > deadline:
+                raise TimeoutError(
+                    'http server did not drain %d in-flight request(s) '
+                    'within %s seconds' % (len(self._inflight), timeout)
+                )
+
+    async def _shutdown(self, timeout):
+        # reject new requests immediately, then stop accepting new
+        # connections so no fresh request can ever reach the handler
+        self._shutting_down = True
+        self.server.stop()
+        # let in-flight requests finish their downstream writes and send
+        # their replies before tearing their connections down
+        await self._drain(timeout)
+        await self.server.close_all_connections()
+        self.server = None
+        self.stopped = True
+
+    def stop(self, timeout=30):
+        """Shutdown the HTTP server without losing in-flight requests
+
+        New requests are rejected immediately, while requests already
+        accepted are allowed to complete (or fail) and answer their
+        clients before their connections are closed.
+        """
+        if self.stopped:
+            return
+        if self.server is None:
             self.stopped = True
+            return
+        sync(self.loop, self._shutdown, timeout)
 
 
 @Stream.register_api(staticmethod)
