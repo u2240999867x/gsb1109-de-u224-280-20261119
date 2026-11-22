@@ -21,6 +21,7 @@ A subset of features provides the basic functionality of a "Wayback Machine".
    manual/localization
    manual/architecture
    manual/apis
+   manual/capture-review
    manual/owb-transition
    code/pywb
 
