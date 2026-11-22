@@ -121,6 +121,83 @@ Parser("CREATE TABLE t (id INT)").output_columns
 # []
 ```
 
+### Tracing output columns through unions and set differences
+
+`output_columns` gives the flattened name list, but nested `UNION ALL` /
+`UNION ALL BY NAME` / `EXCEPT ALL` queries need more detail: which leaf
+`SELECT` can feed a column, whether a `NULL` was written explicitly or filled
+in because another branch lacks the column, and which sample rows survive a
+difference.
+
+```python
+from sql_metadata import Parser
+
+query = """
+SELECT id, label, cost FROM (
+    SELECT id, label, NULL AS cost FROM a
+    UNION ALL
+    SELECT code AS id, description AS label, price AS cost FROM b
+) u
+UNION ALL BY NAME
+SELECT label, id FROM c
+EXCEPT ALL
+SELECT id, label, cost FROM cancel
+"""
+
+catalogue = Parser(query).provenance
+
+[(column.name, column.position) for column in catalogue.columns]
+# [('id', 0), ('label', 1), ('cost', 2)]
+
+# how each set operation aligns its inputs
+[(op.kind, op.all, op.binding) for op in catalogue.set_operations]
+# [('union', True, 'position'), ('union', True, 'name'), ('except', True, 'position')]
+
+cost = catalogue.column("cost")
+[(source.branch, source.table, source.column, source.kind)
+ for source in cost.sources]
+# [(0, None, None, 'explicit_null'),    # a wrote NULL AS cost
+#  (1, 'b', 'price', 'column'),         # b's third position, bound positionally
+#  (2, 'c', None, 'null_extension')]    # c lacks cost, filled by BY NAME
+```
+
+With sample rows, `residual()` evaluates the set operations and keeps
+ambiguous origins visible instead of choosing one:
+
+```python
+report = catalogue.residual({
+    "a": [(9, "X", None)],
+    "b": [(9, "X", 8)],
+    "c": [("X", 9)],
+    "cancel": [(9, "X", None)],
+})
+
+for group in report.rows:
+    print(group.value, group.remaining, [c.table for c in group.candidates])
+
+# (9, 'X', None) 1 ['a', 'c']   <- one row left, either a's explicit NULL or c's fill
+# (9, 'X', 8)    1 ['b']        <- the priced row definitely comes from b
+```
+
+The surviving `(9, 'X', None)` is reported as **one** remaining row with two
+alternative candidates (`definite=False`), never as a row produced by both
+leaf records. Two identical `cancel` rows remove both candidates.
+
+Sample rows may be mappings keyed by column name or tuples in the leaf
+projection order. Without a sample, `residual()` reports `evaluable=False` and
+only the structural catalogue is meaningful. Incompatible positional arity or
+literal types are reported in `catalogue.issues` with the offending branch
+and output position:
+
+```python
+Parser("SELECT id, label FROM a UNION ALL "
+       "SELECT code AS id, description AS label, price FROM b").provenance.issues
+# [StructuralIssue(kind='arity_mismatch', branch=1, position=2, ...)]
+```
+
+Incomplete statements are marked with `parseable=False`; the standard
+`columns`, `tables`, and `columns_aliases` properties are unchanged.
+
 ### Detecting query type
 
 ```python

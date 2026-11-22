@@ -13,6 +13,7 @@ sql-metadata v3 is a Python library that parses SQL queries and extracts metadat
 | [`column_extractor.py`](sql_metadata/column_extractor.py) | Single-pass DFS column/alias extraction | `ColumnExtractor` |
 | [`table_extractor.py`](sql_metadata/table_extractor.py) | Table extraction with position-based sorting | `TableExtractor` |
 | [`nested_resolver.py`](sql_metadata/nested_resolver.py) | CTE/subquery name and body extraction, nested column resolution | `NestedResolver` |
+| [`provenance.py`](sql_metadata/provenance.py) | Column/row provenance across nested set operations (`UNION`/`EXCEPT`) | `QueryProvenance` |
 | [`query_type_extractor.py`](sql_metadata/query_type_extractor.py) | Query type detection from AST root node | `QueryTypeExtractor` |
 | [`comments.py`](sql_metadata/comments.py) | Comment extraction/stripping via tokenizer gaps | `extract_comments`, `strip_comments` |
 | [`keywords_lists.py`](sql_metadata/keywords_lists.py) | `QueryType` enum | — |
@@ -102,7 +103,9 @@ flowchart LR
 | `columns_aliases` | `{alias: target_column}` | `.columns` |
 | `columns_aliases_names` | List of alias names | `.columns` |
 | `columns_aliases_dict` | Aliases by clause section | `.columns` |
+| `output_columns` | Ordered SELECT output names | `.columns` |
 | `tables` | Table names | AST parse → TableExtractor |
+| `provenance` | `QueryProvenance` catalogue across set operations | AST parse → `provenance.py` |
 | `tables_aliases` | `{alias: real_table}` | AST parse → TableExtractor |
 | `with_names` | CTE names | AST parse → NestedResolver |
 | `with_queries` | `{cte_name: body_sql}` | NestedResolver |
@@ -402,6 +405,50 @@ Special handling:
 - `exp.Command` → `_resolve_command_type` inspects the command's `this` attribute and maps `CREATE` back to `QueryType.CREATE` so dialect-specific DDL that degrades to an opaque command still returns a useful type.
 - `REPLACE INTO` → `Parser` forwards the `ASTParser.is_replace` flag into the extractor's constructor; when the AST is `exp.Insert` and `is_replace` is true, the extractor returns `QueryType.REPLACE` directly.
 - Empty / comment-only SQL → `_raise_for_none_ast` distinguishes "no parseable content" (`"Empty queries are not supported!"`) from "had content but sqlglot produced no AST" (`"Could not parse the query — the SQL syntax appears to be invalid"`), both raised as `InvalidQueryDefinition`.
+
+---
+
+### QueryProvenance — column and row origins across set operations
+
+**File:** [`provenance.py`](sql_metadata/provenance.py) | **Class:** `QueryProvenance`
+
+`Parser.provenance` builds a second, provenance-aware view of the AST. The
+flattened `columns` / `columns_aliases` properties resolve aliases across the
+whole tree; this module instead keeps each leaf `SELECT` attributable to its
+own branch and output position.
+
+**Structural pass** — `_relation()` walks the AST bottom-up:
+
+| Node | Behaviour |
+|------|-----------|
+| `exp.Select` | Each projection becomes a slot; column references resolve against FROM/JOIN inputs, derived tables forward their inner slots. |
+| `exp.Union` / `exp.Except` / `exp.Intersect` | Align the two child schemas. Without `by_name`, alignment is positional and the left side's names win; with `by_name=True`, names are matched and missing columns get `null_extension` sources. |
+| `exp.Except` | Row sources keep only the left child's slots (the right side only removes rows). |
+
+Each output column therefore carries a tuple of `SourceRef` entries with
+`kind` in `column`, `literal`, `explicit_null`, `null_extension`,
+`expression`, or `star`. A `NULL` produced by `NULL AS cost` is
+`explicit_null`; the same value filled in by `UNION ALL BY NAME` when the
+other branch lacks the column is `null_extension`. Arities and provable
+literal-type mismatches are appended to `issues` with the offending branch and
+output position — internal aliases never pad a short side.
+
+**Sample pass** — `QueryProvenance.residual(sample)` evaluates the tree with
+`_Evaluator` using the same alignment rules. `EXCEPT ALL` is multiset
+subtraction: the right-hand matching rows consume occurrences, and the
+surviving group keeps a `remaining` count. When `remaining < len(candidates)`
+the group is marked `definite=False`, so a caller sees competing origins (for
+example `a`'s explicit `NULL` versus `c`'s by-name fill) rather than an
+arbitrary winner or a claim that one row came from both branches.
+
+```mermaid
+flowchart LR
+    Q["Compound SELECT"] --> S["_relation\n(structural slots)"]
+    S --> C["columns + issues"]
+    Q --> E["_Evaluator\n(sample rows)"]
+    S --> E
+    E --> R["residual groups\n(remaining + candidates)"]
+```
 
 ---
 

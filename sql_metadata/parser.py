@@ -23,6 +23,7 @@ from sql_metadata.comments import extract_comments, strip_comments
 from sql_metadata.generalizator import Generalizator
 from sql_metadata.keywords_lists import QueryType
 from sql_metadata.nested_resolver import NestedResolver
+from sql_metadata.provenance import QueryProvenance
 from sql_metadata.query_type_extractor import QueryTypeExtractor
 from sql_metadata.sql_cleaner import SqlCleaner
 from sql_metadata.table_extractor import TableExtractor
@@ -75,6 +76,8 @@ class Parser:
 
         self._values: list[Any] | None = None
         self._values_dict: dict[str, int | float | str | list[Any]] | None = None
+
+        self._provenance: QueryProvenance | None = None
 
     def _require_ast(self) -> exp.Expression:
         """Return the AST, asserting it is non-None.
@@ -297,6 +300,38 @@ class Parser:
         if not self._columns_extracted:
             _ = self.columns
         return self._output_columns
+
+    @property
+    def provenance(self) -> QueryProvenance:
+        """Return the structural provenance catalogue for this query.
+
+        The catalogue explains which leaf ``SELECT`` branches can feed
+        each output column, how ``UNION ALL`` binds columns (positionally
+        or, with ``BY NAME``, by output name), where a ``NULL`` is an
+        explicit projection versus a null-extension fill, and how
+        ``EXCEPT ALL`` constrains surviving rows.  Sample rows can be
+        evaluated on demand with :meth:`QueryProvenance.residual`.
+
+        Unlike :attr:`columns` and :attr:`columns_aliases`, this property
+        does not collapse aliases across branches; it keeps each leaf
+        projection attributable to its own branch and position.
+
+        :rtype: QueryProvenance
+        """
+        if self._provenance is not None:
+            return self._provenance
+        try:
+            ast = self._ast_parser.ast
+        except ValueError as exc:
+            self._provenance = QueryProvenance.unparsed(str(exc))
+            return self._provenance
+        if ast is None:
+            self._provenance = QueryProvenance.unparsed(
+                "Empty queries are not supported!"
+            )
+            return self._provenance
+        self._provenance = QueryProvenance(ast)
+        return self._provenance
 
     @property
     def tables(self) -> UniqueList:
