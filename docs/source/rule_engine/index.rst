@@ -7,6 +7,7 @@
 
    ast.rst
    builtins.rst
+   diagnostics.rst
    engine.rst
    errors.rst
    parser/index.rst

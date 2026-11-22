@@ -33,6 +33,7 @@
 import decimal
 from typing import Any, Iterable, Iterator, TYPE_CHECKING
 
+from .. import diagnostics
 from .. import errors
 from ..parser import Parser
 from .context import Context
@@ -117,6 +118,35 @@ class Rule(object):
         self.context._tls.reset()
         with decimal.localcontext(self.context.decimal_context):
             return self.statement.evaluate(thing)
+
+    def evaluate_diagnostics(self, thing: Any) -> diagnostics.DiagnosticsReport:
+        """
+        Evaluate the rule against the specified *thing* in diagnostics mode, collecting every independent error into
+        a :py:class:`~rule_engine.diagnostics.DiagnosticsReport` instead of raising the first one. Each
+        :py:class:`~rule_engine.diagnostics.Diagnostic` carries the original exception, the character offsets of the
+        rule text that actually failed and the path to the original record that was being evaluated, so a review
+        interface can highlight the failing text and the source record in a single pass.
+
+        Diagnostics mode preserves the short-circuit behavior of evaluation: records that a condition or slice
+        excludes are not read, and when a selection condition itself fails, the records it would have selected are
+        not evaluated, so no downstream errors are reported for them. Independent branches, such as the other
+        iterations of a comprehension, are still evaluated. The default, non-diagnostic methods
+        (:py:meth:`.evaluate`, :py:meth:`.matches` and :py:meth:`.filter`) are unaffected and keep raising the first
+        error in evaluation order.
+
+        .. versionadded:: 5.3.0
+
+        :param thing: The object on which to apply the rule.
+        :return: The diagnostics report. Its ``value`` is the value the rule evaluated to, possibly partial or
+                :py:data:`~rule_engine.errors.UNDEFINED` when no value could be produced, and its ``errors`` are the
+                collected diagnostics in the order they occurred.
+        :rtype: :py:class:`~rule_engine.diagnostics.DiagnosticsReport`
+        """
+        self.context._tls.reset()
+        collector = diagnostics._Collector(self.text)
+        with decimal.localcontext(self.context.decimal_context):
+            value = self.statement.expression.evaluate_diagnostic(thing, collector)
+        return collector.report(value)
 
     def matches(self, thing: Any) -> bool:
         """

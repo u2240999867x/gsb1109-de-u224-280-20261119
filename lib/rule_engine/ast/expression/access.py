@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from ... import builtins as _builtins
 from ... import errors
+from ...diagnostics import _OriginSequence
 from ...suggestions import suggest_symbol
 from ...types import DataType, coerce_value
 from ...types import _DataTypeDef
@@ -418,6 +419,44 @@ class GetSliceExpression(ExpressionBase):
             resolved_stop = int(resolved_stop)
         value = operator.getitem(resolved_obj, slice(resolved_start, resolved_stop))
         return coerce_value(value, verify_type=False, int_max_digits=self.context.int_max_digits)
+
+    def evaluate_diagnostic(self, thing: Any, diagnostics: Any) -> Any:
+        resolved_obj = self.container.evaluate_diagnostic(thing, diagnostics)
+        if resolved_obj is errors.UNDEFINED:
+            return errors.UNDEFINED
+        if resolved_obj is None:
+            if self.safe:
+                return resolved_obj
+            diagnostics.record(errors.EvaluationError('data type mismatch'), node=self)
+            return errors.UNDEFINED
+
+        resolved_start = self.start.evaluate_diagnostic(thing, diagnostics)
+        if resolved_start is errors.UNDEFINED:
+            return errors.UNDEFINED
+        resolved_stop = self.stop.evaluate_diagnostic(thing, diagnostics)
+        if resolved_stop is errors.UNDEFINED:
+            return errors.UNDEFINED
+        try:
+            if resolved_start is not None:
+                _assert_is_integer_number(resolved_start)
+                resolved_start = int(resolved_start)
+            if resolved_stop is not None:
+                _assert_is_integer_number(resolved_stop)
+                resolved_stop = int(resolved_stop)
+            value = operator.getitem(resolved_obj, slice(resolved_start, resolved_stop))
+            value = coerce_value(value, verify_type=False, int_max_digits=self.context.int_max_digits)
+        except errors.EvaluationError as error:
+            diagnostics.record(error, node=self, tb=error.__traceback__)
+            return errors.UNDEFINED
+        if isinstance(value, tuple):
+            # remember the position each member had in the container so comprehensions iterating the slice can point
+            # diagnostics back to the original records, composing with the positions of a sliced slice
+            origin_indices = tuple(range(*slice(resolved_start, resolved_stop).indices(len(resolved_obj))))
+            base_origin_indices = getattr(resolved_obj, 'origin_indices', None)
+            if base_origin_indices is not None:
+                origin_indices = tuple(base_origin_indices[index] for index in origin_indices)
+            return _OriginSequence(value, origin_indices)
+        return value
 
     def reduce(self) -> ExpressionBase:
         if not _is_reduced(self.container, self.start, self.stop):

@@ -196,6 +196,13 @@ class Assignment(object):
         return "<{} name={!r} value={!r} value_type={!r} >".format(self.__class__.__name__, self.name, self.value, self.value_type)
 
 class ASTNodeBase(object):
+    span: tuple[int, int] | None = None
+    """
+    The ``(start, end)`` character offsets into the rule text that this node was parsed from, or ``None`` when the
+    node was not parsed from source text (for example when it was created programmatically).
+
+    .. versionadded:: 5.3.0
+    """
     def to_graphviz(self, digraph: Any) -> None:
         digraph.node(str(id(self)), self.__class__.__name__)
 
@@ -211,6 +218,27 @@ class ASTNodeBase(object):
         :return: The result of the evaluation as a native Python type.
         """
         raise NotImplementedError()
+
+    def evaluate_diagnostic(self, thing: Any, diagnostics: Any) -> Any:
+        """
+        Evaluate this AST node in diagnostics mode, recording errors to *diagnostics* instead of raising them. Nodes
+        that evaluate their children independently of each other (such as comprehensions) override this to collect
+        every independent error; all other nodes inherit this default which evaluates the whole subtree and records
+        the first error it raises. When an error is recorded, :py:data:`~rule_engine.errors.UNDEFINED` is returned to
+        signal that no value could be produced.
+
+        .. versionadded:: 5.3.0
+
+        :param thing: The object to use for symbol resolution.
+        :param diagnostics: The diagnostics collector to record errors to.
+        :return: The result of the evaluation as a native Python type, or
+                :py:data:`~rule_engine.errors.UNDEFINED` when an error was recorded.
+        """
+        try:
+            return self.evaluate(thing)
+        except errors.EvaluationError as error:
+            diagnostics.record(error, node=self, tb=error.__traceback__)
+            return errors.UNDEFINED
 
     def reduce(self) -> 'ASTNodeBase':
         """

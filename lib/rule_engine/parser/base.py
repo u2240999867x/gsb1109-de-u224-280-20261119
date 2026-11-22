@@ -30,6 +30,7 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+import functools
 import threading
 import types
 from typing import TYPE_CHECKING, Any
@@ -40,6 +41,50 @@ from .._vendor.ply import lex, yacc
 if TYPE_CHECKING:
     from ..engine.context import Context
     from ..ast import Statement
+
+def _record_production_span(p: Any) -> None:
+    """Annotate the node a grammar production produced with the ``(start, end)`` character offsets of the source text
+    it was parsed from. Nodes that don't carry a span (such as the deferred members of an array literal) are left
+    alone, as are nodes that already have one (such as a parenthesized expression passed through unchanged)."""
+    node = p[0]
+    if node is not None and len(p) > 1 and getattr(node, 'span', True) is None:
+        node.span = (p.lexpos(1), p.lexspan(len(p) - 1)[1])
+
+def _track_production_span(function: Any, pass_self: bool) -> Any:
+    """
+    Wrap a grammar production so the node it produces is annotated with its source span, see
+    :py:func:`._record_production_span`. The wrapper presents the same signature as the wrapped production because
+    ply validates the argument count, so *pass_self* indicates whether the production takes the parser as its first
+    argument.
+    """
+    if pass_self:
+        @functools.wraps(function)
+        def wrapper(self: 'ParserBase', p: Any) -> None:
+            function(self, p)
+            _record_production_span(p)
+    else:
+        @functools.wraps(function)
+        def wrapper(p: Any) -> None:
+            function(p)
+            _record_production_span(p)
+    # ply sorts the productions by line number to find the start symbol and compute the grammar signature, so the
+    # wrapper has to present the line number of the production it wraps
+    wrapper.co_firstlineno = function.__code__.co_firstlineno  # type: ignore[attr-defined]
+    return wrapper
+
+class _SpanTrackingLexer(object):
+    """A lexer proxy that records the end position of each token as ``endlexpos`` so production spans are exact."""
+    def __init__(self, lexer: lex.Lexer) -> None:
+        self._lexer = lexer
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._lexer, name)
+
+    def token(self) -> Any:
+        token = self._lexer.token()
+        if token is not None:
+            token.endlexpos = self._lexer.lexpos
+        return token
 
 class ParserBase(object):
     """
@@ -58,15 +103,22 @@ class ParserBase(object):
     _normalize_grammar: bool = False
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        # the p_ docstrings are the grammar and ply includes them in the signature the tables are checked against,
-        # python 3.13 strips their indentation so normalizing every line keeps the tables valid on every version, it's
-        # opt-in so other grammars keep their existing signatures and the tables they already ship stay valid
-        if not cls._normalize_grammar:
-            return
         for name, value in vars(cls).items():
             function = getattr(value, '__func__', value)
-            if name.startswith('p_') and isinstance(function, types.FunctionType) and function.__doc__:
+            # p_error receives a token rather than a production slice, so it can not be wrapped either
+            if not (name.startswith('p_') and name != 'p_error' and isinstance(function, types.FunctionType) and function.__doc__):
+                continue
+            # the p_ docstrings are the grammar and ply includes them in the signature the tables are checked against,
+            # python 3.13 strips their indentation so normalizing every line keeps the tables valid on every version,
+            # it's opt-in so other grammars keep their existing signatures and the tables they already ship stay valid
+            if cls._normalize_grammar:
                 function.__doc__ = '\n'.join(line.strip() for line in function.__doc__.splitlines()).rstrip()
+            # annotate the nodes the productions produce with their source spans so evaluation diagnostics can point
+            # back to the text a failing node was parsed from
+            wrapped = _track_production_span(function, pass_self=not isinstance(value, staticmethod))
+            if isinstance(value, (classmethod, staticmethod)):
+                wrapped = type(value)(wrapped)  # type: ignore[assignment]
+            setattr(cls, name, wrapped)
 
     def __init__(self, debug: bool = False) -> None:
         """
@@ -76,7 +128,7 @@ class ParserBase(object):
         self.debug = debug
         self.context: 'Context | None' = None
         # Build the lexer and parser
-        self._lexer = lex.lex(module=self, debug=self.debug)
+        self._lexer = _SpanTrackingLexer(lex.lex(module=self, debug=self.debug))
         # rule_engine's tables are generated when the package is built and other grammars keep using ply's default
         # parsetab module, either way the tables are only read and a parser never writes any files
         tables = _tables.load()
@@ -102,6 +154,7 @@ class ParserBase(object):
         :rtype: :py:class:`~rule_engine.ast.Statement`
         """
         kwargs['lexer'] = kwargs.pop('lexer', self._lexer)
+        kwargs['tracking'] = kwargs.pop('tracking', True)
         with self.__mutex:
             self.context = context
             # phase 1: parse the string into a tree of deferred nodes

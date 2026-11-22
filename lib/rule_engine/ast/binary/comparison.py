@@ -51,6 +51,25 @@ class LogicExpression(BinaryExpressionBase):
     def _op_or(self, thing: Any) -> bool:
         return bool(self.left.evaluate(thing) or self.right.evaluate(thing))
 
+    def evaluate_diagnostic(self, thing: Any, diagnostics: Any) -> Any:
+        left_value = self.left.evaluate_diagnostic(thing, diagnostics)
+        if left_value is errors.UNDEFINED:
+            # the outcome can not be determined, but the right side is independent of the left so its errors are
+            # still collected
+            self.right.evaluate_diagnostic(thing, diagnostics)
+            return errors.UNDEFINED
+        # the short-circuit behavior is unchanged: the right side is only evaluated when the left side's value does
+        # not decide the outcome
+        if self.type == 'and':
+            if not left_value:
+                return False
+        elif left_value:
+            return True
+        right_value = self.right.evaluate_diagnostic(thing, diagnostics)
+        if right_value is errors.UNDEFINED:
+            return errors.UNDEFINED
+        return bool(right_value)
+
 class ComparisonExpression(BinaryExpressionBase):
     """A class for representing comparison expressions from the grammar text such as equality checks."""
     def _op_eq(self, thing: Any) -> bool:

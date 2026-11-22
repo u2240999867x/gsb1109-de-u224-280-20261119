@@ -113,6 +113,34 @@ class ComprehensionExpression(ExpressionBase):
                     output_array.append(self.result.evaluate(thing))
         return tuple(output_array)
 
+    def evaluate_diagnostic(self, thing: Any, diagnostics: Any) -> Any:
+        output_array: 'collections.deque[Any]' = collections.deque()
+        input_iterable = self.iterable.evaluate_diagnostic(thing, diagnostics)
+        if input_iterable is errors.UNDEFINED:
+            return errors.UNDEFINED
+        if not DataType.from_value(input_iterable).is_iterable:
+            diagnostics.record(errors.EvaluationError('data type mismatch (comprehension requires an iterable)'), node=self)
+            return errors.UNDEFINED
+        # when the iterable was produced by a slice it carries the positions its members had in the array the slice
+        # was taken from, so diagnostics point back to the original records instead of the projected positions
+        origin_indices = getattr(input_iterable, 'origin_indices', None)
+        for position, value in enumerate(input_iterable):
+            index = position if origin_indices is None else origin_indices[position]
+            assignment = Assignment(self.variable, value=value)
+            with self.context.assignments(assignment):
+                with diagnostics.location(expression_span=self.iterable.span, variable=self.variable, index=index):
+                    if self.condition is not None:
+                        condition = self.condition.evaluate_diagnostic(thing, diagnostics)
+                        # when the condition failed its error was recorded and the result is not evaluated, so no
+                        # errors are collected for a record the condition never selected
+                        if condition is errors.UNDEFINED or not condition:
+                            continue
+                    result = self.result.evaluate_diagnostic(thing, diagnostics)
+                    if result is errors.UNDEFINED:
+                        continue
+                    output_array.append(result)
+        return tuple(output_array)
+
     def to_graphviz(self, digraph: Any, *args: Any, **kwargs: Any) -> None:
         digraph.node(str(id(self)), "{}\nvariable={!r}".format(self.__class__.__name__, self.variable))
         self.result.to_graphviz(digraph, *args, **kwargs)

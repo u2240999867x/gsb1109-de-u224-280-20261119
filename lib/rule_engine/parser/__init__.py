@@ -75,7 +75,8 @@ def _repl_string_escape(match: re.Match[str]) -> str:
     return '\\' + match.group(0)
 
 class _DeferredAstNode(object):
-    __slots__ = ('cls', 'args', 'kwargs', 'method')
+    __slots__ = ('cls', 'args', 'kwargs', 'method', 'span')
+    span: tuple[int, int] | None
     def __init__(
             self,
             cls: type[ast.ASTNodeBase],
@@ -90,10 +91,16 @@ class _DeferredAstNode(object):
         self.args = args
         self.kwargs = kwargs or {}
         self.method = method
+        self.span = None
 
     def build(self) -> Any:
         constructor = getattr(self.cls, self.method)
-        return constructor(*self.args, **self.kwargs)
+        node = constructor(*self.args, **self.kwargs)
+        # annotate the built node with the source span, keeping the tighter span of a child node when reduction
+        # replaced this node with one of its children
+        if self.span is not None and getattr(node, 'span', None) is None:
+            node.span = self.span
+        return node
 
 class Parser(ParserBase):
     """

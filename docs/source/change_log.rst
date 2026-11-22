@@ -7,6 +7,17 @@ this list is curated by the development team for note worthy changes.
 Version 5.x.x
 -------------
 
+* Added :py:meth:`~rule_engine.engine.Rule.evaluate_diagnostics` which evaluates a rule in an opt-in diagnostics
+  mode. Instead of raising the first error, it collects every independent error into a
+  :py:class:`~rule_engine.diagnostics.DiagnosticsReport`. Each :py:class:`~rule_engine.diagnostics.Diagnostic`
+  carries the original exception, the character offsets of the rule text that actually failed and the path to the
+  original record that was being evaluated, so review interfaces can highlight the failing text and the source
+  record in a single pass. Short-circuit behavior is preserved: records excluded by a condition or slice are not
+  read, and a failing selection condition does not produce downstream errors for the records it gated. The default
+  evaluation methods keep raising the first error in evaluation order. As part of this, AST nodes gained a
+  :py:attr:`~rule_engine.ast.ASTNodeBase.span` attribute with the character offsets of the source text they were
+  parsed from.
+
 Version 5.2.0
 ^^^^^^^^^^^^^
 

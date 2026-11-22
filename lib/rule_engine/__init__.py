@@ -41,6 +41,10 @@ from .engine import Chain
 from .engine import Context
 from .engine import Rule
 
+from .diagnostics import Diagnostic
+from .diagnostics import DiagnosticPathEntry
+from .diagnostics import DiagnosticsReport
+
 from .errors import AttributeResolutionError
 from .errors import ChainExhaustedError
 from .errors import EngineError
@@ -56,6 +60,9 @@ __all__ = (
     'ChainExhaustedError',
     'Context',
     'DataType',
+    'Diagnostic',
+    'DiagnosticPathEntry',
+    'DiagnosticsReport',
     'EngineError',
     'EvaluationError',
     'Rule',
