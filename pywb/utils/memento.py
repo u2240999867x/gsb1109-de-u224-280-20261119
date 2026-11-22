@@ -2,13 +2,9 @@ import re
 
 from warcio.timeutils import timestamp_to_http_date, http_date_to_timestamp
 
+from pywb.utils.timemap_reader import TimeMapReader
 from pywb.utils.wbexception import BadRequestException
 
-
-LINK_SPLIT = re.compile(r',\s*(?=[<])')
-LINK_SEG_SPLIT = re.compile(r';\s*')
-LINK_URL = re.compile('<(.*)>')
-LINK_PROP = re.compile(r'([\w]+)="([^"]+)')
 
 FIND_DT = re.compile('datetime=\"([^\"]+)\"')
 
@@ -19,49 +15,90 @@ class MementoException(BadRequestException):
 
 
 #=============================================================================
+def _param_to_text(value):
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode('utf-8', 'replace')
+    return value
+
+
+#=============================================================================
 class MementoUtils(object):
     @classmethod
-    def parse_links(cls, link_header, def_name='timemap'):
-        links = LINK_SPLIT.split(link_header)
+    def parse_timemap(cls, link_header, def_name='timemap', final_url=None):
+        """Parse a TimeMap into a :class:`TimeMapReader`.
+
+        Relative targets are resolved against ``final_url`` (the final URL of
+        the response that delivered the document), never against the
+        document's own original/self links.
+        """
+        reader = TimeMapReader(final_url=final_url)
+        reader.feed(link_header, 0)
+        reader.finish()
+        return reader
+
+    @classmethod
+    def parse_links(cls, link_header, def_name='timemap', final_url=None):
+        """Parse a Link header / TimeMap into the legacy result mapping.
+
+        The mapping keeps the historical shape (named relations plus a
+        ``mementos`` list) but uses the byte-accurate reader underneath, so
+        quoted separators, escaped quotes, multi-token relations and
+        date-less captures are handled correctly.
+        """
+        reader = cls.parse_timemap(link_header, def_name, final_url)
+
         results = {}
         mementos = []
+        relations = []
 
-        for link in links:
-            props = LINK_SEG_SPLIT.split(link)
-            m = LINK_URL.match(props[0])
-            if not m:
-                raise MementoException('Invalid Link Url: ' + props[0])
+        for record in reader.records:
+            if record.is_capture:
+                if record.error:
+                    # A capture we cannot date is reported separately and must
+                    # not stop the captures that follow it.
+                    continue
 
-            result = dict(url=m.group(1))
-            key = ''
-            is_mem = False
+                item = dict(url=record.url,
+                            rel=record.rel,
+                            datetime=record.datetime)
+                if final_url:
+                    item['resolved'] = record.target
+                mementos.append(item)
+            else:
+                key = record.rel or 'relation'
+                if key == 'self':
+                    key = def_name
 
-            for prop in props[1:]:
-                m = LINK_PROP.match(prop)
-                if not m:
-                    raise MementoException('Invalid prop ' + prop)
+                item = dict(url=record.url, rel=record.rel)
+                if record.datetime is not None:
+                    item['datetime'] = record.datetime
+                for name, value in record.params:
+                    if name == 'rel':
+                        continue
+                    text = _param_to_text(value)
+                    if text is not None:
+                        item[name] = text
 
-                name = m.group(1)
-                value = m.group(2)
+                # Keep the last one under its relation name for backwards
+                # compatibility, and every occurrence in ``relations`` so a
+                # repeated or multi-valued relation can still be inspected.
+                results[key] = item
+                relations.append(item)
 
-                if name == 'rel':
-                    if 'memento' in value:
-                        is_mem = True
-                        result[name] = value
-                    elif value == 'self':
-                        key = def_name
-                    else:
-                        key = value
-                else:
-                    result[name] = value
-
-            if key:
-                results[key] = result
-            elif is_mem:
-                mementos.append(result)
-
+        results['relations'] = relations
+        results['issues'] = [dict(start=rec.start, end=rec.end,
+                                  reason=rec.error, rel=rec.rel,
+                                  url=rec.url)
+                             for rec in reader.issues]
         results['mementos'] = mementos
         return results
+
+    @classmethod
+    def parse_timemap_records(cls, link_header, final_url=None, def_name='timemap'):
+        """Alias returning the richer, position-aware reader."""
+        return cls.parse_timemap(link_header, def_name, final_url)
 
     @classmethod
     def make_timemap_memento_link(cls, cdx, datetime=None, rel='memento', end=',\n', memento_format=None):

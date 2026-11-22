@@ -8,6 +8,9 @@ This package contains a utils used by pywb wayback tool suite.
 
 * [loaders.py](loaders.py) -- Loading abstraction for loading via http or local file system.
 
+* [timemap_reader.py](timemap_reader.py) -- Incremental, resumable parser for Memento TimeMaps
+  in ``application/link-format``, with byte-offset provenance and content-validator generations.
+
 * [bufferedreaders.py](bufferedreaders.py) -- Buffering wrappers for file-like object, also provide gzip decompression and
 de-chunking facilities.
 

@@ -6,7 +6,7 @@ from pywb.utils.binsearch import INDEX_FILE_BUFFER_SIZE, iter_prev_lines, iter_r
 from pywb.utils.canonicalize import canonicalize
 from pywb.utils.format import res_template
 from pywb.utils.io import no_except_close
-from pywb.utils.memento import MementoUtils
+from pywb.utils.memento import MementoUtils, MementoException
 from pywb.utils.wbexception import BadRequestException, NotFoundException
 from pywb.warcserver.http import DefaultAdapters
 from pywb.warcserver.index.cdxobject import CDXObject
@@ -604,6 +604,16 @@ class RedisIndexSource(BaseIndexSource):
 
 
 #=============================================================================
+class _LinkText(str):
+    """A Link header string that also remembers its response's final URL."""
+
+    def __new__(cls, value, final_url=None):
+        obj = str.__new__(cls, value)
+        obj.final_url = final_url
+        return obj
+
+
+#=============================================================================
 class MementoIndexSource(BaseIndexSource):
     def __init__(self, timegate_url, timemap_url, replay_url):
         self.timegate_url = timegate_url
@@ -611,35 +621,54 @@ class MementoIndexSource(BaseIndexSource):
         self.replay_url = replay_url
         self._init_sesh()
 
-    def links_to_cdxobject(self, link_header, def_name):
-        results = MementoUtils.parse_links(link_header, def_name)
+    def links_to_cdxobject(self, link_header, def_name, final_url=None):
+        results = MementoUtils.parse_timemap(link_header,
+                                             def_name=def_name,
+                                             final_url=final_url)
 
-        original = results['original']['url']
+        relations = {rec.rel: rec for rec in results.relations
+                     if rec.rel and rec.error is None}
+        original = (relations.get('original').url if 'original' in relations
+                    else None)
+        if original is None:
+            raise MementoException('Missing original link')
         key = canonicalize(original)
 
-        mementos = results['mementos']
+        for val in results.captures:
+            dt = val.datetime
+            if not dt:
+                # A capture without a date cannot be placed on the timeline;
+                # it is reported separately and never blocks the captures
+                # that follow it.
+                continue
 
-        for val in mementos:
-            dt = val['datetime']
-            ts = http_date_to_timestamp(dt)
+            ts = val.timestamp or http_date_to_timestamp(dt)
             cdx = CDXObject()
             cdx['urlkey'] = key
             cdx['timestamp'] = ts
             cdx['url'] = original
-            cdx['mem_rel'] = val.get('rel', '')
-            cdx['memento_url'] = val['url']
+            cdx['mem_rel'] = val.rel
+            cdx['memento_url'] = val.target
 
             load_url = self._get_replay_url(cdx['timestamp'], original)
 
             cdx['load_url'] = load_url
             yield cdx
 
+    def bad_links(self, link_header, final_url=None, def_name='timemap'):
+        """Return records that could not be turned into a usable capture."""
+        results = MementoUtils.parse_timemap(link_header,
+                                             def_name=def_name,
+                                             final_url=final_url)
+        return results.issues
+
     def _get_replay_url(self, ts, url):
         return self.replay_url.format(url=url, timestamp=ts)
 
     def handle_timegate(self, params, timestamp):
         links = self.get_timegate_links(params, timestamp)
-        return self.links_to_cdxobject(links, 'timegate')
+        return self.links_to_cdxobject(
+            links, 'timegate', final_url=getattr(links, 'final_url', None))
 
     def get_timegate_links(self, params, timestamp):
         url = res_template(self.timegate_url, params)
@@ -659,7 +688,7 @@ class MementoIndexSource(BaseIndexSource):
         if not links:
             raise NotFoundException(url)
 
-        return links
+        return _LinkText(links, res.url)
 
     def _get_headers(self, params):
         return {}
@@ -682,7 +711,8 @@ class MementoIndexSource(BaseIndexSource):
             raise NotFoundException(url)
 
         links = res.text
-        return self.links_to_cdxobject(links, 'timemap')
+        return self.links_to_cdxobject(links, 'timemap',
+                                       final_url=res.url)
 
     def load_index(self, params):
         timestamp = params.get('closest')

@@ -98,3 +98,61 @@ When serving a URI-M (any archived url), the following additional headers are in
 
 
 
+
+
+Incremental TimeMap reader
+--------------------------
+
+A collector that downloads a TimeMap directly (rather than querying the pywb
+API) can use :mod:`pywb.utils.timemap_reader` to turn the document into a
+backfill list.  The reader is byte oriented: it accepts a large file in
+arbitrary chunks, may be paused in the middle of a UTF-8 character, a quoted
+value or a ``datetime`` comma, and resumes from a small checkpoint without
+re-reading or re-publishing the bytes it already confirmed.
+
+.. code-block:: python
+
+    from pywb.utils.timemap_reader import TimeMapReader
+
+    reader = TimeMapReader(final_url=response.url, validator=response.headers.get('ETag'))
+    for chunk in response.iter_content(65536):
+        for record in reader.feed(chunk):
+            if record.is_capture and record.timestamp:
+                queue.append(record.target)
+    reader.finish()
+
+    checkpoint = reader.checkpoint()
+
+After an interruption, a range request normally restarts a little before the
+last confirmed byte.  ``feed()`` accepts that overlap and discards it, so a
+link is published exactly once::
+
+    resumed = TimeMapReader.from_checkpoint(checkpoint)
+    restarted = resumed.begin_response(response.url, new_etag)
+    resumed.feed(overlap_and_remainder, offset=range_start)
+    resumed.finish()
+
+Key rules:
+
+* Relative targets are resolved against the final URL of the response.  The
+  document's ``original`` and ``self`` links are never used as a base.
+* Only a link whose relation contains the ``memento`` token is a capture.  A
+  relation that merely contains the word (for example ``memento-like``) is a
+  non-capture relation and never enters the backfill list.
+* A capture with no valid ``datetime`` is reported in ``reader.issues`` with
+  the ``start``/``end`` byte offsets of the offending link; it does not stop
+  the captures that follow.
+* Every record carries ``start``/``end`` offsets into the downloaded
+  representation, so a target or bad item can be traced back without keeping
+  the whole document.
+* If the response's content validator changes, ``begin_response()`` starts a
+  new generation and resets the parse position.  Identical leading bytes in
+  the old and new files are not treated as a continuation, so a memento is
+  never spliced from two versions of the file.
+* Two identical captures at different offsets in one file are two genuine
+  occurrences with distinct positions and ``occurrence_index`` values.  A
+  repeated range request, by contrast, is an overlap that is dropped before
+  parsing and never appears as a duplicate.
+
+``TimeMapHarvester`` wraps the reader with the same checkpoint/resume
+behavior and returns only newly confirmed backfill targets.
