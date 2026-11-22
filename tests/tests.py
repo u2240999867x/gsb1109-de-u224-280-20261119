@@ -3251,6 +3251,123 @@ def test_expand_list_of_functions():
     run(dpath("test_expand_list_of_functions"))
 
 
+def test_expand_row_groups():
+    from collections import Counter
+    from snakemake.exceptions import InputFunctionException
+
+    # round 1: consistent QC tables, everything is generated
+    tmpdir = run(dpath("test_expand_row_groups"), cleanup=False)
+    reads = (Path(tmpdir) / "provider_reads.txt").read_text().splitlines()
+    # each batch's provider is read only once per expand evaluation, even
+    # though two samples share batch b1 and two templates use the QC table
+    assert sorted(set(reads)) == [
+        "id:b1",
+        "id:b2",
+        "lane:b1",
+        "lane:b2",
+        "window:b1",
+        "window:b2",
+    ]
+    assert len(set(Counter(reads).values())) == 1
+    shutil.rmtree(tmpdir, ignore_errors=ON_WINDOWS)
+
+    # round 2: batch b2 has one window less than ids, the expansion that
+    # needs the QC table of b2 fails entirely
+    run(
+        dpath("test_expand_row_groups"),
+        shouldfail=InputFunctionException,
+        config={"short_window": True},
+    )
+    # the sample-group-only expansion does not need the QC table of b2,
+    # hence it neither fails nor reads any provider
+    tmpdir = run(
+        dpath("test_expand_row_groups"),
+        config={"short_window": True},
+        targets={"sample_only"},
+        check_results=False,
+        cleanup=False,
+    )
+    assert (Path(tmpdir) / "counts" / "s1.txt").exists()
+    assert (Path(tmpdir) / "counts" / "s2.txt").exists()
+    assert not (Path(tmpdir) / "provider_reads.txt").exists()
+    shutil.rmtree(tmpdir, ignore_errors=ON_WINDOWS)
+
+
+def test_expand_row_groups_api():
+    from snakemake.io import expand
+    from snakemake.iocontainers import Wildcards
+    from snakemake.exceptions import WildcardError
+
+    # existing simple combination and custom combinator keep working
+    assert expand("{a}-{b}", a=["x", "y"], b=["1", "2"]) == [
+        "x-1",
+        "x-2",
+        "y-1",
+        "y-2",
+    ]
+    assert expand("{a}-{b}", zip, a=["x", "y"], b=["1", "2"]) == ["x-1", "y-2"]
+
+    # groups are aligned row-wise, the QC table is selected per batch and
+    # the two groups are not globally multiplied
+    assert expand(
+        ["results/{sample}.txt", "qc/{sample}/{id}/{window}.txt"],
+        sample=["s1", "s2", "s3"],
+        batch=["b1", "b1", "b2"],
+        id=["i1", "i2"],
+        window=["w1", "w2"],
+        groups={"samples": ["sample"], "qc": ["id", "window"]},
+        group_key="batch",
+    ) == [
+        "results/s1.txt",
+        "results/s2.txt",
+        "results/s3.txt",
+        "qc/s1/i1/w1.txt",
+        "qc/s1/i2/w2.txt",
+        "qc/s2/i1/w1.txt",
+        "qc/s2/i2/w2.txt",
+        "qc/s3/i1/w1.txt",
+        "qc/s3/i2/w2.txt",
+    ]
+
+    # unequal column lengths are reported with batch and column lengths,
+    # without reusing another batch's table to fill the gap
+    def get_ids(wildcards):
+        return ["i3", "i4"]
+
+    def get_windows(wildcards):
+        return ["w3"]
+
+    deferred = expand(
+        "qc/{sample}/{id}/{window}.txt",
+        sample=["s3"],
+        batch=["b2"],
+        id=get_ids,
+        window=get_windows,
+        groups={"samples": ["sample"], "qc": ["id", "window"]},
+        group_key="batch",
+    )
+    with pytest.raises(WildcardError, match=r"batch='b2'.*id has 2.*window has 1"):
+        deferred(Wildcards(fromdict={}))
+
+    # a genuinely unexpanded wildcard stays open under allow_missing and is
+    # filled by the next expand, without posing as a missing group column
+    patterns = expand(
+        "per_unit/{sample}/{unit}.txt",
+        sample=["s1", "s2"],
+        batch=["b1", "b1"],
+        groups={"samples": ["sample"]},
+        group_key="batch",
+        allow_missing=True,
+    )
+    assert patterns == ["per_unit/s1/{unit}.txt", "per_unit/s2/{unit}.txt"]
+    assert expand(patterns, unit=["u1", "u2"], allow_missing=True) == [
+        "per_unit/s1/u1.txt",
+        "per_unit/s1/u2.txt",
+        "per_unit/s2/u1.txt",
+        "per_unit/s2/u2.txt",
+    ]
+
+
 @skip_on_windows  # OS agnostic
 def test_scheduler_sequential_all_cores():
     run(dpath("test_scheduler_sequential_all_cores"), cores=90)

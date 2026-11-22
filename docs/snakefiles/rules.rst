@@ -287,6 +287,50 @@ Finally, argument values passed to ``expand`` can also be functions or lists of 
 Depending on the context, that function has to accept the same arguments as functions for ``input`` (see :ref:`snakefiles-input_functions`) or functions for ``params`` (see :ref:`snakefiles-params`).
 If that is the case, ``expand`` returns a function again, the evaluation of which is deferred to the point in time when the wildcards of the respective job are known.
 
+Row-aligned wildcard groups
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Sometimes wildcards belong together row-wise, e.g. columns of a sample sheet, and shall not be combined by a global cartesian product.
+This can be declared via the ``groups`` argument, which maps group names to lists of wildcard names.
+The wildcards of each group are then expanded aligned by row (like ``zip``) within their group:
+
+.. code-block:: python
+
+    expand(
+        "results/{sample}/{lane}.txt",
+        sample=["s1", "s2"],
+        lane=["L1", "L2"],
+        groups={"samples": ["sample", "lane"]},
+    )
+
+leads to
+
+.. code-block:: python
+
+    ["results/s1/L1.txt", "results/s2/L2.txt"]
+
+With ``group_key``, a wildcard can be named that annotates each row of the first group with a key (e.g. a batch).
+Every further group then provides one row-aligned table per key value, which is selected by the key of each row of the first group.
+Different keys may have tables of different lengths, and the groups are never multiplied globally:
+
+.. code-block:: python
+
+    expand(
+        ["results/{sample}.txt", "qc/{sample}/{id}/{window}.txt"],
+        sample=["s1", "s2", "s3"],
+        batch=["b1", "b1", "b2"],
+        id=get_ids,        # input function, called once per batch
+        window=get_windows,  # input function, called once per batch
+        groups={"samples": ["sample"], "qc": ["id", "window"]},
+        group_key="batch",
+    )
+
+Here, ``get_ids`` and ``get_windows`` are :ref:`input functions <snakefiles-input_functions>` that receive the current batch as a wildcard (e.g. ``wildcards.batch``) and return the QC table columns of that batch.
+Each provider is evaluated only once per batch and expand call, and the resulting table is shared by all filepatterns of the same ``expand`` call.
+If the columns of a group's table have unequal lengths for a batch, the expansion fails with an error that reports the batch and the column lengths.
+Filepatterns that only use wildcards of the first group are expanded over the original rows of that group; filepatterns that use no group wildcard at all are generated only once.
+Unrelated wildcards can still be left open via ``allow_missing=True`` and be filled by a later ``expand`` as usual.
+
 
 .. _snakefiles-multiext:
 

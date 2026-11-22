@@ -1,0 +1,108 @@
+SAMPLES = ["s1", "s2", "s2"]
+BATCHES = ["b1", "b1", "b2"]
+LANES = {"b1": ["L1", "L2"], "b2": ["L3"]}
+IDS = {"b1": ["i1", "i2"], "b2": ["i3", "i4"]}
+if config.get("short_window", False):
+    # second batch has one window less than ids
+    WINDOWS = {"b1": ["w1", "w2"], "b2": ["w3"]}
+else:
+    WINDOWS = {"b1": ["w1", "w2"], "b2": ["w3", "w4"]}
+
+GROUPS = {"samples": ["sample", "lane"], "qc": ["id", "window"]}
+
+
+def count_read(what):
+    with open("provider_reads.txt", "a") as handle:
+        handle.write(what + "\n")
+
+
+def get_lanes(wildcards):
+    count_read(f"lane:{wildcards.batch}")
+    return LANES[wildcards.batch]
+
+
+def get_ids(wildcards):
+    count_read(f"id:{wildcards.batch}")
+    return IDS[wildcards.batch]
+
+
+def get_windows(wildcards):
+    count_read(f"window:{wildcards.batch}")
+    return WINDOWS[wildcards.batch]
+
+
+# lanes and QC tables are returned lazily by input functions of the
+# current batch; each batch's provider must be read only once per expand,
+# shared by all filepatterns
+qc_paths = expand(
+    [
+        "results/{sample}.txt",
+        "lanes/{sample}/{lane}.txt",
+        "qc/{sample}/{id}/{window}.txt",
+        "windows/{id}/{window}.txt",
+        "summary/global.txt",
+    ],
+    sample=SAMPLES,
+    lane=get_lanes,
+    batch=BATCHES,
+    id=get_ids,
+    window=get_windows,
+    groups=GROUPS,
+    group_key="batch",
+    allow_missing=True,
+)
+
+# only references the sample group, hence it must not trigger any
+# QC provider reads (and no failure if a QC table is broken)
+sample_only_paths = expand(
+    "counts/{sample}.txt",
+    sample=SAMPLES,
+    lane=get_lanes,
+    batch=BATCHES,
+    id=get_ids,
+    window=get_windows,
+    groups=GROUPS,
+    group_key="batch",
+    allow_missing=True,
+)
+
+# a genuinely unexpanded wildcard ({unit}) stays open under the
+# allow_missing contract and is filled by the next expand
+unit_patterns = expand(
+    "per_unit/{sample}/{unit}.txt",
+    sample=SAMPLES,
+    lane=["L1", "L2", "L3"],
+    batch=BATCHES,
+    groups={"samples": ["sample", "lane"]},
+    group_key="batch",
+    allow_missing=True,
+)
+unit_paths = expand(unit_patterns, unit=["u1", "u2"], allow_missing=True)
+
+
+rule all:
+    input:
+        qc_paths,
+        unit_paths,
+    output:
+        "manifest.done",
+    run:
+        with open(output[0], "w") as handle:
+            for path in input:
+                handle.write(str(path) + "\n")
+
+
+rule sample_only:
+    input:
+        sample_only_paths,
+    output:
+        "sample_only.done",
+    shell:
+        "touch {output}"
+
+
+rule make_file:
+    output:
+        "{generic}.txt",
+    shell:
+        "mkdir -p $(dirname {output}) && touch {output}"

@@ -1572,6 +1572,15 @@ def expand(*args, **wildcard_values):
     **wildcard_values -- the wildcards as keyword arguments
         with their values as lists. If allow_missing=True is included
         wildcards in filepattern without values will stay unformatted.
+        If groups={...} is included, the wildcards listed in each group are
+        expanded row-wise (aligned by position) within their group instead of
+        being combined by the combinator. The first group defines the primary
+        rows (e.g. samples). If group_key=<wildcard> is given, its values
+        annotate each primary row with a key (e.g. a batch), and every further
+        group provides one row-aligned table per key value, which is selected
+        by the key of each primary row. Values may be callables (input
+        functions); those of keyed groups are then evaluated lazily, once per
+        key value, receiving the current key as a wildcard.
     """
     from snakemake.path_modifier import PATH_MODIFIER_FLAG
 
@@ -1618,6 +1627,29 @@ def expand(*args, **wildcard_values):
             if "allow_missing" in re.findall(r"{([^}\.[!:]+)", filepattern):
                 format_dict = dict
                 break
+
+    # check if row-aligned wildcard groups are requested
+    used_wildcards = {
+        name
+        for filepattern in filepatterns
+        for name in re.findall(r"{([^}\.[!:]+)", filepattern)
+    }
+    groups = None
+    if "groups" in wildcard_values and "groups" not in used_wildcards:
+        groups = wildcard_values.pop("groups")
+    group_key = None
+    if "group_key" in wildcard_values and "group_key" not in used_wildcards:
+        group_key = wildcard_values.pop("group_key")
+
+    if groups is not None:
+        return _expand_grouped(
+            filepatterns, combinator, groups, group_key, wildcard_values, format_dict
+        )
+    if group_key is not None:
+        raise WorkflowError(
+            "expand(): group_key was given without groups. The group_key "
+            "selects the per-key table of the non-primary groups."
+        )
 
     callables = {
         key: value
@@ -1703,6 +1735,376 @@ def expand(*args, **wildcard_values):
         return inner
     else:
         return do_expand(wildcard_values)
+
+
+def _expand_grouped(
+    filepatterns, combinator, groups, group_key, wildcard_values, format_dict
+):
+    """Row-aligned grouped expansion for expand().
+
+    The first group defines the primary rows (e.g. samples), aligned by
+    position. Every further group provides one row-aligned table per value of
+    group_key (e.g. per batch), selected by the key of each primary row. The
+    groups are never combined by a global cartesian product. Callable values
+    are evaluated lazily, once per key value and expand call, receiving the
+    current key as a wildcard, and their results are shared between all
+    filepatterns of this expand call.
+    """
+    from snakemake.iocontainers import Wildcards
+
+    if not isinstance(groups, collections.abc.Mapping) or not groups:
+        raise WorkflowError(
+            "expand(): groups must be a non-empty mapping of group names to "
+            "lists of wildcard names."
+        )
+    field_to_group = {}
+    for group_name, fields in groups.items():
+        if isinstance(fields, str) or not isinstance(
+            fields, collections.abc.Iterable
+        ):
+            raise WorkflowError(
+                f"expand(): fields of group '{group_name}' must be a list of "
+                "wildcard names."
+            )
+        for field in fields:
+            if field in field_to_group:
+                raise WorkflowError(
+                    f"expand(): wildcard '{field}' is assigned to both groups "
+                    f"'{field_to_group[field]}' and '{group_name}'."
+                )
+            if field not in wildcard_values:
+                raise WildcardError(
+                    f"No values given for wildcard '{field}' of expand() "
+                    f"group '{group_name}'."
+                )
+            field_to_group[field] = group_name
+
+    group_names = list(groups.keys())
+    primary_group = group_names[0]
+
+    if group_key is None:
+        if len(group_names) > 1:
+            raise WorkflowError(
+                "expand(): group_key is required when more than one group is "
+                "given. It names the wildcard whose value selects the table "
+                "of the non-primary groups for each row of the first group."
+            )
+    else:
+        if group_key not in wildcard_values:
+            raise WildcardError(
+                f"No values given for expand() group_key wildcard '{group_key}'."
+            )
+        if (
+            group_key in field_to_group
+            and field_to_group[group_key] != primary_group
+        ):
+            raise WorkflowError(
+                f"expand(): group_key wildcard '{group_key}' must not be part "
+                f"of non-primary group '{field_to_group[group_key]}'."
+            )
+
+    plain_values = {
+        key: value
+        for key, value in wildcard_values.items()
+        if key not in field_to_group and key != group_key
+    }
+
+    def is_deferred(value):
+        return callable(value) or (
+            isinstance(value, List) and any(callable(v) for v in value)
+        )
+
+    formatter = string.Formatter()
+
+    def copy_flags(from_path, dest_path):
+        # string.Formatter does not fully support AnnotatedString (flags are discarded)
+        # so, if they exist, need to be copied
+        if hasattr(from_path, "flags"):
+            dest_path = AnnotatedString(dest_path)
+            dest_path.flags.update(from_path.flags)
+        return dest_path
+
+    def normalize(value):
+        if (
+            isinstance(value, str)
+            or not isinstance(value, collections.abc.Iterable)
+            or is_namedtuple_instance(value)
+        ):
+            return [value]
+        return list(value)
+
+    def flatten(values):
+        for wildcard, value in values.items():
+            yield [(wildcard, item) for item in normalize(value)]
+
+    fields_per_pattern = [
+        re.findall(r"{([^}\.[!:]+)", filepattern) for filepattern in filepatterns
+    ]
+
+    def do_expand_grouped(values, wildcards, aux_params):
+        def call_provider(func, batch):
+            if group_key is None:
+                call_wildcards = wildcards
+            else:
+                items = dict(wildcards.items()) if wildcards is not None else {}
+                items[group_key] = batch
+                call_wildcards = Wildcards(fromdict=items)
+            func_aux_params = get_input_function_aux_params(func, aux_params)
+            return func(call_wildcards, **func_aux_params)
+
+        # The key column defines the rows of the primary group.
+        if group_key is None:
+            key_values = None
+            batches = [None]
+            batch_indices = {None: None}  # determined below
+        else:
+            key_value = values[group_key]
+            if callable(key_value):
+                func_aux_params = get_input_function_aux_params(
+                    key_value, aux_params
+                )
+                key_value = key_value(wildcards, **func_aux_params)
+            key_values = normalize(key_value)
+            batches = list(dict.fromkeys(key_values))
+            batch_indices = {batch: [] for batch in batches}
+            for i, batch in enumerate(key_values):
+                batch_indices[batch].append(i)
+
+        primary_columns = {}
+
+        def primary_column(field, batch):
+            cache_key = (field, batch)
+            if cache_key in primary_columns:
+                return primary_columns[cache_key]
+            expected = len(batch_indices[batch])
+            value = values[field]
+            if callable(value):
+                column = normalize(call_provider(value, batch))
+                if len(column) != expected:
+                    raise WildcardError(
+                        f"expand(): callable for wildcard '{field}' returned "
+                        f"{len(column)} values for {group_key}={batch!r}, but "
+                        f"the batch has {expected} row(s)."
+                    )
+            else:
+                column = normalize(value)
+                if group_key is None:
+                    pass  # length is validated globally below
+                elif len(column) == 1:
+                    column = column * expected
+                elif len(column) == len(key_values):
+                    column = [column[i] for i in batch_indices[batch]]
+                else:
+                    raise WildcardError(
+                        f"expand(): wildcard '{field}' has {len(column)} "
+                        f"values, but the group_key wildcard '{group_key}' "
+                        f"has {len(key_values)}."
+                    )
+            primary_columns[cache_key] = column
+            return column
+
+        if group_key is None:
+            # single group without key: resolve the primary columns once and
+            # determine the row count from them
+            used_primary = [
+                field
+                for field in groups[primary_group]
+                if any(field in fields for fields in fields_per_pattern)
+            ]
+            n_rows = None
+            for field in used_primary:
+                value = values[field]
+                if callable(value):
+                    column = normalize(call_provider(value, None))
+                else:
+                    column = normalize(value)
+                primary_columns[(field, None)] = column
+                if len(column) != 1:
+                    if n_rows is None:
+                        n_rows = len(column)
+                    elif n_rows != len(column):
+                        raise WildcardError(
+                            f"expand(): columns of group '{primary_group}' "
+                            "have unequal lengths."
+                        )
+            if n_rows is None:
+                n_rows = 1
+            for field in used_primary:
+                column = primary_columns[(field, None)]
+                if len(column) == 1 and n_rows > 1:
+                    primary_columns[(field, None)] = column * n_rows
+            key_values = [None] * n_rows
+            batch_indices = {None: list(range(n_rows))}
+
+        n_rows = len(key_values)
+
+        keyed_columns = {}
+
+        def keyed_rows(group, fields, batch):
+            columns = {}
+            for field in fields:
+                cache_key = (group, field, batch)
+                if cache_key not in keyed_columns:
+                    value = values[field]
+                    if callable(value):
+                        column = normalize(call_provider(value, batch))
+                    else:
+                        column = normalize(value)
+                    keyed_columns[cache_key] = column
+                columns[field] = keyed_columns[cache_key]
+            lengths = {field: len(column) for field, column in columns.items()}
+            if len(set(lengths.values())) > 1:
+                details = ", ".join(
+                    f"{field} has {length} value(s)"
+                    for field, length in lengths.items()
+                )
+                raise WildcardError(
+                    f"expand(): columns of group '{group}' have unequal "
+                    f"lengths for {group_key}={batch!r}: {details}."
+                )
+            n = next(iter(lengths.values()), 0)
+            return [
+                {field: columns[field][j] for field in fields} for j in range(n)
+            ]
+
+        def primary_rows(fields):
+            rows = []
+            positions = {batch: 0 for batch in batches}
+            for i in range(n_rows):
+                batch = key_values[i]
+                position = positions[batch]
+                positions[batch] += 1
+                row = {
+                    field: primary_column(field, batch)[position]
+                    for field in fields
+                }
+                if group_key is not None:
+                    row[group_key] = batch
+                rows.append(row)
+            return rows
+
+        results = []
+        try:
+            for filepattern, pattern_fields in zip(filepatterns, fields_per_pattern):
+                pattern_plain = {
+                    key: value
+                    for key, value in plain_values.items()
+                    if key in pattern_fields
+                }
+                pattern_primary = [
+                    field for field in groups[primary_group] if field in pattern_fields
+                ]
+                uses_primary = bool(pattern_primary) or (
+                    group_key is not None and group_key in pattern_fields
+                )
+                pattern_keyed = [
+                    group
+                    for group in group_names[1:]
+                    if any(field in pattern_fields for field in groups[group])
+                ]
+                if not uses_primary and not pattern_keyed:
+                    # no group fields used: expand once via the combinator
+                    for comb in map(format_dict, combinator(*flatten(pattern_plain))):
+                        results.append(
+                            copy_flags(
+                                filepattern, formatter.vformat(filepattern, (), comb)
+                            )
+                        )
+                    continue
+                if uses_primary:
+                    rows = primary_rows(pattern_primary)
+                    if pattern_keyed:
+                        combined = []
+                        for row in rows:
+                            batch = row[group_key] if group_key is not None else None
+                            for extra in product(
+                                *(
+                                    keyed_rows(
+                                        group,
+                                        [
+                                            field
+                                            for field in groups[group]
+                                            if field in pattern_fields
+                                        ],
+                                        batch,
+                                    )
+                                    for group in pattern_keyed
+                                )
+                            ):
+                                merged = dict(row)
+                                for part in extra:
+                                    merged.update(part)
+                                combined.append(merged)
+                        rows = combined
+                else:
+                    rows = []
+                    for batch in batches:
+                        for extra in product(
+                            *(
+                                keyed_rows(
+                                    group,
+                                    [
+                                        field
+                                        for field in groups[group]
+                                        if field in pattern_fields
+                                    ],
+                                    batch,
+                                )
+                                for group in pattern_keyed
+                            )
+                        ):
+                            merged = {}
+                            if group_key is not None:
+                                merged[group_key] = batch
+                            for part in extra:
+                                merged.update(part)
+                            rows.append(merged)
+                for row in rows:
+                    for comb in map(format_dict, combinator(*flatten(pattern_plain))):
+                        merged = format_dict(comb)
+                        merged.update(row)
+                        results.append(
+                            copy_flags(
+                                filepattern, formatter.vformat(filepattern, (), merged)
+                            )
+                        )
+        except KeyError as e:
+            raise WildcardError(f"No values given for wildcard {e}.")
+        return results
+
+    if any(is_deferred(value) for value in wildcard_values.values()):
+        # defer expansion and return a function that does the expansion once it
+        # is called with the usual arguments (wildcards, [input, ]); callable
+        # group values are resolved lazily per key value inside do_expand_grouped
+        def inner(wildcards, **aux_params):
+            resolved = dict(wildcard_values)
+            for wildcard, value in wildcard_values.items():
+                if wildcard in field_to_group or wildcard == group_key:
+                    continue
+                if callable(value):
+                    func_aux_params = get_input_function_aux_params(
+                        value, aux_params
+                    )
+                    resolved[wildcard] = value(wildcards, **func_aux_params)
+                elif isinstance(value, List) and any(
+                    callable(item) for item in value
+                ):
+                    resolved[wildcard] = [
+                        (
+                            item(
+                                wildcards,
+                                **get_input_function_aux_params(item, aux_params),
+                            )
+                            if callable(item)
+                            else item
+                        )
+                        for item in value
+                    ]
+            return do_expand_grouped(resolved, wildcards, aux_params)
+
+        return inner
+    else:
+        return do_expand_grouped(wildcard_values, None, {})
 
 
 @dataclass
