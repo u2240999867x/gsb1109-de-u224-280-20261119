@@ -4,6 +4,7 @@ from .core import *
 from .graph import *
 from .sources import *
 from .sinks import *
+from .exchange import *
 from .plugins import load_plugins
 
 load_plugins(Stream)
