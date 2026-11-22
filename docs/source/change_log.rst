@@ -7,6 +7,16 @@ this list is curated by the development team for note worthy changes.
 Version 5.x.x
 -------------
 
+Version 5.3.0
+^^^^^^^^^^^^^
+
+* Added the :py:mod:`rule_engine.projection` module which derives an executable staged projection from a
+  rule: :py:class:`~rule_engine.projection.ProjectionPlan` splits the rule's reads into control (selection)
+  fields to fetch first and guarded detail fields that :py:meth:`~rule_engine.projection.ProjectionPlan.bind`
+  resolves per branch actually taken, and :py:func:`~rule_engine.projection.project` restricts a document to
+  the retained paths. :py:class:`~rule_engine.projection.ProjectionSet` combines the plans of multiple rules
+  while tracing every retained field back to the rule references that require it.
+
 Version 5.2.0
 ^^^^^^^^^^^^^
 

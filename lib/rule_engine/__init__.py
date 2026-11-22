@@ -48,6 +48,10 @@ from .errors import EvaluationError
 from .errors import RuleSyntaxError
 from .errors import SymbolResolutionError
 
+from .projection import ProjectionPlan
+from .projection import ProjectionSet
+from .projection import project
+
 from .types import DataType
 
 __all__ = (
@@ -58,9 +62,12 @@ __all__ = (
     'DataType',
     'EngineError',
     'EvaluationError',
+    'ProjectionPlan',
+    'ProjectionSet',
     'Rule',
     'RuleSyntaxError',
     'SymbolResolutionError',
+    'project',
     'resolve_attribute',
     'resolve_item',
     'type_resolver_from_dataclass',

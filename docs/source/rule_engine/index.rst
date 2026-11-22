@@ -10,5 +10,6 @@
    engine.rst
    errors.rst
    parser/index.rst
+   projection.rst
    suggestions.rst
    types.rst
