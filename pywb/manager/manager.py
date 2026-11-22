@@ -12,7 +12,7 @@ from distutils.util import strtobool
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 
-from argparse import ArgumentParser, RawTextHelpFormatter
+from argparse import ArgumentParser, REMAINDER, RawTextHelpFormatter
 from tempfile import mkdtemp, TemporaryDirectory
 from zipfile import ZipFile
 
@@ -536,6 +536,23 @@ Create manage file based web archive collections
     reindex = subparsers.add_parser('reindex', help=reindex_help)
     reindex.add_argument('coll_name')
     reindex.set_defaults(func=do_reindex)
+
+    # Batch index (request/response volumes delivered separately)
+    def do_batch(r):
+        from pywb.apps.batchcli import main as batch_main
+        code = batch_main(['--root', r.batch_root] + list(r.batch_args))
+        if code:
+            raise SystemExit(code)
+
+    batch_help = ('Incrementally index WARC volumes whose request and '
+                  'response records arrive separately')
+    batch = subparsers.add_parser('batch', help=batch_help)
+    batch.add_argument('--root', dest='batch_root', default='./batch-index',
+                       help='batch index directory (default: ./batch-index)')
+    batch.add_argument('batch_args', nargs=REMAINDER,
+                       help='arguments for wb-batch (add, status, confirm, ...); '
+                            'run "wb-batch --help" for the full list')
+    batch.set_defaults(func=do_batch)
 
     # Index warcs
     def do_index(r):

@@ -6,6 +6,11 @@ index_paths: indexes
 acl_paths: acl
 static_path: static
 
+# Incremental batch index (see manual/batch-index): when set, `wb-batch`
+# writes its views under this directory; index_paths may point at
+# <batch_index_path>/live/ to replay the current complete view.
+# batch_index_path: ./batch-index
+
 default_access: allow
 
 templates_dir: templates

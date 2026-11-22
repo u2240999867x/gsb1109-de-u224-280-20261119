@@ -311,6 +311,55 @@ def write_multi_cdx_index(output, inputs, **options):
 
 
 #=================================================================
+def write_batch_index(output, inputs, rel_root=None):
+    """Write a CDXJ index for a batch of volumes from their record evidence.
+
+    Request and response records may live in different volumes and arrive in
+    any order; they are paired only by WARC relationship headers.  Responses
+    still waiting for a request, and conflicts, are reported on stderr so the
+    output index only contains proven pairs.
+    """
+    from pywb.indexer.batchindexer import ArchiveEvidence, BuildBatch
+
+    evidence = []
+    for fullpath, filename in iter_file_or_dir(inputs, True, rel_root):
+        item = ArchiveEvidence.from_volume(fullpath, volume=filename)
+        evidence.append(item)
+
+    lines, waiting, conflicts, unpaired = BuildBatch(evidence).build()
+
+    for conflict in conflicts.values():
+        sys.stderr.write('conflict {0}: {1}\n'.format(
+            conflict.get('conflict_id'), conflict.get('reason')))
+    for item in waiting:
+        sys.stderr.write('waiting for request: {0}\n'.format(
+            item.get('record_id')))
+    for item in unpaired['requests']:
+        sys.stderr.write('request without response: {0}\n'.format(
+            item.get('record_id')))
+    for item in unpaired['responses']:
+        sys.stderr.write('response without record id: {0}\n'.format(
+            item.get('volume')))
+
+    if output == '-':
+        outfile = getattr(sys.stdout, 'buffer', sys.stdout)
+        close = False
+    else:
+        outfile = open(output, 'wb')
+        close = True
+
+    try:
+        for line in lines:
+            outfile.write(line.encode('utf-8'))
+            outfile.write(b'\n')
+    finally:
+        if close:
+            outfile.close()
+
+    return len(lines)
+
+
+#=================================================================
 def write_cdx_index(outfile, infile, filename, **options):
     #filename = filename.encode(sys.getfilesystemencoding())
 
@@ -393,6 +442,16 @@ Input file or directory.
 - If directory, all archive files from that directory are read
 """
 
+    batch_help = """
+Treat the inputs as one batch of WARC volumes: pair request records with
+response records by their WARC-Record-Id / WARC-Concurrent-To relationship,
+including across volumes and regardless of the order the volumes are given.
+A response whose request has not arrived gets no POST key and is reported as
+waiting; a response selected by more than one different request is reported as
+a conflict instead of being guessed. The output is a sorted CDXJ index.
+Requires -j (CDXJ).
+"""
+
     allrecords_help = """
 Include All records.
 currently includes the 'request' records in addition to all
@@ -457,12 +516,21 @@ instead of current working directory
                         action='store_true',
                         help=minimal_json_help)
 
+    parser.add_argument('-b', '--batch',
+                        action='store_true',
+                        help=batch_help)
+
     parser.add_argument('-o', '--output',
                         default='-', help=output_help)
 
     parser.add_argument('inputs', nargs='+', help=input_help)
 
     cmd = parser.parse_args(args=args)
+
+    if cmd.batch:
+        if not cmd.cdxj:
+            parser.error('--batch requires -j/--cdxj')
+        return write_batch_index(cmd.output, cmd.inputs)
 
     write_multi_cdx_index(cmd.output, cmd.inputs,
                           sort=cmd.sort,

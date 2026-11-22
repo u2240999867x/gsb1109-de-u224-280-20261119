@@ -140,6 +140,7 @@ setup(
         cdx-server = pywb.apps.cli:cdx_server
         live-rewrite-server = pywb.apps.cli:live_rewrite_server
         cdx-indexer = pywb.indexer.cdxindexer:main
+        wb-batch = pywb.apps.batchcli:main
         wb-manager = pywb.manager.manager:main_wrap_exc
         warcserver = pywb.apps.cli:warcserver
         """,

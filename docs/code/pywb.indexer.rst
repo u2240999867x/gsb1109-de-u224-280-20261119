@@ -12,6 +12,14 @@ pywb.indexer.archiveindexer module
    :undoc-members:
    :show-inheritance:
 
+pywb.indexer.batchindexer module
+--------------------------------
+
+.. automodule:: pywb.indexer.batchindexer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 pywb.indexer.cdxindexer module
 ------------------------------
 

@@ -1,5 +1,6 @@
 from warcio.utils import to_native_str
 
+from pywb.utils.canonicalize import canonicalize
 from pywb.utils.loaders import load_yaml_config
 from pywb.utils.format import to_bool
 from pywb import DEFAULT_RULES_FILE
@@ -198,6 +199,14 @@ class FuzzyMatcher(object):
                 yield cdx
 
     def match_general_fuzzy_query(self, url, urlkey, cdx, rx_cache):
+        # A POST key names the request method and body.  If that key is not
+        # found, do not fall back to another POST of the same url with a
+        # different body: that would replay another form's response.  Older
+        # index entries without method/requestBody, and requests without
+        # extra fields, keep matching as before.
+        if not self._method_query_matches(urlkey, cdx):
+            return False
+
         check_query = False
         url_no_query, ext = self.get_ext(url)
 
@@ -241,9 +250,56 @@ class FuzzyMatcher(object):
 
         return False
 
+    @staticmethod
+    def _method_query_matches(urlkey, cdx):
+        """Does this capture's own method/body reproduce the requested key?
+
+        The canonical urlkey sorts all query params together, so the url's
+        own query cannot be separated from the request body by position.
+        Rebuild the key from the capture's own fields instead and compare it
+        with the requested key.
+        """
+        marker = '__wb_method='
+        if marker not in urlkey:
+            return True
+
+        cdx_method = (cdx.get('method') or '').upper()
+        cdx_body = cdx.get('requestBody') or ''
+        request_url = cdx.get('url') or ''
+        if not request_url:
+            return False
+
+        if cdx_method:
+            rebuilt = _append_method_query(request_url, cdx_method, cdx_body)
+            return _canonical(rebuilt) == urlkey
+
+        # legacy entry without method/requestBody: only a request with no
+        # extra fields (ordinary GET/HEAD) may use it
+        requested = urlkey[urlkey.find(marker) + len(marker):]
+        method = requested.split('&', 1)[0]
+        if method.upper() not in ('GET', 'HEAD'):
+            return False
+        rebuilt = _append_method_query(request_url, method, '')
+        return _canonical(rebuilt) == urlkey
+
     def get_ext(self, url):
         # check last path segment
         # if contains '.', likely a file, so fuzzy match!
         url_no_query = url.split('?', 1)[0]
         last_path = url_no_query.rsplit('/', 1)[-1]
         return url_no_query, os.path.splitext(last_path)[1][1:]
+
+
+def _append_method_query(uri, method, body):
+    sep = '&' if '?' in uri else '?'
+    out = uri + sep + '__wb_method=' + method
+    if body:
+        out += '&' + body
+    return out
+
+
+def _canonical(url):
+    try:
+        return canonicalize(url)
+    except Exception:
+        return None

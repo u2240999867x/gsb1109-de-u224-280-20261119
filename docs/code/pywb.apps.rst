@@ -4,6 +4,14 @@ pywb.apps package
 Submodules
 ----------
 
+pywb.apps.batchcli module
+-------------------------
+
+.. automodule:: pywb.apps.batchcli
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 pywb.apps.cli module
 --------------------
 
