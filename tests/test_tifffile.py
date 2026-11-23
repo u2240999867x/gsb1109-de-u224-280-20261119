@@ -4561,6 +4561,343 @@ def test_class_tifftag_overwrite_ndpi() -> None:
         assert tags['StripByteCounts'].value == (4461521316,)
 
 
+def _workorder_tiff(
+    filename: str,
+    *,
+    bigtiff: bool = False,
+    byteorder: Literal['<', '>'] = '<',
+) -> None:
+    """Write TIFF with shared description and thumbnail suffix alias."""
+    bo = byteorder
+    head = b'II' if bo == '<' else b'MM'
+    if bigtiff:
+        header = head + struct.pack(f'{bo}HHH', 43, 8, 0) + b'\x00' * 8
+        offsize = 8
+        countformat = f'{bo}Q'
+        tagnoformat = f'{bo}Q'
+        entrysize = 20
+        longdtype = 16
+        ifddtype = 18
+    else:
+        header = head + struct.pack(f'{bo}H', 42) + b'\x00' * 4
+        offsize = 4
+        countformat = f'{bo}I'
+        tagnoformat = f'{bo}H'
+        entrysize = 12
+        longdtype = 4
+        ifddtype = 13
+    tagnosize = struct.calcsize(tagnoformat)
+
+    with open(filename, 'wb') as f:
+        f.write(header)
+
+    def append(data: bytes, align: int = 2) -> int:
+        with open(filename, 'r+b') as f:
+            f.seek(0, 2)
+            pos = f.tell()
+            if pos % align:
+                f.write(b'\x00' * (align - pos % align))
+                pos += align - pos % align
+            f.write(data)
+            return pos
+
+    pixels = [
+        append(bytes([10, 11, 12, 13]) * 4),
+        append(bytes([20, 21, 22, 23]) * 4),
+        append(bytes([30, 31, 32, 33]) * 4),
+        append(bytes([40, 41])),
+    ]
+    shared = append(b'CCD-A|CAL-17\x00')
+    cal = shared + len('CCD-A|')
+
+    def packvalue(packed: bytes) -> bytes:
+        if len(packed) > offsize:
+            raise ValueError(packed)
+        return packed + b'\x00' * (offsize - len(packed))
+
+    def inline(code: int, dtype: int, value: int, fmt: str) -> tuple:
+        return (code, dtype, 1, packvalue(struct.pack(fmt, value)))
+
+    def ascii_(code: int, text: bytes, offset: int | None = None) -> tuple:
+        value = text + b'\x00'
+        if offset is None:
+            return (code, 2, len(value), packvalue(value))
+        return (code, 2, len(value), struct.pack(countformat, offset))
+
+    def offset_(code: int, value: int, offset: int | None = None) -> tuple:
+        if offset is None:
+            return inline(code, longdtype, value, countformat)
+        return (code, ifddtype, 1, struct.pack(countformat, offset))
+
+    sizes = [4, 4, 4, 2]
+    positions: list[int] = []
+    for index in range(4):
+        tags = [
+            inline(256, longdtype, sizes[index], countformat),
+            inline(257, longdtype, sizes[index], countformat),
+            inline(258, 3, 8, f'{bo}H'),
+            inline(259, 3, 1, f'{bo}H'),
+            inline(262, 3, 1, f'{bo}H'),
+            offset_(273, pixels[index]),
+            inline(277, 3, 1, f'{bo}H'),
+            inline(278, longdtype, sizes[index], countformat),
+            inline(
+                279,
+                longdtype,
+                sizes[index] * sizes[index],
+                countformat,
+            ),
+        ]
+        if index < 2:
+            tags.append(ascii_(270, b'CCD-A|CAL-17', shared))
+        elif index == 2:
+            tags.append(offset_(330, 0))
+            tags.append(inline(65000, 3, 1, f'{bo}H'))
+        else:
+            tags.append(inline(254, longdtype, 1, countformat))
+            tags.append(ascii_(270, b'CAL-17', cal))
+        tags.sort(key=lambda t: t[0])
+        data = bytearray(struct.pack(tagnoformat, len(tags)))
+        headformat = f'{bo}HHQ' if bigtiff else f'{bo}HHI'
+        for code, dtype, count, value in tags:
+            data += struct.pack(headformat, code, dtype, count)
+            data += value + b'\x00' * (offsize - len(value))
+        data += b'\x00' * offsize
+        positions.append(append(bytes(data)))
+    # patch header to first IFD
+    with open(filename, 'r+b') as f:
+        f.seek(8 if bigtiff else 4)
+        f.write(struct.pack(countformat, positions[0]))
+    # patch next IFD fields
+    for i in range(3):
+        with open(filename, 'r+b') as f:
+            f.seek(positions[i])
+            tagno = struct.unpack(tagnoformat, f.read(tagnosize))[0]
+            f.seek(positions[i] + tagnosize + tagno * entrysize)
+            f.write(struct.pack(countformat, positions[i + 1] if i < 2 else 0))
+    # patch SubIFD offset in page 2
+    valueoffset = 4 + struct.calcsize(countformat)
+    with open(filename, 'r+b') as f:
+        f.seek(positions[2])
+        tagno = struct.unpack(tagnoformat, f.read(tagnosize))[0]
+        for i in range(tagno):
+            f.seek(positions[2] + tagnosize + i * entrysize)
+            code = struct.unpack(f'{bo}H', f.read(2))[0]
+            if code == 330:
+                f.seek(
+                    positions[2] + tagnosize + i * entrysize + valueoffset
+                )
+                f.write(struct.pack(countformat, positions[3]))
+                break
+
+
+def test_class_tifftag_group_overwrite() -> None:
+    """Test group in-place tag corrections with shared values."""
+    with TempFileName('class_tifftag_group_overwrite') as filename:
+        _workorder_tiff(filename)
+        original = pathlib.Path(filename).read_bytes()
+
+        with TiffFile(filename, mode='r+') as tif:
+            pages = tif.pages
+            thumbnail = pages[2].pages[0]
+            assert pages[0].tags[270].value == 'CCD-A|CAL-17'
+            assert pages[1].tags[270].value == 'CCD-A|CAL-17'
+            assert thumbnail.tags[270].value == 'CAL-17'
+            assert pages[2].tags[65000].value == 1
+            caloffset = thumbnail.tags[270].valueoffset
+            layout = (
+                len(original),
+                [(page.offset, page.dataoffsets) for page in pages],
+                thumbnail.offset,
+                thumbnail.dataoffsets,
+                [page.asarray().tobytes() for page in pages],
+                thumbnail.asarray().tobytes(),
+            )
+
+            # first work order is rejected as a whole
+            plan = tif.prepare_tag_corrections(
+                [
+                    (0, 270, 'CCD-B|CAL-18'),
+                    (1, 270, 'CCD-B|CAL-18'),
+                    (2, 65000, 70000),
+                ]
+            )
+            assert not plan.ok
+            assert len(plan.errors) == 3
+            assert any(
+                'page (2, 0)' in str(correction)
+                and correction.tag.code == 270
+                for correction in plan
+                if not correction.ok
+            )
+            assert any(
+                'out of range' in str(correction)
+                for correction in plan
+                if not correction.ok
+                and correction.tag.code == 65000
+            )
+            with pytest.raises(ValueError):
+                plan.apply()
+            assert pathlib.Path(filename).read_bytes() == original
+
+            # corrected work order with thumbnail and valid marker
+            plan = tif.prepare_tag_corrections(
+                [
+                    (0, 270, 'CCD-B|CAL-18'),
+                    (1, 270, 'CCD-B|CAL-18'),
+                    (2, 65000, 2),
+                    (thumbnail, 270, 'CAL-18'),
+                ]
+            )
+            assert plan.ok, str(plan)
+            assert str(plan).count('[ok]') == 4
+            plan.apply()
+            # same open file handle reads new values
+            assert pages[0].tags[270].value == 'CCD-B|CAL-18'
+            assert pages[1].tags[270].value == 'CCD-B|CAL-18'
+            assert pages[2].tags[65000].value == 2
+            assert thumbnail.tags[270].value == 'CAL-18'
+            assert (
+                pages[0].tags[270].valueoffset
+                == pages[1].tags[270].valueoffset
+            )
+            assert thumbnail.tags[270].valueoffset == caloffset
+
+            # shorten shared description; thumbnail unchanged
+            plan = tif.prepare_tag_corrections(
+                [(0, 270, 'CCD-B'), (1, 270, 'CCD-B')]
+            )
+            assert plan.ok, str(plan)
+            plan.apply()
+            assert pages[0].tags[270].value == 'CCD-B'
+            assert pages[1].tags[270].value == 'CCD-B'
+            assert thumbnail.tags[270].value == 'CAL-18'
+
+            # change only thumbnail calibration text
+            plan = tif.prepare_tag_corrections([(thumbnail, 270, 'CAL-19')])
+            assert plan.ok, str(plan)
+            plan.apply()
+            assert thumbnail.tags[270].value == 'CAL-19'
+            assert pages[0].tags[270].value == 'CCD-B'
+            assert pages[1].tags[270].value == 'CCD-B'
+
+            assert pathlib.Path(filename).stat().st_size == len(original)
+            newlayout = (
+                len(pathlib.Path(filename).read_bytes()),
+                [(page.offset, page.dataoffsets) for page in pages],
+                thumbnail.offset,
+                thumbnail.dataoffsets,
+                [page.asarray().tobytes() for page in pages],
+                thumbnail.asarray().tobytes(),
+            )
+            assert newlayout == layout
+
+        with TiffFile(filename) as tif:
+            pages = tif.pages
+            assert pages[0].tags[270].value == 'CCD-B'
+            assert pages[1].tags[270].value == 'CCD-B'
+            assert pages[2].tags[65000].value == 2
+            assert pages[2].pages[0].tags[270].value == 'CAL-19'
+            assert pages[0].shape == (4, 4)
+            assert pages[1].shape == (4, 4)
+            assert pages[2].shape == (4, 4)
+            assert pages[2].pages[0].shape == (2, 2)
+
+
+def test_class_tifftag_group_overwrite_bigtiff() -> None:
+    """Test group in-place tag corrections in BigTIFF."""
+    with TempFileName('class_tifftag_group_overwrite_bigtiff') as filename:
+        _workorder_tiff(filename, bigtiff=True)
+        with TiffFile(filename, mode='r+') as tif:
+            pages = tif.pages
+            thumbnail = pages[2].pages[0]
+            assert pages[0].tags[270].value == 'CCD-A|CAL-17'
+            plan = tif.prepare_tag_corrections(
+                [
+                    (0, 270, 'CCD-B|CAL-18'),
+                    (1, 270, 'CCD-B|CAL-18'),
+                    (2, 65000, 2),
+                    (thumbnail, 270, 'CAL-18'),
+                ]
+            )
+            assert plan.ok, str(plan)
+            plan.apply()
+            assert pages[0].tags[270].value == 'CCD-B|CAL-18'
+            assert thumbnail.tags[270].value == 'CAL-18'
+
+
+def test_class_tifftag_group_overwrite_conflicts() -> None:
+    """Test group tag corrections reject conflicting shared values."""
+    with TempFileName('class_tifftag_group_overwrite_conflicts') as filename:
+        _workorder_tiff(filename)
+        original = pathlib.Path(filename).read_bytes()
+        with TiffFile(filename, mode='r+') as tif:
+            pages = tif.pages
+            thumbnail = pages[2].pages[0]
+            # A and B share the same value bytes but request different values
+            plan = tif.prepare_tag_corrections(
+                [
+                    (0, 270, 'CCD-B|CAL-18'),
+                    (1, 270, 'CCD-C|CAL-18'),
+                ]
+            )
+            assert not plan.ok
+            assert 'conflict' in str(plan)
+            with pytest.raises(ValueError):
+                plan.apply()
+            assert pathlib.Path(filename).read_bytes() == original
+
+            # updating A must also update the unlisted thumbnail suffix
+            plan = tif.prepare_tag_corrections([(0, 270, 'CCD-B|CAL-18')])
+            assert not plan.ok
+            assert 'page (2, 0)' in str(plan)
+            with pytest.raises(ValueError):
+                plan.apply()
+
+            # the legacy single-tag call still allows longer values
+            tag = pages[1].tags[270]
+            oldoffset = tag.valueoffset
+            newtag = tag.overwrite('CCD-A|CAL-17 with more text')
+            assert newtag.valueoffset != oldoffset
+            assert pathlib.Path(filename).stat().st_size > len(original)
+
+        with TiffFile(filename) as tif:
+            assert (
+                tif.pages[1].tags[270].value == 'CCD-A|CAL-17 with more text'
+            )
+
+
+def test_class_tifftag_group_overwrite_mapping() -> None:
+    """Test group tag corrections accept mappings and page-scoped items."""
+    with TempFileName('class_tifftag_group_overwrite_mapping') as filename:
+        _workorder_tiff(filename)
+        with TiffFile(filename, mode='r+') as tif:
+            pages = tif.pages
+            thumbnail = pages[2].pages[0]
+            plan = tif.prepare_tag_corrections(
+                {
+                    0: {270: 'CCD-B|CAL-18'},
+                    1: {270: 'CCD-B|CAL-18'},
+                    2: {65000: 2},
+                    thumbnail.treeindex: {270: 'CAL-18'},
+                }
+            )
+            assert plan.ok, str(plan)
+            plan.apply()
+            assert pages[0].tags[270].value == 'CCD-B|CAL-18'
+            assert pages[1].tags[270].value == 'CCD-B|CAL-18'
+            assert pages[2].tags[65000].value == 2
+            thumbnail = pages[2].pages[0]
+            assert thumbnail.tags[270].value == 'CAL-18'
+
+            plan = tif.prepare_tag_corrections({65000: 2}, pages=2)
+            assert plan.ok
+            plan = tif.prepare_tag_corrections({270: 'CCD-B'}, pages=0)
+            assert not plan.ok  # changes unlisted thumbnail suffix
+            with pytest.raises(ValueError):
+                plan.apply()
+
+
 def test_class_tifftags() -> None:
     """Test TiffTags interface."""
     data = random_data(numpy.uint8, (21, 31))

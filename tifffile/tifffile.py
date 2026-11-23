@@ -832,6 +832,8 @@ __all__ = [
     'TiffSequence',
     'TiffSeries',
     'TiffTag',
+    'TiffTagCorrection',
+    'TiffTagCorrectionPlan',
     'TiffTagRegistry',
     'TiffTags',
     'TiffWriter',
@@ -4688,6 +4690,321 @@ class TiffFile:
         for tif in self._files.values():
             tif.filehandle.close()
 
+    def prepare_tag_corrections(
+        self,
+        corrections: (
+            Mapping[Any, Any]
+            | Sequence[tuple[Any, Any] | tuple[Any, Any, Any]]
+        ),
+        /,
+        *,
+        pages: int | Sequence[int] | None = None,
+    ) -> TiffTagCorrectionPlan:
+        """Check group of tag corrections and return a plan to apply them.
+
+        The whole work order is checked before any bytes are written. Each
+        correction specifies a page, a tag code or name, and the new value.
+        With ``pages``, a mapping of tag codes or names to values applies to
+        all specified pages.
+
+        Values are replaced in place: the tag data type and whether the value
+        is stored inline or out-of-line are preserved. Out-of-line values
+        stay at their original position. ASCII string values must fit into
+        the bytes currently allocated for the tag value, including the
+        trailing NUL. Tags whose value bytes overlap the corrected bytes are
+        reported as aliases, and corrections that would also change a tag not
+        listed in the work order are rejected.
+
+        If any correction is rejected, :py:meth:`apply` raises and leaves the
+        file unchanged.
+
+        Parameters:
+            corrections:
+                One of:
+
+                - Sequence of ``(page, tag, value)`` tuples.
+                - Sequence of ``(tag, value)`` tuples, requiring ``pages``
+                  with exactly one page index.
+                - Mapping of tag codes or names to values, requiring
+                  ``pages``.
+                - Mapping of page indices to mappings of tag codes or names
+                  to values.
+
+                Pages are indices into the main IFD chain. Tag is a tag code
+                or name. Values are compatible with the tag's data type.
+            pages:
+                Page index or sequence of page indices for corrections
+                that do not specify a page.
+
+        Returns:
+            Reviewable plan; call :py:meth:`TiffTagCorrectionPlan.apply`
+            to write the corrections.
+
+        Raises:
+            IndexError: A page index is out of range.
+            KeyError: A tag does not exist on a page or a page has several
+                tags with the same code.
+            TypeError: Corrections are not in a supported format.
+            ValueError: Value is out of range for the tag data type or does
+                not fit into the allocated value bytes.
+
+        """
+        pageindices: list[int] | None
+        if pages is None:
+            pageindices = None
+        elif isinstance(pages, int | numpy.integer):
+            pageindices = [int(pages)]
+        else:
+            pageindices = [int(page) for page in pages]
+
+        workorder: list[tuple[Any, Any, Any]] = []
+        if isinstance(corrections, Mapping):
+            values = list(corrections.values())
+            if values and all(isinstance(value, Mapping) for value in values):
+                # mapping of page indices to tag corrections
+                for pagekey, items in corrections.items():
+                    for tagkey, value in items.items():
+                        workorder.append((pagekey, tagkey, value))
+            else:
+                # mapping of tag codes or names to values
+                if pageindices is None or len(pageindices) != 1:
+                    msg = (
+                        'mapping of tag codes to values requires pages '
+                        'argument with exactly one page index'
+                    )
+                    raise ValueError(msg)
+                pagekey = pageindices[0]
+                for tagkey, value in corrections.items():
+                    workorder.append((pagekey, tagkey, value))
+        else:
+            for item in corrections:
+                if not isinstance(item, tuple | list):
+                    msg = 'sequence of tuples expected'
+                    raise TypeError(msg)
+                if len(item) == 3:
+                    pagekey, tagkey, value = item
+                elif len(item) == 2:
+                    if pageindices is None or len(pageindices) != 1:
+                        msg = (
+                            'corrections without page require pages '
+                            'argument with exactly one page index'
+                        )
+                        raise ValueError(msg)
+                    pagekey = pageindices[0]
+                    tagkey, value = item
+                else:
+                    msg = 'tuples with 2 or 3 items expected'
+                    raise TypeError(msg)
+                workorder.append((pagekey, tagkey, value))
+
+        if not workorder:
+            return TiffTagCorrectionPlan(self, [])
+
+        # read all pages, including pages in SubIFDs
+        allpages = self._all_tiffpages()
+        by_key: dict[int | tuple[int, ...], TiffPage] = {}
+        for page in allpages:
+            by_key[_page_key(page)] = page
+            if len(page.treeindex) == 1:
+                by_key[page.index] = page
+
+        corrections_list: list[TiffTagCorrection] = []
+        for pagekey, tagkey, value in workorder:
+            page: TiffPage | None
+            if isinstance(pagekey, TiffFrame):
+                page = pagekey.aspage()
+            elif isinstance(pagekey, TiffPage):
+                page = pagekey
+            else:
+                page = by_key.get(pagekey)  # type: ignore[arg-type]
+            if page is None:
+                msg = f'page index {pagekey!r} out of range'
+                raise IndexError(msg)
+            if page.parent is not self:
+                msg = f'page {pagekey!r} belongs to another TiffFile'
+                raise ValueError(msg)
+            if isinstance(tagkey, TiffTag):
+                tag = tagkey
+                if tag.parent is not self:
+                    msg = f'tag {tagkey!r} belongs to another TiffFile'
+                    raise ValueError(msg)
+            else:
+                tags = page.tags.getall(tagkey)
+                if not tags:
+                    msg = f'tag {tagkey!r} not found in page {pagekey!r}'
+                    raise KeyError(msg)
+                if len(tags) > 1:
+                    msg = (
+                        f'page {pagekey!r} contains multiple tags with code '
+                        f'{tagkey!r}; specify a tag instance'
+                    )
+                    raise KeyError(msg)
+                tag = tags[0]
+            current = tag.value
+            corrections_list.append(
+                TiffTagCorrection(_page_key(page), tag, value, current)
+            )
+
+        # encode all new values before writing anything
+        for correction in corrections_list:
+            try:
+                count, packedvalue = correction.tag._encode_inplace(
+                    correction.value
+                )
+            except (ValueError, struct.error, OverflowError) as exc:
+                correction.error = str(exc)
+            else:
+                correction.count = count
+                correction.packed = packedvalue
+
+        # detect overlapping writes and unlisted tags affected by them
+        corrections_by_key = {
+            _tag_key(correction.tag): correction
+            for correction in corrections_list
+        }
+        overlay: dict[int, int] = {}
+        owners: dict[int, TiffTagCorrection] = {}
+        conflicts: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+
+        def conflict(
+            first: TiffTagCorrection, second: TiffTagCorrection, position: int
+        ) -> None:
+            pair = tuple(
+                sorted(
+                    (
+                        _tag_key(first.tag),
+                        _tag_key(second.tag),
+                    )
+                )
+            )
+            if pair in conflicts:
+                return
+            conflicts.add(pair)
+            first.error = (
+                'value bytes conflict with correction of '
+                f'page {second.page!r} tag {second.tag.code} '
+                f'({second.tag.name}) at offset {position}'
+            )
+            second.error = (
+                'value bytes conflict with correction of '
+                f'page {first.page!r} tag {first.tag.code} '
+                f'({first.tag.name}) at offset {position}'
+            )
+
+        for correction in corrections_list:
+            if not correction.ok:
+                continue
+            for index, byte in enumerate(correction.packed):
+                position = correction.start + index
+                previous = overlay.get(position)
+                if previous is not None and previous != byte:
+                    conflict(correction, owners[position], position)
+                    break
+                overlay[position] = byte
+                owners[position] = correction
+            if not correction.ok:
+                continue
+            # the corrected tag must read back exactly the requested bytes
+            final = _bytes_at(
+                correction.tag,
+                correction.count * correction.tag.dtype_size,
+                overlay,
+            )
+            if final != correction.packed:
+                correction.error = (
+                    'overlapping corrections would not produce the '
+                    'requested value'
+                )
+
+        # report unlisted tags whose value bytes overlap the written bytes
+        alltags: list[tuple[tuple[int, ...], TiffTag]] = []
+        for page in allpages:
+            for tag in page.tags:
+                alltags.append((page.treeindex, tag))
+        for pageindex, other in alltags:
+            if _tag_key(other) in corrections_by_key:
+                continue
+            ostart = other.valueoffset
+            oend = ostart + other.valuecountbytes
+            current = _tag_bytes(other)
+            patched = _tag_bytes(other, overlay)
+            for correction in corrections_list:
+                if not correction.ok:
+                    continue
+                if _tag_key(other) == _tag_key(correction.tag):
+                    continue
+                if ostart < correction.end and correction.start < oend:
+                    correction.aliases.append(
+                        (pageindex, other, current, patched)
+                    )
+        for correction in corrections_list:
+            if not correction.ok or not correction.aliases:
+                continue
+            aliases = ', '.join(
+                f'page {pageindex!r} tag {other.code} ({other.name})'
+                + ('' if before != after else ' (bytes unchanged)')
+                for pageindex, other, before, after in correction.aliases
+            )
+            if any(
+                before != after
+                for _, _, before, after in correction.aliases
+            ):
+                correction.error = (
+                    f'value bytes would change unlisted tag(s): {aliases}'
+                )
+
+        return TiffTagCorrectionPlan(self, corrections_list)
+
+    def _all_tiffpages(self) -> list[TiffPage]:
+        """Return all TiffPage instances in main IFD chain and SubIFDs."""
+
+        result: list[TiffPage] = []
+        seen: set[int] = set()
+
+        def pages_of(tiffpages: TiffPages) -> Iterator[TiffPage]:
+            for page in tiffpages:
+                if not isinstance(page, TiffPage):
+                    continue
+                if page.offset in seen:
+                    continue
+                seen.add(page.offset)
+                result.append(page)
+                if page.pages is not None:
+                    yield from pages_of(page.pages)
+
+        list(pages_of(self.pages))
+        return result
+
+    def _reload_tag_dependent_state(
+        self, plan: TiffTagCorrectionPlan, /
+    ) -> None:
+        """Reload tags of pages and series affected by applied corrections."""
+        pageoffsets = {
+            correction.tag.offset for correction in plan.corrections
+        }
+        for page in self._all_tiffpages():
+            if page.offset not in pageoffsets:
+                continue
+            old_tags = page.tags
+            for tag in old_tags:
+                tag._value = None
+                # reading value may fail for invalid data
+                try:
+                    tag.value  # noqa: B018
+                except TiffFileError:
+                    pass
+            for code, name in TIFF.TAG_ATTRIBUTES.items():
+                value = old_tags.valueof(code)
+                if value is None:
+                    continue
+                if code in {270, 305} and not isinstance(value, str):
+                    continue
+                setattr(page, name, value)
+            value = old_tags.valueof(270, index=1)
+            if isinstance(value, str):
+                page.description1 = value
+        self._series.clear()
+
     def asarray(
         self,
         key: int | slice | Sequence[int] | None = None,
@@ -8141,6 +8458,43 @@ class TiffPage:
             raise ValueError(msg)
         self.parent.pages.delete(self.index, erase=erase)
 
+    def prepare_corrections(
+        self,
+        corrections: (
+            Mapping[Any, Any]
+            | Sequence[tuple[Any, Any] | tuple[Any, Any, Any]]
+        ),
+        /,
+        *,
+        pages: int | Sequence[int] | None = None,
+    ) -> TiffTagCorrectionPlan:
+        """Check group of tag corrections and return a plan to apply them.
+
+        Corrections without page apply to this page. See
+        :py:meth:`TiffFile.prepare_tag_corrections`.
+
+        """
+        if pages is None:
+            pages = self.treeindex if len(self.treeindex) > 1 else self.index
+        return self.parent.prepare_tag_corrections(corrections, pages=pages)
+
+    def overwrite_group(
+        self,
+        corrections: (
+            Mapping[Any, Any]
+            | Sequence[tuple[Any, Any] | tuple[Any, Any, Any]]
+        ),
+        /,
+        *,
+        pages: int | Sequence[int] | None = None,
+    ) -> TiffTagCorrectionPlan:
+        """Check and apply group of tag corrections.
+
+        See :py:meth:`TiffFile.prepare_tag_corrections`.
+
+        """
+        return self.prepare_corrections(corrections, pages=pages).apply()
+
     def aspage(self) -> TiffPage:
         """Return TiffPage instance."""
         return self
@@ -11344,6 +11698,177 @@ class TiffTag:
             valueoffset,
         )
 
+    def overwrite_group(
+        self,
+        corrections: (
+            Mapping[Any, Any]
+            | Sequence[tuple[Any, Any] | tuple[Any, Any, Any]]
+        ),
+        /,
+        *,
+        pages: int | Sequence[int] | None = None,
+    ) -> TiffTagCorrectionPlan:
+        """Check and apply a group of tag corrections including this tag.
+
+        This is a convenience wrapper around
+        :py:meth:`TiffFile.prepare_tag_corrections`. The plan is applied
+        immediately only if all corrections can be written in place without
+        changing unlisted tags.
+
+        Raises:
+            ValueError: One or more corrections were rejected; the file is
+                unchanged.
+
+        """
+        parent = self.parent
+        if not isinstance(parent, TiffFile):
+            msg = f'{self!r} is not a tag of a TiffFile'
+            raise ValueError(msg)
+        plan = parent.prepare_tag_corrections(corrections, pages=pages)
+        return plan.apply()
+
+    def _encode_inplace(
+        self,
+        value: Any,
+        /,
+        *,
+        dtype: DATATYPE | int | str | None = None,
+        capacity: int | None = None,
+    ) -> tuple[int, bytes]:
+        """Return count and packed value for in-place replacement.
+
+        The tag's data type is preserved. For ASCII strings, the count
+        includes the trailing NUL and the value must fit into ``capacity``
+        bytes, which defaults to the number of bytes currently allocated for
+        the tag value. For other types, the number of values must not exceed
+        the number of values ``capacity`` can hold.
+
+        """
+        if self.offset < 8 or self.valueoffset < 8:
+            msg = f'cannot rewrite tag at offset {self.offset} < 8'
+            raise ValueError(msg)
+
+        if dtype is None:
+            dtype = self.dtype
+        elif isinstance(dtype, str):
+            if len(dtype) > 1 and dtype[0] in '<>|=':
+                dtype = dtype[1:]
+            try:
+                dtype = TIFF.DATA_DTYPES[dtype]
+            except KeyError:
+                msg = f'unknown data type {dtype!r}'
+                raise ValueError(msg) from None
+        else:
+            dtype = enumarg(DATATYPE, dtype)
+        dtype = int(dtype)
+
+        if dtype != int(self.dtype):
+            msg = (
+                f'cannot change data type of {self!r} '
+                f'from {self.dtype_name} to {DATATYPE(dtype).name}'
+            )
+            raise ValueError(msg)
+
+        try:
+            dataformat = TIFF.DATA_FORMATS[dtype]
+        except KeyError:
+            msg = f'unknown data type {dtype!r}'
+            raise ValueError(msg) from None
+
+        byteorder = self.parent.tiff.byteorder
+        allocated = self.valuecountbytes
+        if capacity is None:
+            capacity = allocated
+        elif capacity > allocated:
+            msg = (
+                f'capacity {capacity} exceeds the allocated '
+                f'{allocated} bytes of {self!r}'
+            )
+            raise ValueError(msg)
+
+        if dtype == 2:
+            # strings: count includes the trailing NUL
+            if isinstance(value, str):
+                try:
+                    value = value.encode('ascii')
+                except UnicodeEncodeError as exc:
+                    msg = 'TIFF strings must be 7-bit ASCII'
+                    raise ValueError(msg) from exc
+            elif not isinstance(value, bytes):
+                msg = 'TIFF strings must be 7-bit ASCII'
+                raise ValueError(msg)
+            if len(value) == 0 or value[-1:] != b'\x00':
+                value += b'\x00'
+            if len(value) > capacity:
+                msg = (
+                    f'{len(value)} bytes do not fit into {capacity} bytes '
+                    f'of {self!r}'
+                )
+                raise ValueError(msg)
+            # write only the encoded value; leave any remaining allocated
+            # bytes untouched so that shared values are not erased
+            return len(value), value
+
+        if isinstance(value, bytes):
+            # pre-packed binary data
+            dtsize = struct.calcsize(dataformat)
+            if len(value) % dtsize:
+                msg = 'invalid packed binary data'
+                raise ValueError(msg)
+            packedvalue = value
+            count = len(value) // dtsize
+        else:
+            try:
+                count = len(value)
+            except TypeError:
+                value = (value,)
+                count = 1
+            if dtype in {5, 10}:
+                if count < 2 or count % 2:
+                    msg = 'invalid RATIONAL value'
+                    raise ValueError(msg)
+                count //= 2  # rational
+            try:
+                packedvalue = struct.pack(
+                    f'{byteorder}{count * int(dataformat[0])}{dataformat[1]}',
+                    *value,
+                )
+            except (struct.error, OverflowError) as exc:
+                msg = (
+                    f'{value!r} is out of range or not compatible with '
+                    f'{self.dtype_name}'
+                )
+                raise ValueError(msg) from exc
+
+        if count * self.dtype_size > capacity:
+            msg = (
+                f'{count} values ({len(packedvalue)} bytes) do not fit into '
+                f'{capacity} bytes of {self!r}'
+            )
+            raise ValueError(msg)
+        return count, packedvalue
+
+    @property
+    def dtype_size(self) -> int:
+        """Size of one tag value item in bytes."""
+        return struct.calcsize(TIFF.DATA_FORMATS[self.dtype])
+
+    @property
+    def valuecountbytes(self) -> int:
+        """Number of bytes reserved for tag value in file."""
+        return self.count * struct.calcsize(TIFF.DATA_FORMATS[self.dtype])
+
+    def _is_inline(self) -> bool:
+        """Tag value is stored in the IFD entry."""
+        tiff = self.parent.tiff
+        if tiff.is_ndpi and self.dtype == 2:
+            return False
+        return (
+            self.valueoffset
+            == self.offset + 4 + struct.calcsize(tiff.tagformat2[:2])
+            and self.valuecountbytes <= tiff.tagoffsetthreshold
+        )
+
     def _fix_lsm_bitspersample(self) -> None:
         """Correct LSM bitspersample tag.
 
@@ -11417,6 +11942,296 @@ class TiffTag:
         else:
             line += '\n' + value
         return line
+
+
+class TiffTagCorrection:
+    """Correction of one tag value in a :py:class:`TiffTagCorrectionPlan`.
+
+    Attributes:
+        page:
+            Tree index of the page containing the tag.
+        tag:
+            TiffTag instance to correct.
+        value:
+            New tag value.
+        current:
+            Current value of the tag.
+        aliases:
+            Other tags whose value bytes overlap the corrected bytes and
+            would also change when the correction is written.
+        error:
+            Reason why the correction cannot be written, else None.
+
+    """
+
+    __slots__ = (
+        'aliases',
+        'count',
+        'current',
+        'error',
+        'packed',
+        'page',
+        'tag',
+        'value',
+    )
+
+    def __init__(
+        self,
+        page: tuple[int, ...],
+        tag: TiffTag,
+        value: Any,
+        current: Any,
+        /,
+    ) -> None:
+        self.page = page
+        self.tag = tag
+        self.value = value
+        self.current = current
+        self.aliases: list[
+            tuple[tuple[int, ...], TiffTag, bytes, bytes]
+        ] = []
+        self.error: str | None = None
+        self.count: int = tag.count
+        self.packed: bytes = b''
+
+    @property
+    def start(self) -> int:
+        """File position where corrected bytes start."""
+        return self.tag.valueoffset
+
+    @property
+    def end(self) -> int:
+        """File position where corrected bytes end."""
+        return self.start + len(self.packed)
+
+    @property
+    def ok(self) -> bool:
+        """Correction can be written without affecting unlisted tags."""
+        return self.error is None
+
+    def __repr__(self) -> str:
+        return (
+            f'<tifffile.TiffTagCorrection page={self.page!r} '
+            f'tag={self.tag.code} value={self.value!r} '
+            f'error={self.error!r}>'
+        )
+
+    def __str__(self) -> str:
+        name = self.tag.name
+        current = _tiff_tag_value_repr(self.current)
+        new = _tiff_tag_value_repr(self.value)
+        result = (
+            f'page {self.page!r} tag {self.tag.code} ({name}) '
+            f'{self.tag.dtype_name} @{self.tag.valueoffset}: '
+            f'{current} -> {new}'
+        )
+        if self.error:
+            result += f' [rejected: {self.error}]'
+        else:
+            result += ' [ok]'
+        for pageindex, tag, before, after in self.aliases:
+            result += (
+                f'; aliased by page {pageindex!r} tag {tag.code} '
+                f'({tag.name}) @{tag.valueoffset}'
+            )
+            if before == after:
+                result += ' (bytes unchanged)'
+            else:
+                result += (
+                    f': {_tiff_tag_value_repr(before)} -> '
+                    f'{_tiff_tag_value_repr(after)}'
+                )
+        return result
+
+
+class TiffTagCorrectionPlan:
+    """Plan for correcting a group of tag values in place.
+
+    A plan is created by :py:meth:`TiffFile.prepare_tag_corrections` or
+    :py:meth:`TiffTag.overwrite_group` and can be reviewed before writing
+    with :py:meth:`apply`. If any correction is rejected, no bytes are
+    written.
+
+    Attributes:
+        corrections:
+            TiffTagCorrection instances in the order they were specified.
+
+    """
+
+    __slots__ = ('_applied', '_fh_pos', 'corrections', 'parent')
+
+    parent: TiffFile
+    """TiffFile the tag corrections apply to."""
+
+    def __init__(
+        self, parent: TiffFile, corrections: list[TiffTagCorrection], /
+    ) -> None:
+        self.parent = parent
+        self.corrections = corrections
+        self._applied = False
+        self._fh_pos = parent.filehandle.tell()
+
+    @property
+    def ok(self) -> bool:
+        """All corrections can be written without side effects."""
+        return all(correction.ok for correction in self.corrections)
+
+    @property
+    def errors(self) -> list[TiffTagCorrection]:
+        """Corrections that cannot be written."""
+        return [
+            correction
+            for correction in self.corrections
+            if not correction.ok
+        ]
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+    def __iter__(self) -> Iterator[TiffTagCorrection]:
+        return iter(self.corrections)
+
+    def __len__(self) -> int:
+        return len(self.corrections)
+
+    def __repr__(self) -> str:
+        return (
+            f'<tifffile.TiffTagCorrectionPlan '
+            f'{len(self.corrections)} corrections, ok={self.ok}>'
+        )
+
+    def __str__(self) -> str:
+        lines = [str(correction) for correction in self.corrections]
+        if not self.ok:
+            lines.append(
+                f'{len(self.errors)} of {len(self.corrections)} corrections '
+                'cannot be written; no changes were made'
+            )
+        return '\n'.join(lines)
+
+    def apply(self) -> TiffTagCorrectionPlan:
+        """Write all corrections in place, if none were rejected.
+
+        A plan is applied at most once. The file length and positions of
+        IFDs, values, and image data are not changed.
+
+        Returns:
+            This plan, with updated tags and current values.
+
+        Raises:
+            RuntimeError: Plan was already applied.
+            ValueError:
+                At least one correction was rejected. The file is unchanged.
+
+        """
+        if not self.ok:
+            msg = '\n'.join(
+                f'{correction}'
+                for correction in self.errors
+            )
+            raise ValueError(
+                'cannot apply tag corrections:\n' + msg
+            )
+        if self._applied:
+            msg = 'tag correction plan was already applied'
+            raise RuntimeError(msg)
+        fh = self.parent.filehandle
+        with fh.lock:
+            pos = fh.tell()
+            try:
+                for correction in self.corrections:
+                    self._apply_correction(correction)
+            finally:
+                fh.seek(pos)
+        self.parent._reload_tag_dependent_state(self)
+        self._applied = True
+        self._fh_pos = fh.tell()
+        return self
+
+    def _apply_correction(self, correction: TiffTagCorrection) -> None:
+        tag = correction.tag
+        fh = self.parent.filehandle
+        tiff = self.parent.tiff
+        count = correction.count
+        packedvalue = correction.packed
+        inline = tag._is_inline()
+        if inline:
+            # write count and value into the IFD entry
+            fh.seek(tag.offset + 4)
+            padded = packedvalue + b'\x00' * (
+                struct.calcsize(tiff.tagformat2) - len(packedvalue)
+            )
+            fh.write(struct.pack(tiff.tagformat2, count, padded))
+        else:
+            # preserve the position of the out-of-line value
+            fh.seek(tag.valueoffset)
+            fh.write(packedvalue)
+            if count != tag.count:
+                fh.seek(tag.offset + 4)
+                countformat = tiff.byteorder + tiff.tagformat2[1:2]
+                fh.write(
+                    struct.pack(
+                        countformat + tiff.offsetformat[1:],
+                        count,
+                        tag.valueoffset,
+                    )
+                )
+        tag.count = count
+        tag._value = None
+
+
+def _tiff_tag_value_repr(value: Any, /) -> str:
+    """Return readable representation of tag value for reports."""
+    if isinstance(value, bytes):
+        try:
+            return repr(value.decode('ascii'))
+        except UnicodeDecodeError:
+            return repr(value)
+    if isinstance(value, tuple | list) and len(value) > 16:
+        return f'{type(value).__name__}[{len(value)}]'
+    return repr(value)
+
+
+def _page_key(page: TiffPage, /) -> tuple[int, ...]:
+    """Return printable page identifier."""
+    return page.treeindex
+
+
+def _tag_key(tag: TiffTag, /) -> tuple[int, int]:
+    """Return stable identifier of tag IFD entry."""
+    return tag.offset, tag.code
+
+
+def _tag_bytes(
+    tag: TiffTag, overlay: Mapping[int, int] | None = None, /
+) -> bytes:
+    """Return the tag value bytes, optionally with overlay bytes applied."""
+    return _bytes_at(tag, tag.valuecountbytes, overlay)
+
+
+def _bytes_at(
+    tag: TiffTag,
+    size: int,
+    overlay: Mapping[int, int] | None = None,
+    /,
+) -> bytes:
+    """Return bytes at tag value position, optionally with overlay applied."""
+    if size == 0:
+        return b''
+    fh = tag.parent.filehandle
+    pos = fh.tell()
+    try:
+        fh.seek(tag.valueoffset)
+        value = bytearray(fh.read(size))
+    finally:
+        fh.seek(pos)
+    if overlay:
+        for index in range(size):
+            position = tag.valueoffset + index
+            byte = overlay.get(position)
+            if byte is not None:
+                value[index] = byte
+    return bytes(value)
 
 
 @final
@@ -11644,6 +12459,48 @@ class TiffTags:
     def __len__(self) -> int:
         """Return number of tags."""
         return self._count
+
+    def prepare_corrections(
+        self,
+        corrections: (
+            Mapping[Any, Any]
+            | Sequence[tuple[Any, Any] | tuple[Any, Any, Any]]
+        ),
+        /,
+        *,
+        pages: int | Sequence[int] | None = None,
+    ) -> TiffTagCorrectionPlan:
+        """Check group of tag corrections and return a plan to apply them.
+
+        See :py:meth:`TiffFile.prepare_tag_corrections`.
+
+        """
+        parent = None
+        for tag in self:
+            if isinstance(tag.parent, TiffFile):
+                parent = tag.parent
+                break
+        if parent is None:
+            msg = 'tags do not belong to a TiffFile'
+            raise ValueError(msg)
+        return parent.prepare_tag_corrections(corrections, pages=pages)
+
+    def overwrite_group(
+        self,
+        corrections: (
+            Mapping[Any, Any]
+            | Sequence[tuple[Any, Any] | tuple[Any, Any, Any]]
+        ),
+        /,
+        *,
+        pages: int | Sequence[int] | None = None,
+    ) -> TiffTagCorrectionPlan:
+        """Check and apply group of tag corrections.
+
+        See :py:meth:`TiffFile.prepare_tag_corrections`.
+
+        """
+        return self.prepare_corrections(corrections, pages=pages).apply()
 
     def __repr__(self) -> str:
         return f'<tifffile.TiffTags @0x{id(self):016X}>'
