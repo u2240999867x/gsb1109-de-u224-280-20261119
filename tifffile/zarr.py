@@ -47,6 +47,8 @@ import contextlib
 import enum
 import json
 import sys
+import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import TYPE_CHECKING, Literal, override
@@ -643,6 +645,17 @@ class ZarrTiffStore(ZarrStore):
         buffersize:
             Approximate number of bytes to read from file in one pass
             if `chunkmode=2`. The default is :py:attr:`_TIFF.BUFFERSIZE`.
+        select:
+            Map of axis character codes ('C', 'Z', ...) to sequences of
+            source indices. Only the selected planes are exposed lazily,
+            in the order given, as a Zarr array. Selected missing planes
+            are filled with `fillvalue`; unselected planes are never read.
+        select_c, select_z:
+            Shortcuts for ``select={'C': select_c, 'Z': select_z}``.
+        chunks:
+            Chunk shape of the selection view. By default, derive from the
+            source segment shape: one plane per chunk along selected
+            channel axes and up to two planes along selected stack axes.
         read_only:
             Passed to :py:class:`zarr.abc.store.Store`.
         _openfiles:
@@ -672,6 +685,10 @@ class ZarrTiffStore(ZarrStore):
         maxworkers: int | None = None,
         buffersize: int | None = None,
         read_only: bool | None = None,
+        select: Mapping[str, Sequence[int]] | None = None,
+        select_c: Sequence[int] | None = None,
+        select_z: Sequence[int] | None = None,
+        chunks: Sequence[int] | None = None,
         _openfiles: int | None = None,
     ) -> None:
         if chunkmode is None:
@@ -684,6 +701,8 @@ class ZarrTiffStore(ZarrStore):
             raise NotImplementedError(msg)
 
         self._buffersize = buffersize
+
+        selection = _normalize_selection(select, select_c, select_z)
 
         if isinstance(arg, TiffPageSeries):
             self._data = arg.levels
@@ -698,6 +717,26 @@ class ZarrTiffStore(ZarrStore):
             self._transform = None
             name = 'Unnamed'
 
+        if selection is not None:
+            if not isinstance(arg, TiffPageSeries):
+                msg = 'selection requires a TiffPageSeries'
+                raise NotImplementedError(msg)
+            if chunkmode != 0:
+                msg = 'selection requires chunkmode=0'
+                raise NotImplementedError(msg)
+            # Only the selected C/Z planes are exposed, not pyramid levels.
+            source = self._data[0]
+            self._view = _SelectionView(
+                source,
+                selection,
+                chunks=_view_chunks(source, selection, chunks),
+            )
+            self._data = [source]
+            self._transform = None
+            multiscales = False
+        else:
+            self._view = None
+
         if not maxworkers:
             maxworkers = self._data[0].keyframe.maxworkers
             if maxworkers < 3 and chunkmode == 0:
@@ -708,6 +747,8 @@ class ZarrTiffStore(ZarrStore):
 
         if read_only is None:
             read_only = not fh.writable() or chunkmode != 0
+        if self._view is not None:
+            read_only = True
 
         super().__init__(
             fillvalue=fillvalue, chunkmode=chunkmode, read_only=read_only
@@ -717,6 +758,7 @@ class ZarrTiffStore(ZarrStore):
             fh.set_lock(True)
             lock = fh.lock
         self._filecache = FileCache(size=_openfiles, lock=lock)
+        self._decoder = _shared_decoder(self._data[0].keyframe.parent)
 
         zattrs = {} if zattrs is None else dict(zattrs)
         # TODO: Zarr Encoding Specification
@@ -831,10 +873,20 @@ class ZarrTiffStore(ZarrStore):
         else:
             self._multiscales = False
             series = self._data[0]
+            if self._view is not None:
+                # cache decoder function before concurrent use
+                for page in self._view.source._pages:
+                    if page is not None and page.keyframe is not None:
+                        page.keyframe.decode  # noqa: B018
             dimension_names = tuple(dimension_names or series.axes)
-            fillvalue, _ = self._init_zarray(
-                series, 'zarr.json', fillvalue, dimension_names
-            )
+            if self._view is not None:
+                fillvalue = self._init_zarray_view(
+                    self._view, 'zarr.json', fillvalue, dimension_names
+                )
+            else:
+                fillvalue, _ = self._init_zarray(
+                    series, 'zarr.json', fillvalue, dimension_names
+                )
             if zattrs:
                 zarr_json = json.loads(self._store['zarr.json'])
                 zarr_json['attributes'].update(zattrs)
@@ -909,6 +961,65 @@ class ZarrTiffStore(ZarrStore):
                 # )
             )
         return fillvalue, shape
+
+    def _init_zarray_view(
+        self,
+        view: _SelectionView,
+        key: str,
+        fillvalue: float | None,
+        /,
+        dimension_names: tuple[str, ...] | None = None,
+    ) -> float:
+        """Store zarr.json for selection view; return fillvalue."""
+        keyframe = view.source.keyframe
+        keyframe.decode  # noqa: B018 - cache decode function
+        shape = view.shape
+        dtype = view.source.dtype
+        if fillvalue is None:
+            fillvalue = numpy.asarray(keyframe.fillvalue).item()
+            self._fillvalue = fillvalue
+        if keyframe._dtype is None:
+            shape = (0, 0)
+            dtype = numpy.dtype(numpy.bool_)
+            dimension_names = None
+        chunk_shape = list(view.chunks)
+        if dtype.itemsize == 1:
+            bytes_codec: dict[str, Any] = {'name': 'bytes'}
+        elif sys.byteorder == 'big':
+            bytes_codec = {
+                'name': 'bytes',
+                'configuration': {'endian': 'big'},
+            }
+        else:
+            bytes_codec = {
+                'name': 'bytes',
+                'configuration': {'endian': 'little'},
+            }
+        attributes = dict(view.attributes)
+        attributes['source_indices'] = {
+            axis: list(idx) for axis, idx in view.mapping.items()
+        }
+        self._store[key] = _json_dumps(
+            {
+                'zarr_format': 3,
+                'node_type': 'array',
+                'shape': list(shape),
+                'data_type': dtype.name,
+                'chunk_grid': {
+                    'name': 'regular',
+                    'configuration': {'chunk_shape': chunk_shape},
+                },
+                'chunk_key_encoding': {
+                    'name': 'default',
+                    'configuration': {'separator': '/'},
+                },
+                'fill_value': _json_value(fillvalue, dtype),
+                'codecs': [bytes_codec],
+                'dimension_names': dimension_names,
+                'attributes': attributes,
+            }
+        )
+        return float(fillvalue)  # type: ignore[arg-type]
 
     @override
     def close(self) -> None:
@@ -995,6 +1106,9 @@ class ZarrTiffStore(ZarrStore):
               <https://github.com/fsspec/kerchunk>`_
 
         """
+        if self._view is not None:
+            msg = 'write_fsspec is not supported for selection views'
+            raise NotImplementedError(msg)
         compressors = {
             1: None,
             # 2: 'imagecodecs_ccittrle',
@@ -1251,6 +1365,9 @@ class ZarrTiffStore(ZarrStore):
         if key.endswith(('.zmetadata', '.zarray', '.zgroup', '.zattrs')):
             return None
 
+        if self._view is not None:
+            return await self._get_view_chunk(key, prototype)
+
         keyframe, page, chunkindex, offset, bytecount = self._parse_key(key)
 
         if page is None or offset == 0 or bytecount == 0:
@@ -1319,6 +1436,94 @@ class ZarrTiffStore(ZarrStore):
             raise RuntimeError(msg)
         return prototype.buffer.from_array_like(chunk.reshape(-1).view('B'))
 
+    def _view_chunk_index(self, key: str, /) -> tuple[int, ...] | None:
+        """Return chunk index tuple from Zarr chunk key for selection view."""
+        key = key.removeprefix('c/')
+        if self._multiscales and '/' in key:
+            key = key.split('/', 1)[1]
+        if '/' not in key and '.' in key:
+            key = key.replace('.', '/')
+        try:
+            index = tuple(int(i) for i in key.split('/'))
+        except ValueError:
+            return None
+        if len(index) != len(self._view.chunks):
+            return None
+        return index
+
+    async def _get_view_chunk(
+        self, key: str, prototype: BufferPrototype
+    ) -> Buffer | None:
+        """Return selection view chunk for Zarr chunk key."""
+        view = self._view
+        assert view is not None
+        chunkindex = self._view_chunk_index(key)
+        if chunkindex is None:
+            return None
+        return await view.get_chunk(self, chunkindex, prototype)
+
+    def _source_segment(
+        self, series: TiffPageSeries, chunkindex: Sequence[int], /
+    ) -> tuple[TiffPage | TiffFrame, int, int, int] | None:
+        """Return source page, segment index, offset, and bytecount."""
+        key = '.'.join(str(int(i)) for i in chunkindex)
+        try:
+            pageindex, strileindex = self._indices(key, series)
+        except (KeyError, IndexError, ValueError, RuntimeError):
+            return None
+        try:
+            page = series[pageindex]
+        except (IndexError, ValueError):
+            return None
+        if page is None or page.keyframe is None:
+            return None
+        if series.dataoffset is not None:
+            # contiguous multi-page series
+            page = series[0]
+            if page is None or page.dtype is None:
+                return None
+            try:
+                offset = pageindex * page.size * page.dtype.itemsize
+                offset += page.dataoffsets[strileindex]
+            except (AttributeError, IndexError, TypeError):
+                return None
+            try:
+                bytecount = page.databytecounts[strileindex]
+            except IndexError:
+                return None
+            if offset <= 0 or bytecount <= 0:
+                return None
+            return page.keyframe, strileindex, int(offset), int(bytecount)
+        try:
+            offset = page.dataoffsets[strileindex]
+            bytecount = page.databytecounts[strileindex]
+        except IndexError:
+            return None
+        if offset is None or bytecount is None:
+            return None
+        if offset <= 0 or bytecount <= 0:
+            return None
+        return page, strileindex, int(offset), int(bytecount)
+
+    async def _decode_source_segment(
+        self,
+        page: TiffPage | TiffFrame,
+        strileindex: int,
+        offset: int,
+        bytecount: int,
+    ) -> NDArray[Any] | None:
+        """Read and decode a single source segment, sharing concurrent work.
+
+        Concurrent requests for the same segment (identified by file and
+        offset) share one read and decode. Cancellation of one requester
+        does not cancel the shared decode; the shared work is abandoned
+        only after all requesters have been cancelled.
+
+        """
+        return await self._decoder.decode(
+            page, strileindex, offset, bytecount
+        )
+
     @override
     async def exists(self, key: str) -> bool:
         """Return whether key exists in store."""
@@ -1330,6 +1535,11 @@ class ZarrTiffStore(ZarrStore):
     @override
     def _chunk_exists(self, key: str, /) -> bool:
         """Return whether chunk key exists in store."""
+        if self._view is not None:
+            chunkindex = self._view_chunk_index(key)
+            if chunkindex is None:
+                return False
+            return self._view.chunk_exists(self, chunkindex)
         try:
             _kf, page, _ci, offset, bytecount = self._parse_key(key)
         except (KeyError, IndexError):
@@ -1443,7 +1653,8 @@ class ZarrTiffStore(ZarrStore):
             indices = [int(i) for i in key.split('.')]
         except ValueError as exc:
             raise KeyError(key) from exc
-        assert len(indices) == len(shape)
+        if len(indices) != len(shape):
+            raise KeyError(key)
         if self._chunkmode:
             chunked = (1,) * len(keyframe.shape)
         else:
@@ -1491,6 +1702,459 @@ class ZarrTiffStore(ZarrStore):
                 numpy.ravel_multi_index(strile_indices, strile_chunked)
             )
         return frameindex, strileindex
+
+
+def _normalize_selection(
+    select: Mapping[str, Sequence[int]] | None,
+    select_c: Sequence[int] | None,
+    select_z: Sequence[int] | None,
+) -> dict[str, tuple[int, ...]] | None:
+    """Return normalized mapping of axis codes to source indices, or None."""
+    result: dict[str, tuple[int, ...]] = {}
+    if select is not None:
+        for axis, indices in select.items():
+            result[str(axis).upper()] = tuple(int(i) for i in indices)
+    if select_c is not None:
+        result['C'] = tuple(int(i) for i in select_c)
+    if select_z is not None:
+        result['Z'] = tuple(int(i) for i in select_z)
+    if not result:
+        return None
+    for axis, indices in result.items():
+        if not indices:
+            msg = f'empty selection for axis {axis!r}'
+            raise ValueError(msg)
+        if any(i < 0 for i in indices):
+            msg = f'negative source index in selection for axis {axis!r}'
+            raise ValueError(msg)
+    return result
+
+
+def _view_chunks(
+    series: TiffPageSeries,
+    selection: Mapping[str, Sequence[int]],
+    chunks: Sequence[int] | None,
+) -> tuple[int, ...] | None:
+    """Return chunk shape for a selection view.
+
+    If ``chunks`` is None, the output chunk shape follows the source
+    segment shape along non-selected axes. Selected channel axes use one
+    plane per chunk; selected stack axes (such as Z) use two planes per
+    chunk so that a chunk may span multiple source pages.
+
+    """
+    if chunks is not None:
+        return tuple(int(c) for c in chunks)
+    shape = series.shape
+    keyframe = series.keyframe
+    source_chunks = _chunks(keyframe.chunks, shape, keyframe.shaped)
+    result: list[int] = []
+    for axis, chunk in zip(series.axes, source_chunks, strict=True):
+        axis = axis.upper()
+        if axis in selection:
+            count = len(selection[axis])
+            if axis in 'CS':
+                result.append(1)
+            else:
+                result.append(min(count, max(2, int(chunk))))
+        else:
+            result.append(int(chunk))
+    return tuple(result)
+
+
+class _SelectionView:
+    """Lazy view of selected source planes of a TiffPageSeries.
+
+    Output chunks preserve the source axis order but expose only the
+    selected indices along selected axes, in the order given. Only source
+    pages and segments required to assemble a requested chunk are read.
+
+    """
+
+    __slots__ = (
+        'attributes',
+        'axes',
+        'chunks',
+        'mapping',
+        'shape',
+        'source',
+        'source_chunks',
+    )
+
+    def __init__(
+        self,
+        series: TiffPageSeries,
+        selection: Mapping[str, Sequence[int]],
+        chunks: Sequence[int] | None = None,
+    ) -> None:
+        axes = series.axes
+        shape = series.shape
+        keyframe = series.keyframe
+        mapping: dict[str, tuple[int, ...]] = {}
+        for axis, indices in selection.items():
+            axis = str(axis).upper()
+            if axis not in axes:
+                msg = f'axis {axis!r} not in series axes {axes!r}'
+                raise ValueError(msg)
+            size = shape[axes.index(axis)]
+            for index in indices:
+                if not 0 <= index < size:
+                    msg = (
+                        f'source index {index} out of range for axis '
+                        f'{axis!r} with size {size}'
+                    )
+                    raise IndexError(msg)
+            mapping[axis] = tuple(int(i) for i in indices)
+
+        source_chunks = _chunks(keyframe.chunks, shape, keyframe.shaped)
+        source_chunks = tuple(max(1, int(c)) for c in source_chunks)
+        if chunks is None:
+            chunks = source_chunks
+        else:
+            chunks = tuple(int(c) for c in chunks)
+            if len(chunks) != len(shape) or any(c < 1 for c in chunks):
+                msg = f'invalid chunks {chunks!r} for shape {shape!r}'
+                raise ValueError(msg)
+
+        self.source = series
+        self.axes = axes
+        self.mapping = mapping
+        self.shape = tuple(
+            len(mapping[axis]) if axis in mapping else size
+            for axis, size in zip(axes, shape, strict=True)
+        )
+        self.source_chunks = source_chunks
+        self.chunks = chunks
+
+        attributes: dict[str, Any] = {
+            'select': {axis: list(idx) for axis, idx in mapping.items()},
+            'selection': {axis: list(idx) for axis, idx in mapping.items()},
+            'source_indices': {
+                axis: list(idx) for axis, idx in mapping.items()
+            },
+            'source_shape': list(shape),
+            'source_axes': axes,
+        }
+        for axis, indices in mapping.items():
+            attributes[f'{axis}_indices'] = list(indices)
+        try:
+            coords = series.coords
+        except Exception:  # noqa: BLE001
+            coords = {}
+        coord_values: dict[str, list[float]] = {}
+        for axis, indices in mapping.items():
+            values = coords.get(axis)
+            if values is None:
+                continue
+            try:
+                coord_values[axis] = [float(values[i]) for i in indices]
+            except (IndexError, TypeError, ValueError):
+                continue
+        if coord_values:
+            attributes['coords'] = coord_values
+        self.attributes = attributes
+
+    def _axis_choices(
+        self, axisindex: int, chunkindex: int
+    ) -> list[tuple[int, int, int, int, int, int]]:
+        """Return choices for one output chunk axis.
+
+        Each choice is ``(outstart, outlength, srcindex, srcchunk,
+        tilestart, tilelength)``. ``outstart`` is relative to the output
+        chunk; ``srcindex`` is the first source index; ``srcchunk`` is the
+        source chunk-grid coordinate; ``tilestart`` and ``tilelength``
+        locate the region within the decoded source segment.
+
+        """
+        axis = self.axes[axisindex]
+        outstart = int(chunkindex) * self.chunks[axisindex]
+        outsize = self.shape[axisindex]
+        if outstart >= outsize:
+            return []
+        outlength = min(self.chunks[axisindex], outsize - outstart)
+        srcchunksize = self.source_chunks[axisindex]
+        choices: list[tuple[int, int, int, int, int, int]] = []
+        if axis in self.mapping:
+            indices = self.mapping[axis]
+            for o in range(outlength):
+                outpos = outstart + o
+                if outpos >= len(indices):
+                    break
+                srcindex = indices[outpos]
+                srcchunk = srcindex // srcchunksize
+                choices.append(
+                    (o, 1, srcindex, srcchunk, srcindex % srcchunksize, 1)
+                )
+            return choices
+        stop = outstart + outlength
+        pos = outstart
+        while pos < stop:
+            srcchunk = pos // srcchunksize
+            chunkstart = srcchunk * srcchunksize
+            tilestart = pos - chunkstart
+            length = min(stop - pos, srcchunksize - tilestart)
+            choices.append(
+                (pos - outstart, length, pos, srcchunk, tilestart, length)
+            )
+            pos += length
+        return choices
+
+    def chunk_combinations(
+        self, chunkindex: Sequence[int]
+    ) -> Iterator[
+        tuple[
+            tuple[Any, ...],
+            tuple[int, ...],
+            tuple[Any, ...],
+            tuple[int, ...],
+        ]
+    ]:
+        """Yield output indices, source chunk, decoded region, dest shape."""
+        ndim = len(self.axes)
+        if len(chunkindex) != ndim:
+            return
+        peraxis: list[list[tuple[int, int, int, int, int, int]]] = []
+        for i in range(ndim):
+            choices = self._axis_choices(i, int(chunkindex[i]))
+            if not choices:
+                return
+            peraxis.append(choices)
+
+        keyframe = self.source.keyframe
+        contig_samples = (
+            1
+            if keyframe.planarconfig != 1
+            else max(1, int(keyframe.samplesperpixel))
+        )
+        for combination in _product_choices(peraxis):
+            out_index: list[Any] = []
+            src_chunk: list[int] = []
+            dest_shape: list[int] = []
+            depth: Any = slice(0, 1)
+            length: Any = slice(None)
+            width: Any = slice(None)
+            samples: Any = slice(0, 1)
+            for i, (o, olen, _s, sc, tstart, tlen) in zip(
+                range(ndim), combination, strict=True
+            ):
+                axis = self.axes[i].upper()
+                out_index.append(slice(o, o + olen))
+                src_chunk.append(sc)
+                dest_shape.append(olen)
+                region = slice(tstart, tstart + tlen)
+                if axis == 'Z':
+                    depth = region
+                elif axis == 'Y':
+                    length = region
+                elif axis == 'X':
+                    width = region
+                elif axis == 'S':
+                    samples = region
+            if contig_samples > 1 and 'S' not in self.axes:
+                samples = slice(None)
+            yield (
+                tuple(out_index),
+                tuple(src_chunk),
+                (depth, length, width, samples),
+                tuple(dest_shape),
+            )
+
+    def chunk_exists(
+        self, store: ZarrTiffStore, chunkindex: Sequence[int], /
+    ) -> bool:
+        """Return whether any source segment of output chunk exists."""
+        for _out, src_chunk, _region, _dest in self.chunk_combinations(
+            chunkindex
+        ):
+            result = store._source_segment(self.source, src_chunk)
+            if result is None:
+                continue
+            _page, _index, offset, bytecount = result
+            if offset > 0 and bytecount > 0:
+                return True
+        return False
+
+    async def get_chunk(
+        self,
+        store: ZarrTiffStore,
+        chunkindex: Sequence[int],
+        prototype: BufferPrototype,
+    ) -> Buffer | None:
+        """Return output chunk bytes, or None if no source segment exists."""
+        dtype = self.source.dtype
+        fillvalue = self.source.keyframe._fillvalue(store._fillvalue)
+        chunk = numpy.full(self.chunks, fillvalue, dtype=dtype)
+        cache: dict[tuple[int, int], NDArray[Any] | None] = {}
+        found = False
+        for out_index, src_chunk, region_index, dest_shape in (
+            self.chunk_combinations(chunkindex)
+        ):
+            result = store._source_segment(self.source, src_chunk)
+            if result is None:
+                continue
+            page, strileindex, offset, bytecount = result
+            if offset <= 0 or bytecount <= 0:
+                continue
+            found = True
+            key = (offset, strileindex)
+            if key in cache:
+                decoded = cache[key]
+            else:
+                decoded = await store._decode_source_segment(
+                    page, strileindex, offset, bytecount
+                )
+                cache[key] = decoded
+            if decoded is None:
+                continue
+            if decoded.ndim != 4:
+                continue
+            try:
+                region = decoded[region_index]
+            except IndexError:
+                continue
+            try:
+                region = region.reshape(dest_shape)
+            except ValueError:
+                continue
+            chunk[out_index] = region
+        if not found:
+            return None
+        return prototype.buffer.from_array_like(
+            chunk.reshape(-1).view('B')
+        )
+
+
+def _product_choices(
+    peraxis: Sequence[Sequence[Any]],
+) -> Iterator[tuple[Any, ...]]:
+    """Yield Cartesian product of per-axis choice lists."""
+    if not peraxis:
+        yield ()
+        return
+    for head in peraxis[0]:
+        for tail in _product_choices(peraxis[1:]):
+            yield (head, *tail)
+
+
+class _SharedDecoder:
+    """Share concurrent reads and decodes of TIFF source segments.
+
+    Segments are identified by file name and byte offset. Concurrent
+    requests for the same segment await a single read and decode. A
+    cancelled requester stops waiting immediately and closes the store
+    it owns. The shared work itself is not cancelled as long as other
+    requesters remain, and it does not raise into requester tasks that
+    have already been cancelled. Errors are propagated to all remaining
+    requesters.
+
+    """
+
+    __slots__ = ('_closed', '_lock', '_tasks')
+
+    def __init__(self) -> None:
+        self._tasks: dict[tuple[str, int], asyncio.Future[Any]] = {}
+        self._lock = threading.Lock()
+        self._closed = False
+
+    async def decode(
+        self,
+        page: TiffPage | TiffFrame,
+        strileindex: int,
+        offset: int,
+        bytecount: int,
+    ) -> NDArray[Any] | None:
+        """Return decoded segment, sharing work with concurrent callers."""
+        if self._closed:
+            msg = 'decoder is closed'
+            raise RuntimeError(msg)
+        filename = page.keyframe.parent.root.filehandle.name
+        key = (filename, int(offset))
+        task: asyncio.Future[Any]
+        with self._lock:
+            existing = self._tasks.get(key)
+            if existing is None or existing.done():
+                task = asyncio.ensure_future(
+                    _decode_segment_async(
+                        page, strileindex, offset, bytecount
+                    )
+                )
+                self._tasks[key] = task
+                task.add_done_callback(
+                    lambda t, key=key: self._discard(key, t)
+                )
+            else:
+                task = existing
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if task.done() and not task.cancelled():
+                self._discard(key, task)
+
+    def _discard(
+        self, key: tuple[str, int], task: asyncio.Future[Any]
+    ) -> None:
+        with self._lock:
+            if self._tasks.get(key) is task:
+                del self._tasks[key]
+        if not task.cancelled():
+            with contextlib.suppress(BaseException):
+                task.exception()
+
+    def close(self) -> None:
+        """Cancel outstanding shared decodes."""
+        self._closed = True
+        with self._lock:
+            tasks = list(self._tasks.values())
+            self._tasks.clear()
+        for task in tasks:
+            task.cancel()
+
+
+def _shared_decoder(tif: TiffFile) -> _SharedDecoder:
+    """Return the shared segment decoder owned by a TiffFile root."""
+    root = tif.root
+    decoder = getattr(root, '_zarr_shared_decoder', None)
+    if decoder is None:
+        decoder = _SharedDecoder()
+        root._zarr_shared_decoder = decoder  # type: ignore[attr-defined]
+    return decoder
+
+
+async def _decode_segment_async(
+    page: TiffPage | TiffFrame,
+    strileindex: int,
+    offset: int,
+    bytecount: int,
+) -> NDArray[Any] | None:
+    """Read and decode a single source segment in a worker thread."""
+    return await asyncio.to_thread(
+        _decode_segment_sync, page, strileindex, offset, bytecount
+    )
+
+
+def _decode_segment_sync(
+    page: TiffPage | TiffFrame,
+    strileindex: int,
+    offset: int,
+    bytecount: int,
+) -> NDArray[Any] | None:
+    """Read and decode a single source segment."""
+    keyframe = page.keyframe
+    filehandle = page.parent.filehandle
+    filehandle.open()
+    with filehandle.lock:
+        filehandle.seek(offset)
+        data = filehandle.read(bytecount)
+    decodeargs: dict[str, Any] = {'_fullsize': True}
+    if page.jpegtables is not None:
+        decodeargs['jpegtables'] = page.jpegtables
+    if keyframe.jpegheader is not None:
+        decodeargs['jpegheader'] = keyframe.jpegheader
+    keyframe.decode  # noqa: B018 - cache decode function
+    decoded = keyframe.decode(data, strileindex, **decodeargs)
+    return decoded[0]
 
 
 class ZarrFileSequenceStore(ZarrStore):

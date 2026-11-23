@@ -951,6 +951,9 @@ def imread(
     kind: str | None = None,
     level: int | None = None,
     squeeze: bool | None = None,
+    select: Mapping[str, Sequence[int]] | None = None,
+    select_c: Sequence[int] | None = None,
+    select_z: Sequence[int] | None = None,
     maxworkers: int | None = None,
     buffersize: int | None = None,
     mode: Literal['r', 'r+'] | None = None,
@@ -1000,6 +1003,9 @@ def imread(
     kind: str | None = None,
     level: int | None = None,
     squeeze: bool | None = None,
+    select: Mapping[str, Sequence[int]] | None = None,
+    select_c: Sequence[int] | None = None,
+    select_z: Sequence[int] | None = None,
     maxworkers: int | None = None,
     buffersize: int | None = None,
     mode: Literal['r', 'r+'] | None = None,
@@ -1049,6 +1055,9 @@ def imread(
     kind: str | None = None,
     level: int | None = None,
     squeeze: bool | None = None,
+    select: Mapping[str, Sequence[int]] | None = None,
+    select_c: Sequence[int] | None = None,
+    select_z: Sequence[int] | None = None,
     maxworkers: int | None = None,
     buffersize: int | None = None,
     mode: Literal['r', 'r+'] | None = None,
@@ -1098,6 +1107,9 @@ def imread(
     kind: str | None = None,
     level: int | None = None,
     squeeze: bool | None = None,
+    select: Mapping[str, Sequence[int]] | None = None,
+    select_c: Sequence[int] | None = None,
+    select_z: Sequence[int] | None = None,
     maxworkers: int | None = None,
     buffersize: int | None = None,
     mode: Literal['r', 'r+'] | None = None,
@@ -1155,6 +1167,13 @@ def imread(
             internally regardless of this value, but a NumPy array is
             returned.
             If ``'numpy'`` or ``None`` (default), return as NumPy array.
+        select, select_c, select_z:
+            Map of axis character codes ('C', 'Z', ...) to sequences of
+            source indices for ``return_as='zarr'``. Only the selected
+            planes are exposed lazily, in the order given. Selected missing
+            planes are filled with ``fillvalue``; unselected planes are
+            never read. ``select_c`` and ``select_z`` are shortcuts for
+            ``select={'C': ..., 'Z': ...}``.
         aszarr:
             Deprecated: use ``return_as='zarr'``.
         mode, name, offset, size, superres, omexml, _multifile, _useframes:
@@ -1216,6 +1235,12 @@ def imread(
         msg = 'asxarray with selection is not implemented'
         raise NotImplementedError(msg)
     aszarr = aszarr or (selection is not None)
+    if (
+        select is not None
+        or select_c is not None
+        or select_z is not None
+    ):
+        aszarr = True
     if asxarray and aszarr:
         msg = 'asxarray and aszarr are mutually exclusive'
         raise ValueError(msg)
@@ -1280,6 +1305,9 @@ def imread(
                         kind=kind,
                         level=level,
                         squeeze=squeeze,
+                        select=select,
+                        select_c=select_c,
+                        select_z=select_z,
                         maxworkers=maxworkers,
                         buffersize=buffersize,
                         chunkmode=chunkmode,
@@ -1331,6 +1359,10 @@ def imread(
 
     if asxarray:
         msg = 'asxarray is not supported for file sequences'
+        raise NotImplementedError(msg)
+
+    if select is not None or select_c is not None or select_z is not None:
+        msg = 'select is not supported for file sequences'
         raise NotImplementedError(msg)
 
     with TiffSequence(
@@ -5013,6 +5045,9 @@ class TiffFile:
         kind: str | None = None,
         level: int | None = None,
         squeeze: bool | None = None,
+        select: Mapping[str, Sequence[int]] | None = None,
+        select_c: Sequence[int] | None = None,
+        select_z: Sequence[int] | None = None,
         **kwargs: Any,
     ) -> ZarrTiffStore:
         """Return images from select pages as Zarr store.
@@ -5038,11 +5073,29 @@ class TiffFile:
                 If ``None`` (default), squeeze except for ``'shaped'`` series.
                 If ``True``, always squeeze.
                 If ``False``, do not squeeze.
+            select:
+                Map of axis character codes ('C', 'Z', ...) to sequences
+                of source indices. A lazy, read-only view exposing only the
+                selected planes is returned, preserving the order given.
+                Selected missing planes are filled with ``fillvalue``;
+                unselected planes are never read.
+            select_c, select_z:
+                Shortcuts for ``select={'C': select_c, 'Z': select_z}``.
             **kwargs:
                 Additional arguments passed to :py:meth:`TiffPage.aszarr`
                 or :py:meth:`TiffPageSeries.aszarr`.
 
         """
+        selection: dict[str, Sequence[int]] = {}
+        if select is not None:
+            selection.update(select)
+        if select_c is not None:
+            selection['C'] = select_c
+        if select_z is not None:
+            selection['Z'] = select_z
+        if selection:
+            kwargs['select'] = selection
+
         if not self.pages:
             msg = 'empty Zarr arrays not supported'
             raise NotImplementedError(msg)
@@ -5070,6 +5123,9 @@ class TiffFile:
             pages = series
 
         if isinstance(key, int | numpy.integer):
+            if selection:
+                msg = 'select is not supported with key'
+                raise NotImplementedError(msg)
             page: TiffPage | TiffFrame = pages[key]
             return page.aszarr(**kwargs)
         msg = 'key must be an integer index'
@@ -12350,6 +12406,9 @@ class TiffPageSeries(Sequence[TiffPage | TiffFrame | None]):
         *,
         level: int | None = None,
         squeeze: bool | None = None,
+        select: Mapping[str, Sequence[int]] | None = None,
+        select_c: Sequence[int] | None = None,
+        select_z: Sequence[int] | None = None,
         **kwargs: Any,
     ) -> ZarrTiffStore:
         """Return images from series of pages as Zarr store.
@@ -12363,6 +12422,14 @@ class TiffPageSeries(Sequence[TiffPage | TiffFrame | None]):
                 If ``None`` (default), squeeze except for ``'shaped'`` series.
                 If ``True``, always squeeze.
                 If ``False``, do not squeeze.
+            select:
+                Map of axis character codes ('C', 'Z', ...) to sequences
+                of source indices. A lazy, read-only view exposing only the
+                selected planes is returned, preserving the order given.
+                Selected missing planes are filled with ``fillvalue``;
+                unselected planes are never read.
+            select_c, select_z:
+                Shortcuts for ``select={'C': select_c, 'Z': select_z}``.
             **kwargs:
                 Additional arguments passed to :py:class:`ZarrTiffStore`.
 
@@ -12372,6 +12439,16 @@ class TiffPageSeries(Sequence[TiffPage | TiffFrame | None]):
             raise ValueError(msg)
 
         from .zarr import ZarrTiffStore
+
+        selection: dict[str, Sequence[int]] = {}
+        if select is not None:
+            selection.update(select)
+        if select_c is not None:
+            selection['C'] = select_c
+        if select_z is not None:
+            selection['Z'] = select_z
+        if selection:
+            kwargs['select'] = selection
 
         series: TiffPageSeries = self
         if squeeze is True:

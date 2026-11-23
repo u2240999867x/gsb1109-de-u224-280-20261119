@@ -26322,6 +26322,555 @@ def test_gil_enabled() -> None:
 
 ###############################################################################
 
+
+_SELECTION_SHAPE = (3, 6, 19, 35)
+
+
+def _selection_data() -> NDArray[Any]:
+    """Return CZYX uint16 data identifying channel, layer, row, and column."""
+    data = numpy.empty(_SELECTION_SHAPE, dtype=numpy.uint16)
+    for c in range(_SELECTION_SHAPE[0]):
+        for z in range(_SELECTION_SHAPE[1]):
+            for y in range(_SELECTION_SHAPE[2]):
+                for x in range(_SELECTION_SHAPE[3]):
+                    data[c, z, y, x] = c * 10000 + z * 1000 + y * 10 + x
+    return data
+
+
+def _write_layer_selection_tiff(filename: str) -> NDArray[Any]:
+    """Write one page per C/Z layer with 16x16 tiles.
+
+    The C2/Z0 page is missing, C0/Z3 lacks the bottom-right tile, and an
+    unselected C1 page contains an empty tile.
+
+    """
+    data = _selection_data()
+    missing_pages = {(2, 0)}
+    missing_tiles = {(0, 3): {(1, 2)}, (1, 2): {(1, 1)}}
+    metadata = {'shape': _SELECTION_SHAPE, 'axes': 'CZYX'}
+    with TiffWriter(filename) as tif:
+        for c in range(_SELECTION_SHAPE[0]):
+            for z in range(_SELECTION_SHAPE[1]):
+                tiles: list[tuple[bytes, int]] = []
+                empty = (c, z) in missing_pages
+                for i in range(2):
+                    for j in range(3):
+                        if empty or (i, j) in missing_tiles.get((c, z), ()):
+                            tiles.append((b'', 0))
+                        else:
+                            tile = data[
+                                c,
+                                z,
+                                i * 16 : i * 16 + 16,
+                                j * 16 : j * 16 + 16,
+                            ]
+                            tiles.append((tile.tobytes(), tile.nbytes))
+                tif.write(
+                    iter(tiles),
+                    shape=_SELECTION_SHAPE[2:],
+                    dtype=data.dtype,
+                    tile=(16, 16),
+                    photometric='minisblack',
+                    metadata=metadata,
+                )
+    return data
+
+
+def _write_volumetric_selection_tiff(filename: str) -> NDArray[Any]:
+    """Write one volumetric page per channel with 2x16x16 tiles.
+
+    C2/Z0 lacks the bottom-right tile of its first Z tile group.
+
+    """
+    data = _selection_data()
+    missing = {2: {(0, 1, 2)}}
+    metadata = {'shape': _SELECTION_SHAPE, 'axes': 'CZYX'}
+    with TiffWriter(filename) as tif:
+        for c in range(_SELECTION_SHAPE[0]):
+            tiles: list[tuple[bytes, int]] = []
+            for zt in range(3):
+                for i in range(2):
+                    for j in range(3):
+                        if (zt, i, j) in missing.get(c, ()):
+                            tiles.append((b'', 0))
+                        else:
+                            tile = data[
+                                c,
+                                zt * 2 : zt * 2 + 2,
+                                i * 16 : i * 16 + 16,
+                                j * 16 : j * 16 + 16,
+                            ]
+                            tiles.append((tile.tobytes(), tile.nbytes))
+            tif.write(
+                iter(tiles),
+                shape=_SELECTION_SHAPE[1:],
+                dtype=data.dtype,
+                tile=(2, 16, 16),
+                photometric='minisblack',
+                volumetric=True,
+                metadata=metadata,
+            )
+    return data
+
+
+async def _assemble_view(store: Any) -> NDArray[Any]:
+    """Return full array read through a store, honoring fill value."""
+    from zarr.core.buffer import default_buffer_prototype
+
+    meta = json.loads(store._store['zarr.json'])
+    shape = tuple(meta['shape'])
+    chunks = tuple(meta['chunk_grid']['configuration']['chunk_shape'])
+    dtype = numpy.dtype(meta['data_type'])
+    result = numpy.full(shape, meta['fill_value'], dtype=dtype)
+    prototype = default_buffer_prototype()
+    grid = [-(-s // c) for s, c in zip(shape, chunks, strict=True)]
+    for index in numpy.ndindex(*grid):
+        key = 'c/' + '/'.join(str(i) for i in index)
+        buffer = await store.get(key, prototype)
+        if buffer is None:
+            continue
+        chunk = numpy.frombuffer(buffer.to_bytes(), dtype=dtype).reshape(
+            chunks
+        )
+        slices = tuple(
+            slice(i * c, min((i + 1) * c, s))
+            for i, c, s in zip(index, chunks, shape, strict=True)
+        )
+        inner = tuple(slice(0, sl.stop - sl.start) for sl in slices)
+        result[slices] = chunk[inner]
+    return result
+
+
+@pytest.mark.skipif(SKIP_ZARR, reason=REASON)
+@pytest.mark.parametrize('layout', ['layers', 'volumetric'])
+def test_read_zarr_selection_view(layout: str) -> None:
+    """Test lazy Zarr view of selected C/Z planes."""
+    import asyncio
+
+    with TempFileName(f'zarr_selection_view_{layout}') as filename:
+        if layout == 'layers':
+            data = _write_layer_selection_tiff(filename)
+        else:
+            data = _write_volumetric_selection_tiff(filename)
+        with TiffFile(filename) as tif:
+            series = tif.series[0]
+            assert series.shape == _SELECTION_SHAPE
+            assert series.axes == 'CZYX'
+            for select_c, select_z, fill in (
+                ([2, 0], [4, 0, 3], 65535),
+                ([2, 0], [5, 2, 4], 65534),
+            ):
+                with series.aszarr(
+                    select_c=select_c,
+                    select_z=select_z,
+                    fillvalue=fill,
+                ) as store:
+                    meta = json.loads(store._store['zarr.json'])
+                    assert meta['shape'] == [2, 3, 19, 35]
+                    assert (
+                        meta['chunk_grid']['configuration']['chunk_shape']
+                        == [1, 2, 16, 16]
+                    )
+                    attributes = meta['attributes']
+                    assert attributes['source_indices']['C'] == select_c
+                    assert attributes['source_indices']['Z'] == select_z
+                    view = asyncio.run(_assemble_view(store))
+                    reference = series.asarray(fillvalue=fill)
+                    for oc, sc in enumerate(select_c):
+                        for oz, sz in enumerate(select_z):
+                            assert array_equal(
+                                view[oc, oz], reference[sc, sz]
+                            )
+        assert data.shape == _SELECTION_SHAPE
+
+
+@pytest.mark.skipif(SKIP_ZARR, reason=REASON)
+@pytest.mark.parametrize('layout', ['layers', 'volumetric'])
+def test_read_zarr_selection_unselected(layout: str) -> None:
+    """Test unselected source planes are never read."""
+    import asyncio
+
+    import tifffile.zarr as tifffile_zarr
+
+    with TempFileName(f'zarr_selection_unselected_{layout}') as filename:
+        if layout == 'layers':
+            _write_layer_selection_tiff(filename)
+        else:
+            _write_volumetric_selection_tiff(filename)
+        with TiffFile(filename) as tif:
+            series = tif.series[0]
+            # source C1/Z2 has a corrupt tile and is not selected
+            if layout == 'layers':
+                page1_index = series[1 * 6 + 2].index
+            else:
+                page1_index = series[1].index
+            reads: list[int] = []
+            original = tifffile_zarr._decode_segment_sync
+
+            def decode(
+                page: Any, index: int, offset: int, count: int
+            ) -> Any:
+                reads.append(page.index)
+                return original(page, index, offset, count)
+
+            tifffile_zarr._decode_segment_sync = decode
+            try:
+                with series.aszarr(
+                    select_c=[2, 0], select_z=[0, 1], fillvalue=65535
+                ) as store:
+
+                    async def read() -> None:
+                        from zarr.core.buffer import default_buffer_prototype
+
+                        prototype = default_buffer_prototype()
+                        await store.get('c/0/0/0/0', prototype)
+                        await store.get('c/1/0/0/0', prototype)
+
+                    asyncio.run(read())
+            finally:
+                tifffile_zarr._decode_segment_sync = original
+            assert reads
+            assert page1_index not in reads
+
+
+@pytest.mark.skipif(SKIP_ZARR, reason=REASON)
+def test_read_zarr_selection_shared_decode() -> None:
+    """Test concurrent views share one read and decode of a tile."""
+    import asyncio
+    import threading
+
+    import tifffile.zarr as tifffile_zarr
+
+    with TempFileName('zarr_selection_shared_decode') as filename:
+        _write_volumetric_selection_tiff(filename)
+        with TiffFile(filename) as tif:
+            series = tif.series[0]
+            view_a = series.aszarr(
+                select_c=[2, 0], select_z=[4, 0, 3], fillvalue=65535
+            )
+            view_b = series.aszarr(
+                select_c=[2, 0], select_z=[5, 2, 4], fillvalue=65534
+            )
+            view_c = series.aszarr(
+                select_c=[2, 0], select_z=[4, 0, 3], fillvalue=65535
+            )
+            reads: list[int] = []
+            entered = threading.Event()
+            release = threading.Event()
+            fail = {'offset': -1}
+            blocked = {'offset': series[2].dataoffsets[17]}
+            original = tifffile_zarr._decode_segment_sync
+
+            def decode(
+                page: Any, index: int, offset: int, count: int
+            ) -> Any:
+                reads.append(offset)
+                if offset == blocked['offset']:
+                    entered.set()
+                    assert release.wait(10)
+                if offset == fail['offset']:
+                    raise RuntimeError('corrupt segment')
+                return original(page, index, offset, count)
+
+            tifffile_zarr._decode_segment_sync = decode
+            try:
+                # both overlapping requests share one read and decode
+                assert (
+                    asyncio.run(
+                        _concurrent_shared_views(
+                            view_a, view_b, entered, release
+                        )
+                    )
+                    == 1
+                )
+                assert reads.count(blocked['offset']) == 1
+                # cancelling A does not cancel B's shared decode
+                reads.clear()
+                asyncio.run(
+                    _cancelled_shared_views(
+                        view_a, view_b, entered, release, blocked['offset']
+                    )
+                )
+                # a new view opened while the shared decode is in flight
+                # gets its own complete result from the same read
+                reads.clear()
+                asyncio.run(
+                    _midflight_shared_views(
+                        view_a, view_c, entered, release
+                    )
+                )
+                assert reads.count(blocked['offset']) == 1
+                # a shared decode failure reaches both requesters and the
+                # block is not treated as missing; retry reads it once
+                fail['offset'] = blocked['offset']
+                reads.clear()
+                asyncio.run(
+                    _failed_shared_views(view_a, view_b, blocked['offset'])
+                )
+                assert reads.count(blocked['offset']) == 1
+                fail['offset'] = -1
+                reads.clear()
+                asyncio.run(_failed_shared_views_retry(view_a, view_b))
+                assert reads.count(blocked['offset']) == 1
+            finally:
+                tifffile_zarr._decode_segment_sync = original
+                view_a.close()
+                view_b.close()
+                view_c.close()
+
+
+@pytest.mark.skipif(SKIP_ZARR, reason=REASON)
+def test_read_zarr_selection_same_tile() -> None:
+    """Test adjacent selected layers in one tile are decoded once."""
+    import asyncio
+
+    import tifffile.zarr as tifffile_zarr
+
+    with TempFileName('zarr_selection_same_tile') as filename:
+        _write_volumetric_selection_tiff(filename)
+        with TiffFile(filename) as tif:
+            series = tif.series[0]
+            # source Z4 and Z5 share a volumetric tile group
+            with series.aszarr(select_c=[2], select_z=[4, 5]) as store:
+                reads: list[int] = []
+                original = tifffile_zarr._decode_segment_sync
+
+                def decode(
+                    page: Any, index: int, offset: int, count: int
+                ) -> Any:
+                    reads.append(offset)
+                    return original(page, index, offset, count)
+
+                tifffile_zarr._decode_segment_sync = decode
+                try:
+
+                    async def read() -> None:
+                        from zarr.core.buffer import default_buffer_prototype
+
+                        prototype = default_buffer_prototype()
+                        buffer = await store.get('c/0/0/0/0', prototype)
+                        assert buffer is not None
+
+                    asyncio.run(read())
+                finally:
+                    tifffile_zarr._decode_segment_sync = original
+                # both planes come from the same source tile
+                assert len(reads) == 1
+
+
+async def _concurrent_shared_views(
+    view_a: Any,
+    view_b: Any,
+    entered: Any,
+    release: Any,
+) -> int:
+    """Read overlapping blocks from two views; return shared read count."""
+    import asyncio
+
+    from zarr.core.buffer import default_buffer_prototype
+
+    entered.clear()
+    release.clear()
+    prototype = default_buffer_prototype()
+    task_a = asyncio.create_task(view_a.get('c/0/0/1/2', prototype))
+    await asyncio.to_thread(entered.wait, 10)
+    task_b = asyncio.create_task(view_b.get('c/0/0/1/2', prototype))
+    await asyncio.sleep(0.05)
+    release.set()
+    result_a, result_b = await asyncio.gather(task_a, task_b)
+    assert result_a is not None
+    assert result_b is not None
+    assert result_a.to_bytes() != result_b.to_bytes()
+    return 1
+
+
+async def _cancelled_shared_views(
+    view_a: Any,
+    view_b: Any,
+    entered: Any,
+    release: Any,
+    offset: int,
+) -> None:
+    """Cancel A while B waits for the same shared decode."""
+    import asyncio
+
+    from zarr.core.buffer import default_buffer_prototype
+
+    entered.clear()
+    release.clear()
+    prototype = default_buffer_prototype()
+    task_a = asyncio.create_task(view_a.get('c/0/0/1/2', prototype))
+    await asyncio.to_thread(entered.wait, 10)
+    entered.clear()
+    task_b = asyncio.create_task(view_b.get('c/0/0/1/2', prototype))
+    await asyncio.sleep(0.05)
+    task_a.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task_a
+    # a request that does not need the blocked tile can complete
+    other = asyncio.create_task(view_b.get('c/0/0/0/0', prototype))
+    assert await asyncio.wait_for(other, 10) is not None
+    assert not task_b.done()
+    release.set()
+    result_b = await asyncio.wait_for(task_b, 10)
+    assert result_b is not None
+    release.clear()
+
+
+async def _midflight_shared_views(
+    view_a: Any,
+    view_c: Any,
+    entered: Any,
+    release: Any,
+) -> None:
+    """Open a new view during in-flight shared decode; reuse the read."""
+    import asyncio
+
+    from zarr.core.buffer import default_buffer_prototype
+
+    entered.clear()
+    release.clear()
+    prototype = default_buffer_prototype()
+    task_a = asyncio.create_task(view_a.get('c/0/0/1/2', prototype))
+    await asyncio.to_thread(entered.wait, 10)
+    entered.clear()
+    task_c = asyncio.create_task(view_c.get('c/0/0/1/2', prototype))
+    await asyncio.sleep(0.05)
+    release.set()
+    result_a, result_c = await asyncio.gather(task_a, task_c)
+    assert result_a is not None
+    assert result_c is not None
+    assert result_a.to_bytes() == result_c.to_bytes()
+
+
+async def _failed_shared_views(
+    view_a: Any, view_b: Any, offset: int
+) -> None:
+    """Both overlapping reads report an error, not a missing block."""
+    import asyncio
+
+    from zarr.core.buffer import default_buffer_prototype
+
+    prototype = default_buffer_prototype()
+    results = await asyncio.gather(
+        view_a.get('c/0/0/1/2', prototype),
+        view_b.get('c/0/0/1/2', prototype),
+        return_exceptions=True,
+    )
+    assert all(isinstance(result, RuntimeError) for result in results)
+    # the failed block is not reported as a missing chunk
+    assert await view_a.exists('c/0/0/1/2')
+
+
+async def _failed_shared_views_retry(view_a: Any, view_b: Any) -> None:
+    """After recovery, both overlapping reads succeed with one decode."""
+    import asyncio
+
+    from zarr.core.buffer import default_buffer_prototype
+
+    prototype = default_buffer_prototype()
+    result_a, result_b = await asyncio.gather(
+        view_a.get('c/0/0/1/2', prototype),
+        view_b.get('c/0/0/1/2', prototype),
+    )
+    assert result_a is not None
+    assert result_b is not None
+
+
+@pytest.mark.skipif(SKIP_ZARR, reason=REASON)
+@pytest.mark.parametrize('layout', ['layers', 'volumetric'])
+def test_read_zarr_selection_copy_listing(layout: str) -> None:
+    """Test copies only listed chunks; missing-only chunks are omitted."""
+    import asyncio
+
+    with TempFileName(f'zarr_selection_copy_{layout}') as filename:
+        if layout == 'layers':
+            _write_layer_selection_tiff(filename)
+        else:
+            _write_volumetric_selection_tiff(filename)
+        with TiffFile(filename) as tif:
+            series = tif.series[0]
+            reference = series.asarray(fillvalue=65535)
+            with series.aszarr(
+                select_c=[2, 0], select_z=[4, 0, 3], fillvalue=65535
+            ) as store:
+
+                async def copy() -> tuple[list[str], Any]:
+                    from zarr.core.buffer import default_buffer_prototype
+
+                    target = zarr.storage.MemoryStore()
+                    prototype = default_buffer_prototype()
+                    keys: list[str] = []
+                    async for key in store.list():
+                        keys.append(key)
+                        buffer = await store.get(key, prototype)
+                        assert buffer is not None
+                        await target.set(key, buffer)
+                    return keys, target
+
+                keys, target = asyncio.run(copy())
+                # output C0 first Z block contains Z4 pixels and a fill row
+                assert 'c/0/0/1/2' in keys
+                if layout == 'layers':
+                    # output C1 tail block contains only the missing Z3
+                    assert 'c/1/1/1/2' not in keys
+
+                def read_block(key: str) -> NDArray[Any]:
+                    async def get() -> NDArray[Any]:
+                        from zarr.core.buffer import default_buffer_prototype
+
+                        prototype = default_buffer_prototype()
+                        buffer = await target.get(key, prototype)
+                        assert buffer is not None
+                        return numpy.frombuffer(
+                            buffer.to_bytes(), dtype=numpy.uint16
+                        ).reshape(1, 2, 16, 16)
+
+                    return asyncio.run(get())
+
+                block = read_block('c/0/0/1/2')
+                assert array_equal(
+                    block[0, 0, :3, :3], reference[2, 4][16:, 32:]
+                )
+                # source C2/Z0 plane or bottom-right tile is missing
+                assert array_equal(
+                    block[0, 1, :3, :3], reference[2, 0][16:, 32:]
+                )
+                assert (block[0, 1, :3, :3] == 65535).all()
+
+
+@pytest.mark.skipif(SKIP_ZARR, reason=REASON)
+@pytest.mark.parametrize('select_z', [[4, 0, 3], [3, 4, 0], [4]])
+def test_read_zarr_selection_reorder_tail(select_z: list[int]) -> None:
+    """Test changed selection order and tail chunk size."""
+    import asyncio
+
+    with TempFileName('zarr_selection_reorder_tail') as filename:
+        _write_layer_selection_tiff(filename)
+        with TiffFile(filename) as tif:
+            series = tif.series[0]
+            reference = series.asarray(fillvalue=65535)
+            for chunks in (None, (1, 3, 16, 16)):
+                with series.aszarr(
+                    select_c=[0, 2],
+                    select_z=select_z,
+                    fillvalue=65535,
+                    chunks=chunks,
+                ) as store:
+                    view = asyncio.run(_assemble_view(store))
+                    expected = numpy.stack(
+                        [
+                            numpy.stack(
+                                [reference[c, z] for z in select_z]
+                            )
+                            for c in [0, 2]
+                        ]
+                    )
+                    assert array_equal(view, expected)
+
+
+###############################################################################
+
 if __name__ == '__main__':
     import warnings
 
