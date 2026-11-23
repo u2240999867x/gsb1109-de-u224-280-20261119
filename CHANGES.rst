@@ -6,6 +6,7 @@ Revisions
 
 2026.11.16
 
+- Add TiffSequence experiment manifest preview, selection, and stitching.
 - Add fillvalue parameter to asarray functions.
 - Fill missing pages and truncated segments with NODATA value (breaking).
 - Fill missing pages of ImageJ hyperstacks (breaking).

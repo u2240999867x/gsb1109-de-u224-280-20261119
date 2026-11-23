@@ -117,6 +117,7 @@ Revisions
 
 2026.11.16
 
+- Add TiffSequence experiment manifest preview, selection, and stitching.
 - Add fillvalue parameter to asarray functions.
 - Fill missing pages and truncated segments with NODATA value (breaking).
 - Fill missing pages of ImageJ hyperstacks (breaking).
@@ -760,6 +761,46 @@ threads:
 >>> image_sequence.dtype
 dtype('float64')
 
+Resolve retaken fields of view from acquisition packages listed in an
+experiment manifest as a preview, then read only the coordinates that are
+certain. The preview never reads pixel data and reports for each coordinate
+of the complete grid which candidate files were submitted, which are still
+eligible to be selected, and whether the coordinate is resolved, pending,
+or vacant:
+
+.. code-block:: python
+
+    >>> manifest = {
+    ...     'axes': 'ZCF',
+    ...     'packages': [
+    ...         {'number': 'A', 'files': ['A/Z11_red_F20.tif',
+    ...                                    'A/Z11_red_F10.tif']},
+    ...         {'number': 'B', 'files': ['B/Z11_red_F10.tif',
+    ...                                    'B/Z11_red_F30.tif']},
+    ...         {'number': 'C', 'files': ['C/Z11_red_F40.tif']},
+    ...     ],
+    ...     'selection': ['B'],
+    ... }
+    >>> image_sequence = TiffSequence(manifest=manifest)
+    >>> preview = image_sequence.preview()
+    >>> preview.status(('F40',)).state
+    'resolved'
+    >>> preview.status(('F40',)).source
+    'C'
+    >>> preview.mosaic('Z=11,C=red').shape
+    (2, 12)
+    >>> preview.read(('F20',))
+    Traceback (most recent call last):
+    ...
+    tifffile.tifffile.ManifestError: coordinate (11, 'red', 'F20') is vacant; ...
+
+Packages are all-or-nothing: confirming a package accepts all its fields.
+Among all selections that fill the most coordinates while honoring confirmed
+packages, a coordinate is *resolved* only if the same file is chosen in every
+such selection, is *pending* if the file or its presence varies, and is
+*vacant* if no such selection fills it. Pending and vacant coordinates never
+read pixel data.
+
 Read an image stack from a series of TIFF files with a file name pattern
 as NumPy or Zarr arrays:
 
@@ -800,6 +841,7 @@ from __future__ import annotations
 __version__ = '2026.11.16'
 
 __all__ = [
+    'AcquisitionPackage',
     'CHUNKMODE',
     'COMPRESSION',
     'DATATYPE',
@@ -817,9 +859,18 @@ __all__ = [
     '_TIFF',  # private
     'FileCache',
     'FileHandle',
+    'FilePosition',
     'FileSequence',
+    'FieldRecord',
+    'FieldStatus',
+    'FieldView',
+    'ManifestArray',
+    'ManifestConflictError',
+    'ManifestError',
+    'ManifestPreview',
     'OmeXml',
     'OmeXmlError',
+    'PackageStatus',
     'StoredShape',
     'TiffFile',
     'TiffFileError',
@@ -911,7 +962,16 @@ except ImportError:
     except ImportError:
         import _imagecodecs as imagecodecs  # type: ignore[no-redef]
 
-from typing import IO, TYPE_CHECKING, ClassVar, cast, final, overload, override
+from typing import (
+    IO,
+    TYPE_CHECKING,
+    ClassVar,
+    NamedTuple,
+    cast,
+    final,
+    overload,
+    override,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Container, Iterator
@@ -13044,13 +13104,2514 @@ class FileSequence(Sequence[str]):
 
 
 @final
+class ManifestError(ValueError):
+    """Exception to indicate an invalid experiment manifest."""
+
+
+@final
+class ManifestConflictError(ManifestError):
+    """Exception to indicate conflicting acquisition packages.
+
+    Attributes:
+        packages:
+            Numbers of the conflicting packages.
+        conflicts:
+            Mapping of coordinate to package numbers that assign different
+            files to the coordinate.
+
+    """
+
+    def __init__(
+        self,
+        message: str,
+        packages: Sequence[str] = (),
+        conflicts: Mapping[tuple[object, ...], Sequence[str]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.packages = tuple(packages)
+        self.conflicts = {
+            coordinate: tuple(numbers)
+            for coordinate, numbers in (conflicts or {}).items()
+        }
+
+
+class FilePosition(NamedTuple):
+    """Position of a field of view in an acquisition package.
+
+    Attributes:
+        order:
+            Zero-based position of the file within its package.
+        name:
+            Name of the file as listed in the manifest.
+        path:
+            Resolved path of the file.
+
+    """
+
+    order: int
+    name: str
+    path: str
+
+
+class AcquisitionPackage(NamedTuple):
+    """Acquisition package listed in an experiment manifest.
+
+    Attributes:
+        number:
+            Package number as listed in the manifest.
+        fields:
+            Mapping of coordinate to :py:class:`FilePosition`.
+        calibration:
+            Calibration shared by all fields in the package.
+
+    """
+
+    number: str
+    fields: Mapping[tuple[object, ...], FilePosition]
+    calibration: object = None
+
+
+class FieldRecord(NamedTuple):
+    """Candidate file for one coordinate in an experiment manifest.
+
+    Attributes:
+        coordinate:
+            Coordinate of the field of view.
+        filename:
+            Resolved path of the candidate file.
+        package:
+            Number of the acquisition package containing the file.
+        order:
+            Zero-based position of the file within its package.
+
+    """
+
+    coordinate: tuple[object, ...]
+    filename: str
+    package: str
+    order: int
+
+
+class FieldStatus(NamedTuple):
+    """Status of one coordinate in a resolved experiment manifest.
+
+    Attributes:
+        coordinate:
+            Coordinate of the field of view.
+        state:
+            One of *'resolved'*, *'pending'*, or *'vacant'*.
+            *resolved* means the same file is selected in every optimal
+            fill; *pending* means the file or presence varies between
+            optimal fills; *vacant* means no optimal fill assigns a file.
+        packages:
+            Numbers of the acquisition packages that submitted a candidate
+            for the coordinate, in manifest order.
+        candidates:
+            Paths of all candidate files for the coordinate, in the order
+            they were submitted.
+        eligible:
+            Paths of candidates that are selected in at least one optimal
+            fill.
+        eligible_packages:
+            Package numbers of the eligible candidates.
+        selected:
+            Path of the selected file, or ``None`` if not resolved.
+        source:
+            Number of the acquisition package of the selected file, or
+            ``None``.
+        order:
+            Position of the selected file within its package, or ``None``.
+        calibration:
+            Calibration shared by the selected file's package, or ``None``.
+
+    """
+
+    coordinate: tuple[object, ...]
+    state: str
+    packages: tuple[str, ...]
+    candidates: tuple[str, ...]
+    eligible: tuple[str, ...] = ()
+    eligible_packages: tuple[str, ...] = ()
+    selected: str | None = None
+    source: str | None = None
+    order: int | None = None
+    calibration: object = None
+    records: tuple[FieldRecord, ...] = ()
+
+    @property
+    def pending(self) -> bool:
+        """Coordinate is pending."""
+        return self.state == 'pending'
+
+    @property
+    def vacant(self) -> bool:
+        """Coordinate is vacant."""
+        return self.state == 'vacant'
+
+    @property
+    def resolved(self) -> bool:
+        """Coordinate is resolved."""
+        return self.state == 'resolved'
+
+    @property
+    def status(self) -> str:
+        """Alias of :py:attr:`state`."""
+        return self.state
+
+    def is_eligible(self, path: str) -> bool:
+        """Return candidate path is selected in at least one optimal fill."""
+        return path in self.eligible
+
+
+class PackageStatus(NamedTuple):
+    """Status of an acquisition package in a resolved manifest.
+
+    Attributes:
+        number:
+            Package number.
+        selected:
+            Package is confirmed by the operator.
+        eligible:
+            Package is part of at least one optimal fill.
+        conflicts:
+            Coordinates where the package assigns a different file than a
+            confirmed package.
+        reason:
+            Human-readable explanation of the status.
+        calibration:
+            Calibration shared by all fields in the package.
+
+    """
+
+    number: str
+    selected: bool
+    eligible: bool
+    conflicts: tuple[tuple[object, ...], ...]
+    reason: str
+    calibration: object = None
+    conflicting_packages: tuple[str, ...] = ()
+    selected_coordinates: tuple[tuple[object, ...], ...] = ()
+
+
+class ManifestArray(numpy.ma.MaskedArray):
+    """Masked array of fields or mosaic with manifest status metadata.
+
+    Attributes:
+        fields:
+            Mapping of coordinate to :py:class:`FieldStatus`.
+        field_order:
+            Coordinates in the order used to lay out the array.
+        axes:
+            Character codes for dimensions in the array.
+        preview:
+            :py:class:`ManifestPreview` from which the array was read.
+
+    """
+
+    def __array_finalize__(self, obj: object, /) -> None:
+        super().__array_finalize__(obj)
+        if obj is None:
+            return
+        self.fields = getattr(obj, 'fields', {})
+        self.field_order = getattr(obj, 'field_order', ())
+        self.axes = getattr(obj, 'axes', '')
+        self.preview = getattr(obj, 'preview', None)
+
+    @property
+    def statuses(self) -> tuple[FieldStatus, ...]:
+        """Statuses in field order."""
+        return tuple(self.fields[c] for c in self.field_order)
+
+    @property
+    def tile_statuses(self) -> tuple[FieldStatus, ...]:
+        """Statuses of tiles in field order."""
+        return self.statuses
+
+    @property
+    def coordinate_statuses(self) -> dict[tuple[object, ...], FieldStatus]:
+        """Statuses keyed by coordinate in field order."""
+        return dict(self.fields)
+
+    @property
+    def sources(self) -> tuple[str | None, ...]:
+        """Package numbers of selected files in field order."""
+        return tuple(self.fields[c].source for c in self.field_order)
+
+    @property
+    def filenames(self) -> tuple[str | None, ...]:
+        """Paths of selected files in field order."""
+        return tuple(self.fields[c].selected for c in self.field_order)
+
+    def status(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> FieldStatus:
+        """Return status of coordinate."""
+        coordinate = self._coordinate(coordinate)
+        return self.fields[coordinate]
+
+    def source(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> str | None:
+        """Return package number of selected file at coordinate."""
+        return self.status(coordinate).source
+
+    def filename(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> str | None:
+        """Return path of selected file at coordinate."""
+        return self.status(coordinate).selected
+
+    def _coordinate(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> tuple[object, ...]:
+        if isinstance(coordinate, tuple):
+            if coordinate in self.fields:
+                return coordinate
+        if coordinate in self.fields:  # type: ignore[operator]
+            return coordinate  # type: ignore[return-value]
+        matches = [
+            c for c in self.field_order if len(c) == 1 and c[0] == coordinate
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        msg = f'{coordinate!r} is not a unique coordinate in the manifest'
+        raise KeyError(msg)
+
+
+@final
+class FieldView:
+    """View of one field of view in an experiment manifest.
+
+    The image is read only when accessing :py:attr:`array`, and only if the
+    coordinate is resolved. Pending and vacant coordinates never read pixel
+    data.
+
+    Parameters:
+        status: Status of the coordinate.
+        reader: Function to read the image at the coordinate.
+
+    """
+
+    __slots__ = ('_reader', 'status')
+
+    def __init__(
+        self, status: FieldStatus, reader: Callable[[], NDArray[Any]]
+    ) -> None:
+        self.status = status
+        self._reader = reader
+
+    @property
+    def array(self) -> NDArray[Any]:
+        """Image at resolved coordinate."""
+        return self._reader()
+
+    @property
+    def coordinate(self) -> tuple[object, ...]:
+        """Coordinate of the field of view."""
+        return self.status.coordinate
+
+    @property
+    def state(self) -> str:
+        """One of *'resolved'*, *'pending'*, or *'vacant'*."""
+        return self.status.state
+
+    @property
+    def source(self) -> str | None:
+        """Package number of the selected file."""
+        return self.status.source
+
+    @property
+    def filename(self) -> str | None:
+        """Path of the selected file."""
+        return self.status.selected
+
+    @property
+    def calibration(self) -> object:
+        """Calibration shared by the selected file's package."""
+        return self.status.calibration
+
+    def read(self) -> NDArray[Any]:
+        """Return image at resolved coordinate."""
+        return self.array
+
+    def __array__(self, *args: object, **kwargs: object) -> NDArray[Any]:
+        return self.array
+
+    def __repr__(self) -> str:
+        return (
+            f'<tifffile.FieldView coordinate={self.coordinate!r} '
+            f'state={self.state!r}>'
+        )
+
+
+@final
+class ManifestPreview:
+    """Preview of a resolved experiment manifest.
+
+    The preview records every candidate submitted for every coordinate,
+    which candidates are still eligible to be selected, and the outcome
+    guaranteed for all optimal fills. Constructing a preview never reads
+    pixel data.
+
+    Attributes:
+        shape:
+            Shape of the experiment grid.
+        axes:
+            Character codes for dimensions in shape.
+        coords:
+            Coordinates of the experiment grid in manifest order.
+        packages:
+            Numbers of the acquisition packages in manifest order.
+        selected:
+            Numbers of the confirmed acquisition packages.
+        maximum:
+            Maximum number of coordinates fillable by any selection of
+            acquisition packages while honoring confirmed packages.
+        filled:
+            Number of coordinates filled by the confirmed packages only.
+
+    """
+
+    __slots__ = (
+        '_package_statuses',
+        '_resolver',
+        'axes',
+        'coords',
+        'fields',
+        'filled',
+        'maximum',
+        'packages',
+        'selected',
+        'shape',
+    )
+
+    def __init__(
+        self,
+        resolver: _ManifestResolver,
+        selected: tuple[str, ...],
+        maximum: int,
+        filled: int,
+        fields: Mapping[tuple[object, ...], FieldStatus],
+        package_statuses: Mapping[str, PackageStatus],
+        *,
+        subset_coords: Sequence[tuple[object, ...]] | None = None,
+    ) -> None:
+        self._resolver = resolver
+        self._package_statuses = dict(package_statuses)
+        self.shape = resolver.shape
+        self.axes = resolver.axes
+        self.coords = (
+            tuple(subset_coords)
+            if subset_coords is not None
+            else resolver.coords
+        )
+        self.fields = dict(fields)
+        self.packages = resolver.package_numbers
+        self.selected = selected
+        self.maximum = maximum
+        self.filled = filled
+
+    def __call__(
+        self,
+        selection: Sequence[str] | str | None = None,
+        **coords: object,
+    ) -> ManifestPreview:
+        """Return self, or resolved preview for another selection.
+
+        Allows ``preview`` to be accessed as an attribute or called as a
+        method. ``preview(selection=...)`` overrides confirmed packages,
+        and ``preview(Z=11, C='red')`` selects a subset of the grid.
+
+        """
+        if selection is None and not coords:
+            return self
+        if selection is None:
+            return self.subset(**coords)
+        preview = self._resolver.preview_for(selection)
+        if coords:
+            preview = preview.subset(**coords)
+        return preview
+
+    def subset(self, **coords: object) -> ManifestPreview:
+        """Return preview of subset of grid matching named axis values."""
+        return self._resolver.preview_subset(self, coords)
+
+    @property
+    def statuses(self) -> tuple[FieldStatus, ...]:
+        """Field statuses in coordinate order."""
+        return tuple(self.fields[c] for c in self.coords)
+
+    @property
+    def sources(self) -> tuple[str | None, ...]:
+        """Selected package numbers in coordinate order."""
+        return tuple(self.fields[c].source for c in self.coords)
+
+    @property
+    def filenames(self) -> tuple[str | None, ...]:
+        """Selected paths in coordinate order."""
+        return tuple(self.fields[c].selected for c in self.coords)
+
+    @property
+    def vacant(self) -> tuple[tuple[object, ...], ...]:
+        """Coordinates that are vacant in every optimal fill."""
+        return tuple(c for c in self.coords if self.fields[c].vacant)
+
+    @property
+    def pending(self) -> tuple[tuple[object, ...], ...]:
+        """Coordinates whose file or presence varies between optimal fills."""
+        return tuple(c for c in self.coords if self.fields[c].pending)
+
+    @property
+    def resolved(self) -> tuple[tuple[object, ...], ...]:
+        """Coordinates with the same file in every optimal fill."""
+        return tuple(c for c in self.coords if self.fields[c].resolved)
+
+    @property
+    def complete(self) -> bool:
+        """Every coordinate is resolved."""
+        return len(self.resolved) == len(self.coords)
+
+    @property
+    def rejected(self) -> tuple[str, ...]:
+        """Packages neither confirmed nor part of an optimal fill."""
+        return tuple(
+            number
+            for number in self.packages
+            if not self._package_statuses[number].eligible
+            and not self._package_statuses[number].selected
+        )
+
+    @property
+    def package_states(self) -> dict[str, PackageStatus]:
+        """Status of every acquisition package."""
+        return dict(self._package_statuses)
+
+    @property
+    def conflicts(self) -> dict[str, tuple[tuple[object, ...], ...]]:
+        """Coordinates where packages conflict with confirmed packages."""
+        return {
+            number: status.conflicts
+            for number, status in self._package_statuses.items()
+            if status.conflicts
+        }
+
+    def status(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> FieldStatus:
+        """Return status of coordinate."""
+        coordinate = self._coordinate(coordinate)
+        return self.fields[coordinate]
+
+    def package_status(self, number: str | int) -> PackageStatus:
+        """Return status of acquisition package."""
+        try:
+            return self._package_statuses[str(number)]
+        except KeyError as exc:
+            msg = f'package {number!r} not in manifest'
+            raise KeyError(msg) from exc
+
+    def is_resolved(self, coordinate: tuple[object, ...] | object) -> bool:
+        """Return coordinate resolves to the same file in every optimal fill."""
+        return self.status(coordinate).state == 'resolved'
+
+    def is_pending(self, coordinate: tuple[object, ...] | object) -> bool:
+        """Return coordinate's file or presence varies between optimal fills."""
+        return self.status(coordinate).state == 'pending'
+
+    def is_vacant(self, coordinate: tuple[object, ...] | object) -> bool:
+        """Return coordinate is left empty in every optimal fill."""
+        return self.status(coordinate).state == 'vacant'
+
+    def provenance(
+        self,
+        coordinate: tuple[object, ...] | object,
+    ) -> dict[str, object]:
+        """Return provenance of coordinate.
+
+        The result contains the coordinate, its state, candidate paths,
+        packages, eligible candidates, and the selected file, package,
+        order, and calibration.
+
+        """
+        status = self.status(coordinate)
+        return {
+            'coordinate': status.coordinate,
+            'state': status.state,
+            'candidates': status.candidates,
+            'packages': status.packages,
+            'eligible': status.eligible,
+            'eligible_packages': status.eligible_packages,
+            'filename': status.selected,
+            'selected': status.selected,
+            'source': status.source,
+            'package': status.source,
+            'order': status.order,
+            'calibration': status.calibration,
+        }
+
+    def calibration(
+        self, package_or_coordinate: str | int | tuple[object, ...]
+    ) -> object:
+        """Return calibration of package or selected file at coordinate."""
+        if isinstance(package_or_coordinate, tuple):
+            return self.status(package_or_coordinate).calibration
+        try:
+            return self.package_status(package_or_coordinate).calibration
+        except KeyError:
+            return self.status(package_or_coordinate).calibration
+
+    def candidates(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> tuple[str, ...]:
+        """Return paths of all candidates submitted for coordinate."""
+        return self.status(coordinate).candidates
+
+    def eligible(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> tuple[str, ...]:
+        """Return candidates still eligible to be selected at coordinate.
+
+        A candidate is eligible if it is part of at least one optimal fill
+        of the experiment grid. The result is empty for vacant coordinates.
+
+        """
+        return self.status(coordinate).eligible
+
+    def eligible_packages(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> tuple[str, ...]:
+        """Return packages of candidates still eligible at coordinate."""
+        return self.status(coordinate).eligible_packages
+
+    def packages_at(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> tuple[str, ...]:
+        """Return packages that submitted a candidate at coordinate."""
+        return self.status(coordinate).packages
+
+    def find(self, **coords: object) -> tuple[object, ...]:
+        """Return coordinate matching named axis values.
+
+        Names match dimension names and single-character axis codes,
+        case-insensitively. Aliases are applied.
+
+        """
+        return self._resolver.find(**coords)
+
+    def field(
+        self,
+        coordinate: tuple[object, ...] | object,
+        /,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+    ) -> FieldView:
+        """Return view of field at coordinate without reading its image."""
+        coordinate = self._coordinate(coordinate)
+        return FieldView(
+            self.fields[coordinate],
+            lambda: self._resolver.read(coordinate, imreadargs=imreadargs),
+        )
+
+    def read(
+        self,
+        coordinate: tuple[object, ...] | object,
+        /,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+    ) -> NDArray[Any]:
+        """Return image at resolved coordinate.
+
+        Raises:
+            ManifestError: Coordinate is pending or vacant.
+
+        """
+        return self._resolver.read(
+            self._coordinate(coordinate), imreadargs=imreadargs
+        )
+
+    def asarray(
+        self, *, imreadargs: dict[str, Any] | None = None
+    ) -> ManifestArray:
+        """Return images from resolved coordinates as masked array.
+
+        The result has the manifest grid shape followed by the image shape.
+        Pending and vacant coordinates are masked and are not read.
+
+        """
+        return self._resolver.asarray(self, imreadargs=imreadargs)
+
+    def mosaic(
+        self,
+        layer: Mapping[object, object] | str | None = None,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+        **coords: object,
+    ) -> ManifestArray:
+        """Return fields of one layer tiled left to right in manifest order.
+
+        Fields of the same layer (all axes except the field-of-view axis
+        fixed) are concatenated along width in manifest order. Pending and
+        vacant fields are masked at their positions and are not read.
+
+        Parameters:
+            layer:
+                Mapping of axis name or code to value, or string such as
+                ``'Z=11,C=red'``. If not specified, ``coords`` are used.
+            coords:
+                Axis name or code and value of the layer to tile.
+
+        """
+        fixed = self._resolver.layer_values(layer, coords)
+        return self._resolver.mosaic(
+            self, layer=fixed, imreadargs=imreadargs
+        )
+
+    def stitch(
+        self,
+        layer: Mapping[object, object] | str | None = None,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+        **coords: object,
+    ) -> ManifestArray:
+        """Return :py:meth:`mosaic`."""
+        return self.mosaic(layer, imreadargs=imreadargs, **coords)
+
+    def stitch(
+        self,
+        layer: Mapping[object, object] | str | None = None,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+        **coords: object,
+    ) -> ManifestArray:
+        """Return :py:meth:`mosaic`."""
+        return self.mosaic(layer, imreadargs=imreadargs, **coords)
+
+    def packages_for(
+        self, state: str = 'resolved'
+    ) -> tuple[str, ...]:
+        """Return package numbers of selected files with state in catalog."""
+        numbers: list[str] = []
+        for coordinate in self.coords:
+            status = self.fields[coordinate]
+            if status.state != state or status.source is None:
+                continue
+            if status.source not in numbers:
+                numbers.append(status.source)
+        return tuple(numbers)
+
+    def save_selection(self, file: str | os.PathLike[Any], /) -> None:
+        """Write confirmed package numbers to JSON file."""
+        with open(file, 'w', encoding='utf-8') as fh:
+            json.dump({'selection': list(self.selected)}, fh, indent=2)
+            fh.write('\n')
+
+    def _coordinate(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> tuple[object, ...]:
+        return self._resolver.locate(coordinate)
+
+    def __getitem__(
+        self, coordinate: tuple[object, ...] | object, /
+    ) -> FieldStatus:
+        return self.status(coordinate)
+
+    def __len__(self) -> int:
+        return len(self.fields)
+
+    def __iter__(self) -> Iterable[FieldStatus]:
+        return iter(self.statuses)
+
+    def __repr__(self) -> str:
+        counts = {
+            state: sum(1 for f in self.fields.values() if f.state == state)
+            for state in ('resolved', 'pending', 'vacant')
+        }
+        return (
+            f'<tifffile.ManifestPreview shape={self.shape} '
+            f'resolved={counts["resolved"]} pending={counts["pending"]} '
+            f'vacant={counts["vacant"]}>'
+        )
+
+
+class _ManifestSpec(NamedTuple):
+    """Normalized experiment manifest."""
+
+    axes: str
+    axis_names: tuple[str, ...]
+    axis_values: tuple[tuple[object, ...], ...]
+    coords: tuple[tuple[object, ...], ...]
+    packages: tuple[AcquisitionPackage, ...]
+    selection: tuple[str, ...]
+    fov_axis: int
+    basepath: str
+
+
+def _manifest_axis_code(name: str) -> str:
+    """Return one-character axis code from dimension name or code."""
+    name = str(name).strip()
+    if len(name) == 1:
+        return name.upper()
+    key = name.lower()
+    aliases = {
+        'z': 'Z',
+        'depth': 'Z',
+        'slice': 'Z',
+        'slices': 'Z',
+        'zslice': 'Z',
+        'plane': 'Z',
+        'channel': 'C',
+        'channels': 'C',
+        'ch': 'C',
+        'color': 'C',
+        'colour': 'C',
+        'wavelength': 'C',
+        'stain': 'C',
+        'field': 'F',
+        'fields': 'F',
+        'fov': 'F',
+        'fovs': 'F',
+        'position': 'F',
+        'positions': 'F',
+        'view': 'F',
+        'views': 'F',
+        'site': 'F',
+        'sites': 'F',
+        'time': 'T',
+        'tile': 'R',
+        'region': 'R',
+        'mosaic': 'R',
+        'sequence': 'I',
+    }
+    return aliases.get(key, TIFF.AXES_CODES.get(key, key[:1].upper()))
+
+
+def _manifest_axis_name(code: str) -> str:
+    """Return canonical dimension name from axis code."""
+    names = {
+        'Z': 'Z',
+        'C': 'C',
+        'F': 'F',
+        'T': 'T',
+        'R': 'R',
+        'I': 'I',
+        'Y': 'Y',
+        'X': 'X',
+    }
+    return names.get(code.upper(), code.upper())
+
+
+def _manifest_value(
+    value: object,
+    aliases: Mapping[str, object],
+    axis: str,
+) -> object:
+    """Return normalized value for axis."""
+    if isinstance(value, str):
+        text = value.strip()
+        key = text.lower()
+        if key in aliases:
+            return aliases[key]
+        if axis == 'Z':
+            try:
+                return int(text, 10)
+            except ValueError:
+                return text
+        if axis == 'C' and text.isdigit():
+            return int(text, 10)
+        return text
+    if isinstance(value, float) and value.is_integer():
+        if axis in {'Z', 'C'}:
+            return int(value)
+    return value
+
+
+def _manifest_key(value: object, axis: str) -> object:
+    """Return hashable coordinate component from value."""
+    if axis == 'Z':
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return str(value)
+    if axis == 'C':
+        if isinstance(value, bytes):
+            value = value.decode('utf-8', 'replace')
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip(), 10)
+        return value
+    if axis == 'F':
+        if isinstance(value, bytes):
+            value = value.decode('utf-8', 'replace')
+        if isinstance(value, int):
+            return f'F{value}'
+        text = str(value).strip()
+        key = text.lower()
+        if text.isdigit():
+            return f'F{int(text)}'
+        if key.startswith('f') and key[1:].isdigit():
+            return f'F{int(key[1:])}'
+        return text
+    if isinstance(value, bytes):
+        return value.decode('utf-8', 'replace')
+    return value
+
+
+def _manifest_aliases(
+    manifest: Mapping[str, Any],
+) -> dict[str, dict[str, object]]:
+    """Return per-axis alias mappings from manifest."""
+    result: dict[str, dict[str, object]] = {}
+    for key in ('aliases', 'synonyms', 'categories', 'names', '别名'):
+        aliases = manifest.get(key)
+        if not isinstance(aliases, Mapping):
+            continue
+        for axis, mapping in aliases.items():
+            code = _manifest_axis_code(str(axis))
+            if not isinstance(mapping, Mapping):
+                continue
+            target = result.setdefault(code, {})
+            for alias, value in mapping.items():
+                target[str(alias).strip().lower()] = value
+                if isinstance(value, str):
+                    target.setdefault(value.strip().lower(), value)
+    return result
+
+
+def _manifest_axis_aliases(
+    aliases: Mapping[str, Mapping[str, object]], axis: str
+) -> Mapping[str, object]:
+    """Return alias mapping for axis."""
+    return aliases.get(axis, {})
+
+
+_MANIFEST_PACKAGE_KEYS = (
+    'packages',
+    'acquisition_packages',
+    'acquisitions',
+    'takes',
+    'take_sets',
+    'takesets',
+    'shots',
+    'kits',
+    'batches',
+    'deliveries',
+    '包',
+    '拍摄包',
+)
+_MANIFEST_FILES_KEYS = (
+    'files',
+    'fields',
+    'images',
+    'paths',
+    'views',
+    '视野',
+    '文件',
+)
+_MANIFEST_NUMBER_KEYS = (
+    'number',
+    'id',
+    'package',
+    'package_id',
+    'name',
+    'label',
+    '编号',
+    '包号',
+)
+_MANIFEST_PATH_KEYS = (
+    'path',
+    'file',
+    'filename',
+    'filepath',
+    'name',
+    '路径',
+    '文件',
+)
+_MANIFEST_COORD_KEYS = (
+    'coordinate',
+    'coordinates',
+    'coord',
+    'coords',
+    'index',
+    'indices',
+    'position',
+    '坐标',
+)
+
+
+def _manifest_load(manifest: object) -> tuple[Mapping[str, Any], str]:
+    """Return manifest mapping and base path."""
+    if isinstance(manifest, os.PathLike):
+        manifest = os.fspath(manifest)
+    if isinstance(manifest, str):
+        if os.path.isfile(manifest):
+            with open(manifest, encoding='utf-8') as fh:
+                try:
+                    data = json.load(fh)
+                except json.JSONDecodeError as exc:
+                    msg = f'invalid manifest JSON in {manifest!r}'
+                    raise ManifestError(msg) from exc
+            return _manifest_mapping(data), os.path.dirname(manifest)
+        try:
+            data = json.loads(manifest)
+        except json.JSONDecodeError as exc:
+            msg = 'manifest is neither a file nor valid JSON'
+            raise ManifestError(msg) from exc
+        return _manifest_mapping(data), ''
+    if hasattr(manifest, 'read'):
+        try:
+            data = json.load(manifest)
+        except json.JSONDecodeError as exc:
+            msg = 'invalid manifest JSON'
+            raise ManifestError(msg) from exc
+        return _manifest_mapping(data), ''
+    return _manifest_mapping(manifest), ''
+
+
+def _manifest_mapping(manifest: object) -> Mapping[str, Any]:
+    """Return manifest as mapping."""
+    if isinstance(manifest, Mapping):
+        return manifest
+    if isinstance(manifest, Sequence) and not isinstance(
+        manifest, (str, bytes)
+    ):
+        return {'packages': manifest}
+    if hasattr(manifest, '__dict__'):
+        return {
+            key: value
+            for key, value in vars(manifest).items()
+            if not key.startswith('_')
+        }
+    msg = f'invalid manifest type {type(manifest).__name__}'
+    raise ManifestError(msg)
+
+
+def _manifest_packages(
+    manifest: Mapping[str, Any],
+) -> list[object]:
+    """Return raw package definitions from manifest."""
+    for key in _MANIFEST_PACKAGE_KEYS:
+        if key in manifest and manifest[key] is not None:
+            packages = manifest[key]
+            break
+    else:
+        packages = None
+    if packages is None:
+        if 'files' in manifest:
+            return [manifest]
+        msg = 'manifest does not list acquisition packages'
+        raise ManifestError(msg)
+    if isinstance(packages, Mapping):
+        result = []
+        for number, value in packages.items():
+            if isinstance(value, Mapping):
+                item = dict(value)
+                item.setdefault('number', number)
+                result.append(item)
+            elif isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, os.PathLike)
+            ):
+                result.append({'number': number, 'files': value})
+            else:
+                result.append({'number': number, 'files': [value]})
+        return result
+    if isinstance(packages, Sequence) and not isinstance(packages, str):
+        result = []
+        for item in packages:
+            if isinstance(item, Mapping):
+                result.append(item)
+            elif hasattr(item, '__dict__') and not isinstance(
+                item, (str, bytes, os.PathLike)
+            ):
+                result.append(
+                    {
+                        key: value
+                        for key, value in vars(item).items()
+                        if not key.startswith('_')
+                    }
+                )
+            elif isinstance(item, Sequence) and not isinstance(
+                item, (str, bytes)
+            ) and len(item) >= 2:
+                result.append(
+                    {
+                        'number': item[0],
+                        'files': item[1],
+                        **(
+                            {'calibration': item[2]} if len(item) > 2 else {}
+                        ),
+                    }
+                )
+            elif isinstance(item, (str, os.PathLike)):
+                # plain file name implies a single-image package
+                result.append({'files': [item]})
+            else:
+                result.append({'number': item, 'files': None})
+        return result
+    if isinstance(packages, (str, bytes, os.PathLike)):
+        return [{'number': '1', 'files': [packages]}]
+    msg = 'invalid packages in manifest'
+    raise ManifestError(msg)
+
+
+def _manifest_package_number(item: Mapping[str, Any], index: int) -> str:
+    """Return package number from package definition."""
+    for key in _MANIFEST_NUMBER_KEYS:
+        if key in item and item[key] is not None:
+            return str(item[key])
+    return str(index + 1)
+
+
+def _manifest_package_files(item: Mapping[str, Any]) -> object:
+    """Return raw files from package definition."""
+    for key in _MANIFEST_FILES_KEYS:
+        if key in item and item[key] is not None:
+            return item[key]
+    if any(key in item for key in _MANIFEST_PATH_KEYS):
+        return [item]
+    return None
+
+
+def _manifest_files_index(
+    files: Sequence[str] | None,
+) -> dict[str, list[str]]:
+    """Index delivered files by package number prefix."""
+    index: dict[str, list[str]] = {}
+    for path in files or ():
+        name = os.path.basename(path)
+        match = re.match(
+            r'^(?:pkg|package|包)?[_\-. ]*'
+            r'([A-Za-z0-9]+)[_\-. ]+(?=[A-Za-z]*z\d)',
+            name,
+            re.IGNORECASE,
+        )
+        if match:
+            index.setdefault(match.group(1), []).append(path)
+            continue
+        stem = os.path.splitext(name)[0]
+        match = re.search(
+            r'(?:^|[_\-. ])(?:pkg|package)(?:[_\-. ]*=?|[_\-. ])?'
+            r'([A-Za-z0-9]+)(?=$|[_\-. ])',
+            stem,
+            re.IGNORECASE,
+        )
+        if match:
+            index.setdefault(match.group(1), []).append(path)
+            continue
+        index.setdefault('', []).append(path)
+    return {
+        key: natural_sorted(paths) for key, paths in index.items()
+    }
+
+
+def _manifest_package_calibration(item: Mapping[str, Any]) -> object:
+    """Return calibration from package definition."""
+    for key in (
+        'calibration',
+        'calibrations',
+        'calibration_id',
+        'calibration_key',
+        '校准',
+    ):
+        if key in item:
+            return item[key]
+    return None
+
+
+def _manifest_calibration_for(
+    manifest: Mapping[str, Any], number: str
+) -> object:
+    """Return calibration for package listed at manifest level."""
+    for key in ('calibrations', 'calibration', 'calibration_map', '校准'):
+        calibrations = manifest.get(key)
+        if not isinstance(calibrations, Mapping):
+            continue
+        if number in calibrations:
+            return calibrations[number]
+        if 'default' in calibrations:
+            return calibrations['default']
+    return None
+
+
+def _manifest_file_entries(files: object) -> list[object]:
+    """Return file entries from package files definition."""
+    if files is None:
+        return []
+    if isinstance(files, Mapping):
+        if any(
+            key in files
+            for key in (
+                *_MANIFEST_PATH_KEYS,
+                *_MANIFEST_COORD_KEYS,
+                *_MANIFEST_FILES_KEYS,
+            )
+        ) and any(key in files for key in _MANIFEST_PATH_KEYS):
+            return [files]
+        return [
+            {'path': value, 'coordinate': key}
+            if isinstance(value, str)
+            else {'path': key, **value}
+            for key, value in files.items()
+        ]
+    if isinstance(files, (str, bytes, os.PathLike)):
+        return [files]
+    if isinstance(files, Sequence):
+        return list(files)
+    msg = 'invalid files in acquisition package'
+    raise ManifestError(msg)
+
+
+_FILENAME_Z = re.compile(
+    r'(?<![A-Za-z])z\s*[=:_-]?\s*(\d+)(?=$|[^0-9])',
+    re.IGNORECASE,
+)
+_FILENAME_CHANNEL_PREFIX = re.compile(
+    r'(?<![A-Za-z])(?:ch|chan|channel|c)\s*[=:_-]?\s*([A-Za-z0-9]+)',
+    re.IGNORECASE,
+)
+_FILENAME_COLOR = re.compile(
+    r'(?<![A-Za-z])(red|green|blue|cyan|magenta|yellow|gray|grey|white|'
+    r'orange|violet|r|g|b|c|m|y|w)(?![A-Za-z])',
+    re.IGNORECASE,
+)
+_FILENAME_FIELD_PREFIX = re.compile(
+    r'(?<![A-Za-z])(?:fov|field|position|pos|view|f)'
+    r'\s*[=:_-]?\s*([A-Za-z]?\d+)(?=$|[^0-9])',
+    re.IGNORECASE,
+)
+_MANIFEST_COLOR_ALIASES = {
+    'r': 'red',
+    'g': 'green',
+    'b': 'blue',
+    'c': 'cyan',
+    'm': 'magenta',
+    'y': 'yellow',
+    'w': 'white',
+    'grey': 'gray',
+}
+
+
+def _manifest_channel(value: str) -> object:
+    """Return normalized channel name from file name token."""
+    text = value.strip()
+    key = text.lower()
+    if key in _MANIFEST_COLOR_ALIASES:
+        return _MANIFEST_COLOR_ALIASES[key]
+    return text
+
+
+def _manifest_parse_name(name: str) -> dict[str, object]:
+    """Return axis values parsed from file name."""
+    stem = os.path.splitext(os.path.basename(name))[0]
+    result: dict[str, object] = {}
+    match = _FILENAME_Z.search(stem)
+    if match:
+        result['Z'] = int(match.group(1))
+    match = _FILENAME_FIELD_PREFIX.search(stem)
+    if match:
+        value = match.group(1)
+        if value.isdigit():
+            result['F'] = f'F{int(value)}'
+        else:
+            result['F'] = value
+    match = _FILENAME_CHANNEL_PREFIX.search(stem)
+    if match and not match.group(1).lower().startswith('f'):
+        result['C'] = _manifest_channel(match.group(1))
+    if 'C' not in result:
+        match = _FILENAME_COLOR.search(stem)
+        if match:
+            result['C'] = _manifest_channel(match.group(1))
+    return result
+
+
+def _manifest_entry_coordinate(
+    entry: Mapping[str, Any],
+    axes: Sequence[str],
+    axis_names: Sequence[str],
+) -> dict[str, object]:
+    """Return axis values from explicit file entry."""
+    result: dict[str, object] = {}
+    explicit: object = None
+    for key in _MANIFEST_COORD_KEYS:
+        if key in entry:
+            explicit = entry[key]
+            break
+    if isinstance(explicit, Mapping):
+        for axis, value in explicit.items():
+            result[_manifest_axis_code(str(axis))] = value
+    elif isinstance(explicit, Sequence) and not isinstance(
+        explicit, (str, bytes)
+    ):
+        for axis, value in zip(axes, explicit, strict=False):
+            result[axis] = value
+    elif explicit is not None:
+        result[axes[-1]] = explicit
+    for axis, name in zip(axes, axis_names, strict=False):
+        for key in (axis, name, name.lower(), name.upper()):
+            if key in entry:
+                result[axis] = entry[key]
+                break
+    return result
+
+
+def _manifest_normalize(
+    manifest: object,
+    files: Sequence[str] | None,
+) -> _ManifestSpec:
+    """Return normalized manifest specification."""
+    mapping, basepath = _manifest_load(manifest)
+    raw_packages = _manifest_packages(mapping)
+    axes_config = None
+    for key in ('axes', 'axis', 'dimensions', 'dims', '坐标轴', '轴'):
+        if key in mapping:
+            axes_config = mapping[key]
+            break
+    if isinstance(axes_config, str):
+        if re.fullmatch(r'[A-Za-z]+', axes_config) and len(axes_config) > 1:
+            axis_names = tuple(axes_config)
+        else:
+            axis_names = tuple(
+                part
+                for part in re.split(r'[\s,;_\-.]+', axes_config)
+                if part
+            )
+    elif isinstance(axes_config, Sequence):
+        axis_names = tuple(str(axis) for axis in axes_config)
+    else:
+        axis_names = ()
+    codes = tuple(_manifest_axis_code(name) for name in axis_names)
+    alias_map = _manifest_aliases(mapping)
+
+    # collect parsed files
+    files_index = _manifest_files_index(files)
+    raw_entries: list[tuple[str, int, object, dict[str, object]]] = []
+    for index, item in enumerate(raw_packages):
+        if isinstance(item, Mapping):
+            item_mapping = item
+        elif hasattr(item, '__dict__') and not isinstance(
+            item, (str, bytes, os.PathLike)
+        ):
+            item_mapping = {
+                key: value
+                for key, value in vars(item).items()
+                if not key.startswith('_')
+            }
+        elif isinstance(item, Sequence) and not isinstance(
+            item, (str, bytes)
+        ) and len(item) >= 2:
+            item_mapping = {
+                'number': item[0],
+                'files': item[1],
+                **({'calibration': item[2]} if len(item) > 2 else {}),
+            }
+        else:
+            item_mapping = {'files': item}
+        number = _manifest_package_number(item_mapping, index)
+        calibration = _manifest_package_calibration(item_mapping)
+        if calibration is None:
+            calibration = _manifest_calibration_for(mapping, number)
+        raw_files = _manifest_package_files(item_mapping)
+        entries = _manifest_file_entries(raw_files)
+        if not entries and files:
+            entries = files_index.get(number, [])
+            if not entries:
+                prefix = number + '_'
+                entries = [
+                    path
+                    for path in files
+                    if os.path.basename(path).startswith(prefix)
+                ]
+        for order, entry in enumerate(entries):
+            raw_entries.append((number, order, calibration, entry))
+
+    # normalize each entry to path + coordinate
+    records: list[tuple[str, int, object, str, str, dict[str, object]]] = []
+    detected: list[str] = []
+    for number, order, calibration, entry in raw_entries:
+        if isinstance(entry, Mapping):
+            path: object = None
+            for key in _MANIFEST_PATH_KEYS:
+                if key in entry and isinstance(entry[key], str):
+                    path = entry[key]
+                    break
+            if path is None:
+                msg = f'file entry {entry!r} has no path'
+                raise ManifestError(msg)
+            name = str(path)
+            explicit = _manifest_entry_coordinate(entry, codes, axis_names)
+        elif isinstance(entry, os.PathLike):
+            name = os.fspath(entry)
+            explicit = {}
+        elif isinstance(entry, str):
+            name = entry
+            explicit = {}
+        else:
+            msg = f'invalid file entry {entry!r}'
+            raise ManifestError(msg)
+        parsed = _manifest_parse_name(name)
+        coordinate: dict[str, object] = {}
+        for axis in codes:
+            if axis in explicit:
+                coordinate[axis] = explicit[axis]
+            elif axis in parsed:
+                coordinate[axis] = parsed[axis]
+        for axis, value in explicit.items():
+            coordinate.setdefault(axis, value)
+        for axis, value in parsed.items():
+            if axis not in coordinate:
+                coordinate[axis] = value
+                if axis not in detected:
+                    detected.append(axis)
+        resolved = name
+        if not os.path.isabs(resolved) and basepath:
+            candidate = os.path.join(basepath, resolved)
+            if os.path.exists(candidate):
+                resolved = candidate
+        elif files and not os.path.isabs(resolved):
+            match = [
+                path
+                for path in files
+                if os.path.basename(path) == os.path.basename(resolved)
+            ]
+            if len(match) == 1:
+                resolved = match[0]
+        records.append(
+            (number, order, calibration, name, resolved, coordinate)
+        )
+
+    if not records:
+        msg = 'manifest contains no files'
+        raise ManifestError(msg)
+    if not codes:
+        order_axes: list[str] = []
+        for axis in ('Z', 'C', 'F'):
+            if any(axis in record[5] for record in records):
+                order_axes.append(axis)
+        for record in records:
+            for axis in record[5]:
+                if axis not in order_axes:
+                    order_axes.append(axis)
+        codes = tuple(order_axes)
+        axis_names = tuple(_manifest_axis_name(code) for code in codes)
+    if codes:
+        # file names may identify axes not declared by the manifest
+        extra = [
+            axis
+            for axis in ('Z', 'C', 'F', 'T', 'R')
+            if axis in detected and axis not in codes
+        ]
+        foreign = [
+            axis
+            for axis in detected
+            if axis not in codes and axis not in extra
+        ]
+        if extra:
+            codes = (*codes, *extra)
+            axis_names = (*axis_names, *extra)
+        # explicit coordinate entries cannot extend declared axes
+        for record in records:
+            for axis in foreign:
+                record[5].pop(axis, None)
+    unknown = sorted(
+        {
+            axis
+            for record in records
+            for axis in record[5]
+            if axis not in codes
+        }
+    )
+    for record in records:
+        for axis in unknown:
+            record[5].pop(axis, None)
+    if not codes:
+        msg = 'manifest does not identify field coordinates'
+        raise ManifestError(msg)
+
+    # determine field of view axis
+    fov_axis = 2 if 'F' in codes else len(codes) - 1
+    for key in ('fov_axis', 'field_axis', '视野轴'):
+        if key in mapping:
+            code = _manifest_axis_code(str(mapping[key]))
+            if code in codes:
+                fov_axis = codes.index(code)
+                break
+    else:
+        if 'F' in codes:
+            fov_axis = codes.index('F')
+
+    # axis values: explicit manifest values, else first occurrence
+    explicit_values: dict[str, list[object]] = {}
+    for key in ('axis_values', 'values', 'levels', 'grid'):
+        values = mapping.get(key)
+        if isinstance(values, Mapping):
+            for axis, sequence in values.items():
+                code = _manifest_axis_code(str(axis))
+                if code in codes and isinstance(sequence, Sequence):
+                    explicit_values[code] = list(sequence)
+    for axis, name in zip(codes, axis_names, strict=False):
+        for key in (axis, name, name.lower(), name.upper(), f'{name}s'):
+            if key in mapping and isinstance(mapping[key], Sequence) and not isinstance(mapping[key], (str, bytes)):
+                explicit_values.setdefault(axis, list(mapping[key]))
+    axis_values: dict[str, list[object]] = {axis: [] for axis in codes}
+    for axis in codes:
+        for value in explicit_values.get(axis, ()):
+            value = _manifest_value(value, _manifest_axis_aliases(alias_map, axis), axis)
+            key = _manifest_key(value, axis)
+            if key not in axis_values[axis]:
+                axis_values[axis].append(key)
+    for record in records:
+        coordinate = record[5]
+        for axis in codes:
+            if axis not in coordinate:
+                continue
+            value = _manifest_value(coordinate[axis], _manifest_axis_aliases(alias_map, axis), axis)
+            coordinate[axis] = _manifest_key(value, axis)
+            if coordinate[axis] not in axis_values[axis]:
+                axis_values[axis].append(coordinate[axis])
+    missing = [
+        axis
+        for axis in codes
+        if not axis_values[axis] and axis != codes[fov_axis]
+    ]
+    if missing:
+        msg = f'manifest has no values for axes {missing!r}'
+        raise ManifestError(msg)
+    for axis in codes:
+        if not axis_values[axis]:
+            axis_values[axis] = [0]
+
+    # coordinates: explicit list or cartesian product
+    explicit_coords = None
+    for key in ('coords', 'coordinates', 'positions', 'locations', 'grid_points', '坐标'):
+        if key in mapping and isinstance(mapping[key], Sequence):
+            explicit_coords = mapping[key]
+            break
+    if explicit_coords is not None:
+        coords = []
+        for item in explicit_coords:
+            if isinstance(item, Mapping):
+                coordinate = tuple(
+                    _manifest_key(
+                        _manifest_value(item[axis], _manifest_axis_aliases(alias_map, axis), axis), axis
+                    )
+                    for axis in codes
+                )
+            else:
+                coordinate = tuple(
+                    _manifest_key(
+                        _manifest_value(value, _manifest_axis_aliases(alias_map, axis), axis), axis
+                    )
+                    for axis, value in zip(codes, item, strict=False)
+                )
+            if len(coordinate) != len(codes):
+                msg = f'invalid coordinate {item!r}'
+                raise ManifestError(msg)
+            if coordinate not in coords:
+                coords.append(coordinate)
+    else:
+        shape = mapping.get('shape') or mapping.get('grid_shape')
+        coords = []
+        if shape is not None:
+            shape = tuple(int(i) for i in shape)
+            if len(shape) != len(codes):
+                msg = 'shape length does not match axes'
+                raise ManifestError(msg)
+            for axis, size in zip(codes, shape, strict=True):
+                axis_values[axis] = axis_values[axis][:size]
+        for coordinate in itertools.product(
+            *(axis_values[axis] for axis in codes)
+        ):
+            coords.append(tuple(coordinate))
+    coords = tuple(coords)
+
+    # packages with positions
+    packages: list[AcquisitionPackage] = []
+    seen_packages: dict[str, int] = {}
+    for number, order, calibration, name, path, coordinate in records:
+        if len(coordinate) != len(codes):
+            msg = (
+                f'file {name!r} does not provide values for axes {codes!r}'
+            )
+            raise ManifestError(msg)
+        key = tuple(coordinate[axis] for axis in codes)
+        if key not in coords:
+            msg = f'coordinate {key!r} of file {name!r} not in manifest grid'
+            raise ManifestError(msg)
+        if number not in seen_packages:
+            seen_packages[number] = len(packages)
+            packages.append(
+                AcquisitionPackage(number, {}, calibration)
+            )
+        package = packages[seen_packages[number]]
+        if key in package.fields:
+            msg = (
+                f'package {number!r} assigns coordinate {key!r} more than once'
+            )
+            raise ManifestError(msg)
+        package.fields[key] = FilePosition(order, name, path)
+
+    selection = _manifest_selection(mapping, basepath)
+    return _ManifestSpec(
+        axes=''.join(codes),
+        axis_names=tuple(axis_names),
+        axis_values=tuple(tuple(axis_values[axis]) for axis in codes),
+        coords=coords,
+        packages=tuple(packages),
+        selection=selection,
+        fov_axis=fov_axis,
+        basepath=basepath,
+    )
+
+
+def _manifest_selection(
+    manifest: Mapping[str, Any], basepath: str
+) -> tuple[str, ...]:
+    """Return confirmed package numbers from manifest."""
+    selection: object = None
+    for key in (
+        'selection',
+        'selected',
+        'confirmed',
+        'confirmed_packages',
+        'selection_file',
+        'selection_path',
+        '选择',
+        '已确认',
+    ):
+        if key in manifest:
+            selection = manifest[key]
+            break
+    return _manifest_selection_value(selection, basepath)
+
+
+def _manifest_selection_value(
+    selection: object, basepath: str = ''
+) -> tuple[str, ...]:
+    """Return confirmed package numbers from value."""
+    if selection is None:
+        return ()
+    if isinstance(selection, os.PathLike):
+        selection = os.fspath(selection)
+    if isinstance(selection, str):
+        candidate = selection
+        if not os.path.isabs(candidate) and basepath:
+            candidate = os.path.join(basepath, candidate)
+        if os.path.isfile(candidate):
+            with open(candidate, encoding='utf-8') as fh:
+                data = json.load(fh)
+            if isinstance(data, Mapping):
+                for key in ('selection', 'selected', 'packages'):
+                    if key in data:
+                        return _manifest_selection_value(data[key])
+                if 'package' in data or 'number' in data:
+                    return (str(data.get('package', data.get('number'))),)
+                return tuple(str(k) for k, v in data.items() if v)
+            return tuple(str(item) for item in data)
+        if ',' in selection:
+            return tuple(
+                part.strip() for part in selection.split(',') if part.strip()
+            )
+        return (selection.strip(),) if selection.strip() else ()
+    if isinstance(selection, Mapping):
+        for key in ('selection', 'selected', 'packages', 'confirmed'):
+            if key in selection:
+                return _manifest_selection_value(selection[key])
+        return tuple(str(k) for k, v in selection.items() if v)
+    if isinstance(selection, Sequence):
+        result: list[str] = []
+        for item in selection:
+            if isinstance(item, (str, os.PathLike)):
+                item = os.fspath(item)  # noqa: PLW2901
+                candidate = item
+                if not os.path.isabs(candidate) and basepath:
+                    candidate = os.path.join(basepath, candidate)
+                if os.path.isfile(candidate):
+                    for number in _manifest_selection_value(candidate):
+                        if number not in result:
+                            result.append(number)
+                    continue
+            for number in _manifest_selection_value(item):
+                if number not in result:
+                    result.append(number)
+        return tuple(result)
+    return (str(selection),)
+
+
+@final
+class _ManifestResolver:
+    """Resolve an experiment manifest to maximal, certain selections."""
+
+    def __init__(
+        self,
+        spec: _ManifestSpec,
+        imreadfunc: Callable[..., NDArray[Any]],
+        imreadargs: dict[str, Any] | None = None,
+    ) -> None:
+        self.axes = spec.axes
+        self.axis_names = spec.axis_names
+        self.axis_values = spec.axis_values
+        self.coords = spec.coords
+        self.fov_axis = spec.fov_axis
+        self.packages = spec.packages
+        self.package_numbers = tuple(p.number for p in spec.packages)
+        self.shape = tuple(len(v) for v in spec.axis_values)
+        self._imread = imreadfunc
+        self._imreadargs = dict(imreadargs or {})
+        self._chunkshape: tuple[int, ...] | None = None
+        self._chunkdtype: Any = None
+        self._cache: dict[tuple[Any, ...], int] = {}
+        self.coordinate_index = {
+            coordinate: i for i, coordinate in enumerate(spec.coords)
+        }
+        self._package_masks: list[int] = []
+        self._package_assignments: list[dict[tuple[object, ...], str]] = []
+        for package in self.packages:
+            assignment: dict[tuple[object, ...], str] = {}
+            mask = 0
+            for coordinate, position in package.fields.items():
+                if coordinate not in self.coordinate_index:
+                    msg = (
+                        f'package {package.number!r} assigns coordinate '
+                        f'{coordinate!r} not in manifest grid'
+                    )
+                    raise ManifestError(msg)
+                assignment[coordinate] = position.path
+                mask |= 1 << self.coordinate_index[coordinate]
+            self._package_assignments.append(assignment)
+            self._package_masks.append(mask)
+        self._package_index = {
+            package.number: i for i, package in enumerate(self.packages)
+        }
+        self._conflict_bits = self._make_conflicts()
+        self._covering: dict[int, list[int]] = {}
+        for index, assignment in enumerate(self._package_assignments):
+            for coordinate in assignment:
+                self._covering.setdefault(
+                    self.coordinate_index[coordinate], []
+                ).append(index)
+        self.selection = self._validate_selection(spec.selection)
+        self._base_assignment, self._base_mask = self._make_base()
+        self.maximum = self._solve()
+        self.filled = len(self._base_assignment)
+        self.fields = self._make_fields()
+        self.package_statuses = self._make_package_statuses()
+
+    def _make_conflicts(self) -> list[int]:
+        count = len(self.packages)
+        conflicts = [0] * count
+        for i in range(count):
+            left = self._package_assignments[i]
+            for j in range(i + 1, count):
+                right = self._package_assignments[j]
+                for coordinate, path in left.items():
+                    if coordinate in right and right[coordinate] != path:
+                        conflicts[i] |= 1 << j
+                        conflicts[j] |= 1 << i
+                        break
+        return conflicts
+
+    def _validate_selection(
+        self, selection: Sequence[str]
+    ) -> tuple[str, ...]:
+        result: list[str] = []
+        self.rejected_selection: dict[str, tuple[tuple[object, ...], ...]] = {}
+        self.rejected_partners: dict[str, tuple[str, ...]] = {}
+        for number in selection:
+            number = str(number)  # noqa: PLW2901
+            if number not in self._package_index:
+                msg = f'package {number!r} not in manifest'
+                raise ManifestError(msg)
+            if number in result:
+                continue
+            package = self.packages[self._package_index[number]]
+            conflicts: list[tuple[object, ...]] = []
+            for accepted in result:
+                other = self.packages[self._package_index[accepted]]
+                for coordinate, position in package.fields.items():
+                    conflict = other.fields.get(coordinate)
+                    if conflict is not None and conflict.path != position.path:
+                        conflicts.append(coordinate)
+            if conflicts:
+                # keep earlier confirmed packages; the later package is
+                # rejected without invalidating the confirmed selection
+                self.rejected_selection[number] = tuple(conflicts)
+                partners: list[str] = []
+                for accepted in result:
+                    other = self.packages[self._package_index[accepted]]
+                    for coordinate in conflicts:
+                        position = package.fields[coordinate]
+                        other_position = other.fields.get(coordinate)
+                        if (
+                            other_position is not None
+                            and other_position.path != position.path
+                            and accepted not in partners
+                        ):
+                            partners.append(accepted)
+                self.rejected_partners[number] = tuple(partners)
+                warnings.warn(
+                    f'acquisition package {number!r} conflicts with '
+                    f'confirmed package at '
+                    f'{", ".join(repr(c) for c in conflicts)}; '
+                    'confirmation rejected',
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
+            result.append(number)
+        return tuple(result)
+
+    def _make_base(self) -> tuple[dict[tuple[object, ...], str], int]:
+        assignment: dict[tuple[object, ...], str] = {}
+        mask = 0
+        for number in self.selection:
+            for coordinate, path in self._package_assignments[
+                self._package_index[number]
+            ].items():
+                assignment[coordinate] = path
+                mask |= 1 << self.coordinate_index[coordinate]
+        return assignment, mask
+
+    def _merge(
+        self,
+        assignment: Mapping[tuple[object, ...], str],
+        mask: int,
+        index: int,
+    ) -> tuple[dict[tuple[object, ...], str] | None, int]:
+        current = self._package_assignments[index]
+        for coordinate, path in current.items():
+            if coordinate in assignment and assignment[coordinate] != path:
+                return None, mask
+        result = dict(assignment)
+        result.update(current)
+        mask |= self._package_masks[index]
+        return result, mask
+
+    def _solve(
+        self,
+        required: Sequence[int] = (),
+        forbidden: Sequence[int] = (),
+    ) -> int:
+        key = (tuple(sorted(required)), tuple(sorted(forbidden)))
+        if key in self._cache:
+            return self._cache[key]
+        result = self._solve_uncached(key[0], key[1])
+        self._cache[key] = result
+        return result
+
+    def _solve_uncached(
+        self, required: tuple[int, ...], forbidden: tuple[int, ...]
+    ) -> int:
+        required_set = set(required)
+        forbidden_set = set(forbidden)
+        if required_set & forbidden_set:
+            return -1
+        for index in required_set:
+            if index < 0 or index >= len(self.packages):
+                return -1
+            if self.packages[index].number in self.selection:
+                continue
+        assignment = dict(self._base_assignment)
+        mask = self._base_mask
+        for index in sorted(required_set):
+            if self.packages[index].number in self.selection:
+                continue
+            assignment, mask = self._merge(assignment, mask, index)
+            if assignment is None:
+                return -1
+        confirmed_indices = {
+            self._package_index[number] for number in self.selection
+        }
+        available = 0
+        for index in range(len(self.packages)):
+            if index in confirmed_indices or index in required_set:
+                continue
+            if index in forbidden_set:
+                continue
+            if self._merge(assignment, mask, index)[0] is None:
+                continue
+            available |= 1 << index
+        best = mask.bit_count()
+        if not available:
+            return best
+        masks = self._package_masks
+        conflict_bits = self._conflict_bits
+
+        def search(available_: int, covered: int) -> None:
+            nonlocal best
+            bound = covered
+            scan = available_
+            while scan:
+                low = scan & -scan
+                bound |= masks[low.bit_length() - 1]
+                scan ^= low
+            if bound.bit_count() <= best:
+                return
+            scan = available_
+            chosen = -1
+            weight = -1
+            while scan:
+                low = scan & -scan
+                index = low.bit_length() - 1
+                candidate = (masks[index] & ~covered).bit_count()
+                if candidate > weight:
+                    chosen = index
+                    weight = candidate
+                scan ^= low
+            if chosen < 0:
+                return
+            low = 1 << chosen
+            covered_ = covered | masks[chosen]
+            if covered_.bit_count() > best:
+                best = covered_.bit_count()
+            search(
+                available_ & ~conflict_bits[chosen] & ~low,
+                covered_,
+            )
+            search(available_ & ~low, covered)
+
+        search(available, mask)
+        return best
+
+    def _make_fields(self) -> dict[tuple[object, ...], FieldStatus]:
+        fields: dict[tuple[object, ...], FieldStatus] = {}
+        for coordinate in self.coords:
+            index = self.coordinate_index[coordinate]
+            covering = tuple(self._covering.get(index, ()))
+            packages = tuple(self.packages[i].number for i in covering)
+            candidates: list[str] = []
+            for i in covering:
+                path = self._package_assignments[i][coordinate]
+                if path not in candidates:
+                    candidates.append(path)
+            if not covering:
+                fields[coordinate] = FieldStatus(
+                    coordinate=coordinate,
+                    state='vacant',
+                    packages=(),
+                    candidates=(),
+                )
+                continue
+            if coordinate in self._base_assignment:
+                can_be_empty = False
+            else:
+                can_be_empty = (
+                    self._solve(forbidden=covering) == self.maximum
+                )
+            max_required = max(
+                (self._solve(required=(i,)) for i in covering), default=-1
+            )
+            if max_required < self.maximum:
+                fields[coordinate] = FieldStatus(
+                    coordinate=coordinate,
+                    state='vacant',
+                    packages=packages,
+                    candidates=tuple(candidates),
+                )
+                continue
+            eligible_paths: list[str] = []
+            eligible_packages: list[str] = []
+            for path in candidates:
+                path_eligible = False
+                for i in covering:
+                    if (
+                        self._package_assignments[i][coordinate] == path
+                        and self._solve(required=(i,)) == self.maximum
+                    ):
+                        path_eligible = True
+                        package = self.packages[i]
+                        if package.number not in eligible_packages:
+                            eligible_packages.append(package.number)
+                if path_eligible:
+                    eligible_paths.append(path)
+            if can_be_empty:
+                state = 'pending'
+                selected = source = order = calibration = None
+            elif len(eligible_paths) == 1:
+                state = 'resolved'
+                selected = eligible_paths[0]
+                source = order = calibration = None
+                if coordinate in self._base_assignment:
+                    for number in self.selection:
+                        package = self.packages[
+                            self._package_index[number]
+                        ]
+                        position = package.fields.get(coordinate)
+                        if position is not None and position.path == selected:
+                            source = number
+                            order = position.order
+                            calibration = package.calibration
+                            break
+                else:
+                    for i in covering:
+                        package = self.packages[i]
+                        position = package.fields[coordinate]
+                        if (
+                            position.path == selected
+                            and package.number in eligible_packages
+                        ):
+                            source = package.number
+                            order = position.order
+                            calibration = package.calibration
+                            break
+            else:
+                state = 'pending'
+                selected = source = order = calibration = None
+            records = tuple(
+                FieldRecord(
+                    coordinate,
+                    self._package_assignments[i][coordinate],
+                    self.packages[i].number,
+                    self.packages[i].fields[coordinate].order,
+                )
+                for i in covering
+            )
+            fields[coordinate] = FieldStatus(
+                coordinate=coordinate,
+                state=state,
+                packages=packages,
+                candidates=tuple(candidates),
+                eligible=tuple(eligible_paths),
+                eligible_packages=tuple(eligible_packages),
+                selected=selected,
+                source=source,
+                order=order,
+                calibration=calibration,
+                records=records,
+            )
+        return fields
+
+    def coord_order(self, coordinate: tuple[object, ...]) -> int:
+        """Return position of coordinate in manifest grid order."""
+        return self.coordinate_index.get(coordinate, len(self.coords))
+
+    def _make_package_statuses(self) -> dict[str, PackageStatus]:
+        statuses: dict[str, PackageStatus] = {}
+        rejected = getattr(self, 'rejected_selection', {})
+        for index, package in enumerate(self.packages):
+            conflicts: list[tuple[object, ...]] = []
+            for coordinate, position in package.fields.items():
+                if (
+                    coordinate in self._base_assignment
+                    and self._base_assignment[coordinate] != position.path
+                ):
+                    conflicts.append(coordinate)
+            selected = package.number in self.selection
+            if selected:
+                eligible = True
+                reason = 'confirmed'
+            elif package.number in rejected:
+                conflicts = list(rejected[package.number])
+                eligible = False
+                reason = (
+                    'conflicting confirmation rejected; confirmed package '
+                    'at ' + ', '.join(repr(c) for c in conflicts)
+                )
+            elif conflicts:
+                eligible = False
+                reason = 'conflicts with confirmed package at ' + ', '.join(
+                    repr(c) for c in conflicts
+                )
+            else:
+                eligible = self._solve(required=(index,)) == self.maximum
+                reason = (
+                    'eligible' if eligible else 'not part of an optimal fill'
+                )
+            conflicting_packages: list[str] = list(
+                getattr(self, 'rejected_partners', {}).get(
+                    package.number, ()
+                )
+            )
+            for coordinate, position in package.fields.items():
+                if coordinate not in self._base_assignment:
+                    continue
+                if self._base_assignment[coordinate] == position.path:
+                    continue
+                for other in self.selection:
+                    other_package = self.packages[
+                        self._package_index[other]
+                    ]
+                    other_position = other_package.fields.get(coordinate)
+                    if (
+                        other_position is not None
+                        and other_position.path == position.path
+                    ):
+                        # both packages assign the same file here
+                        continue
+                    if (
+                        other_position is not None
+                        and other not in conflicting_packages
+                    ):
+                        conflicting_packages.append(other)
+            statuses[package.number] = PackageStatus(
+                number=package.number,
+                selected=selected,
+                eligible=eligible,
+                conflicts=tuple(conflicts),
+                reason=reason,
+                calibration=package.calibration,
+                conflicting_packages=tuple(conflicting_packages),
+                selected_coordinates=tuple(
+                    sorted(
+                        (
+                            c
+                            for c in package.fields
+                            if self.fields.get(c) is not None
+                            and self.fields[c].source == package.number
+                        ),
+                        key=self.coord_order,
+                    )
+                ),
+            )
+        return statuses
+
+    def read(
+        self,
+        coordinate: tuple[object, ...],
+        *,
+        imreadargs: dict[str, Any] | None = None,
+    ) -> NDArray[Any]:
+        status = self.fields[coordinate]
+        if status.state != 'resolved' or status.selected is None:
+            msg = (
+                f'coordinate {coordinate!r} is {status.state}; '
+                'pixel data not available'
+            )
+            raise ManifestError(msg)
+        return self.read_path(status.selected, imreadargs=imreadargs)
+
+    def read_path(
+        self,
+        path: str,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+    ) -> NDArray[Any]:
+        kwargs = dict(self._imreadargs)
+        if imreadargs:
+            kwargs.update(imreadargs)
+        return self._imread(path, **kwargs)
+
+    def _probe(self) -> None:
+        paths: list[str] = []
+        for coordinate in self.coords:
+            status = self.fields[coordinate]
+            if status.state == 'resolved' and status.selected is not None:
+                if status.selected not in paths:
+                    paths.append(status.selected)
+        for coordinate in self.coords:
+            for path in self.fields[coordinate].candidates:
+                if path not in paths:
+                    paths.append(path)
+        for path in paths:
+            try:
+                with TiffFile(path) as tif:
+                    if not tif.series:
+                        continue
+                    series = tif.series[0]
+                    shape = tuple(int(i) for i in series.shape)
+                    dtype = series.dtype
+            except (OSError, ValueError, IndexError):
+                continue
+            if not shape:
+                continue
+            self._chunkshape = shape
+            self._chunkdtype = dtype
+            return
+        for coordinate in self.coords:
+            status = self.fields[coordinate]
+            if status.state == 'resolved' and status.selected is not None:
+                array = self.read_path(status.selected)
+                self._chunkshape = tuple(array.shape)
+                self._chunkdtype = array.dtype
+                return
+        msg = 'cannot determine image shape without reading pixel data'
+        raise ManifestError(msg)
+
+    @property
+    def chunkshape(self) -> tuple[int, ...]:
+        if self._chunkshape is None:
+            self._probe()
+        assert self._chunkshape is not None
+        return self._chunkshape
+
+    @property
+    def chunkdtype(self) -> Any:
+        if self._chunkdtype is None:
+            self._probe()
+        return self._chunkdtype
+
+    def asarray(
+        self,
+        preview: ManifestPreview,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+    ) -> ManifestArray:
+        shape = (*self.shape, *self.chunkshape)
+        data = numpy.zeros(shape, self.chunkdtype)
+        mask = numpy.ones(shape, dtype=bool)
+        for index, coordinate in enumerate(self.coords):
+            status = self.fields[coordinate]
+            if status.state != 'resolved' or status.selected is None:
+                continue
+            grid = numpy.unravel_index(index, self.shape)
+            image = self.read_path(status.selected, imreadargs=imreadargs)
+            data[grid] = image
+            mask[grid] = False
+        result = ManifestArray(data, mask=mask)
+        result.fields = dict(self.fields)
+        result.field_order = tuple(self.coords)
+        result.axes = self.axes
+        result.preview = preview
+        return result
+
+    def layer_values(
+        self,
+        layer: Mapping[object, object] | str | None,
+        coords: Mapping[str, object],
+    ) -> dict[int, object]:
+        if layer is None:
+            layer = {}
+        elif isinstance(layer, str):
+            parsed: dict[str, object] = {}
+            for part in layer.split(','):
+                part = part.strip()
+                if not part or '=' not in part:
+                    if part:
+                        parsed[part] = coords.get(part)
+                    continue
+                key, value = part.split('=', 1)
+                parsed[key.strip()] = value.strip()
+            layer = parsed
+        result: dict[int, object] = {}
+        for key, value in {**layer, **coords}.items():
+            code = _manifest_axis_code(str(key))
+            if code not in self.axes:
+                msg = f'axis {key!r} not in manifest axes {self.axes!r}'
+                raise ValueError(msg)
+            axis = self.axes.index(code)
+            if axis == self.fov_axis:
+                continue
+            aliases = {
+                str(v).strip().lower(): v for v in self.axis_values[axis]
+            }
+            if isinstance(value, str):
+                value = aliases.get(value.strip().lower(), value)
+                try:
+                    value = int(value)
+                except ValueError:
+                    pass
+            if value not in self.axis_values[axis]:
+                msg = (
+                    f'value {value!r} not in axis {code!r} values '
+                    f'{self.axis_values[axis]!r}'
+                )
+                raise ValueError(msg)
+            result[axis] = value
+        return result
+
+    def mosaic(
+        self,
+        preview: ManifestPreview,
+        *,
+        layer: Mapping[int, object] | None = None,
+        imreadargs: dict[str, Any] | None = None,
+    ) -> ManifestArray:
+        fixed = dict(layer or {})
+        tiles: list[tuple[object, ...]] = []
+        for fovvalue in self.axis_values[self.fov_axis]:
+            coordinate = [None] * len(self.axis_values)
+            coordinate[self.fov_axis] = fovvalue
+            for axis, values in enumerate(self.axis_values):
+                if axis == self.fov_axis:
+                    continue
+                if axis in fixed:
+                    coordinate[axis] = fixed[axis]
+                elif len(values) == 1:
+                    coordinate[axis] = values[0]
+                else:
+                    msg = (
+                        'mosaic layer is ambiguous; specify values for '
+                        f'axes {self.axes!r}'
+                    )
+                    raise ValueError(msg)
+            tiles.append(tuple(coordinate))
+        chunkshape = self.chunkshape
+        if len(chunkshape) < 2:
+            msg = 'mosaic requires two-dimensional images'
+            raise ManifestError(msg)
+        width = chunkshape[-1]
+        shape = (*chunkshape[:-1], width * len(tiles))
+        data = numpy.zeros(shape, self.chunkdtype)
+        mask = numpy.ones(shape, dtype=bool)
+        for index, coordinate in enumerate(tiles):
+            status = self.fields[coordinate]
+            column = slice(index * width, (index + 1) * width)
+            if status.state != 'resolved' or status.selected is None:
+                continue
+            image = self.read_path(
+                status.selected, imreadargs=imreadargs
+            )
+            data[..., column] = image
+            mask[..., column] = False
+        result = ManifestArray(data, mask=mask)
+        result.fields = {
+            coordinate: self.fields[coordinate] for coordinate in tiles
+        }
+        result.field_order = tuple(tiles)
+        result.axes = self.axes
+        result.preview = preview
+        return result
+
+    def preview_for(
+        self, selection: Sequence[str] | str | None
+    ) -> ManifestPreview:
+        """Return preview resolved with another confirmed selection."""
+        selected = (
+            ()
+            if selection is None
+            else _manifest_selection_value(selection)
+        )
+        spec = _ManifestSpec(
+            self.axes,
+            self.axis_names,
+            self.axis_values,
+            self.coords,
+            self.packages,
+            tuple(selected),
+            self.fov_axis,
+            '',
+        )
+        resolver = _ManifestResolver(
+            spec, self._imread, imreadargs=self._imreadargs
+        )
+        return ManifestPreview(
+            resolver,
+            resolver.selection,
+            resolver.maximum,
+            resolver.filled,
+            resolver.fields,
+            resolver.package_statuses,
+        )
+
+    def preview_subset(
+        self,
+        preview: ManifestPreview,
+        coords: Mapping[str, object],
+    ) -> ManifestPreview:
+        """Return preview of grid subset matching named axis values."""
+        fixed = dict(self.layer_values(coords, {}))
+        for key, value in coords.items():
+            code = _manifest_axis_code(str(key))
+            if code != self.axes[self.fov_axis]:
+                continue
+            axis = self.fov_axis
+            aliases = {
+                str(v).strip().lower(): v
+                for v in self.axis_values[axis]
+            }
+            if isinstance(value, str):
+                value = aliases.get(value.strip().lower(), value)
+                try:
+                    value = int(value)
+                except ValueError:
+                    pass
+            if value not in self.axis_values[axis]:
+                msg = (
+                    f'value {value!r} not in axis {code!r} values '
+                    f'{self.axis_values[axis]!r}'
+                )
+                raise ValueError(msg)
+            fixed[axis] = value
+        subset_coords = tuple(
+            coordinate
+            for coordinate in self.coords
+            if all(
+                coordinate[axis] == value
+                for axis, value in fixed.items()
+            )
+        )
+        if not subset_coords:
+            msg = f'no coordinates match {coords!r}'
+            raise KeyError(msg)
+        fields = {
+            coordinate: self.fields[coordinate]
+            for coordinate in subset_coords
+        }
+        return ManifestPreview(
+            self,
+            preview.selected,
+            preview.maximum,
+            preview.filled,
+            fields,
+            preview.package_states,
+            subset_coords=subset_coords,
+        )
+
+    def locate(self, coordinate: object) -> tuple[object, ...]:
+        if isinstance(coordinate, Mapping):
+            values: list[object] = []
+            for axis, name in enumerate(self.axis_names):
+                key = None
+                for candidate in (name, self.axes[axis], name.lower()):
+                    if candidate in coordinate:
+                        key = candidate
+                        break
+                if key is None:
+                    msg = f'coordinate {coordinate!r} does not specify {name}'
+                    raise KeyError(msg)
+                value = coordinate[key]
+                if isinstance(value, str):
+                    aliases = {
+                        str(v).strip().lower(): v
+                        for v in self.axis_values[axis]
+                    }
+                    value = aliases.get(value.strip().lower(), value)
+                    if self.axes[axis] == 'Z':
+                        try:
+                            value = int(value)  # type: ignore[arg-type]
+                        except (TypeError, ValueError):
+                            pass
+                values.append(value)
+            candidate = tuple(values)
+            if candidate in self.coordinate_index:
+                return candidate
+            msg = f'{coordinate!r} is not a coordinate in the manifest'
+            raise KeyError(msg)
+        if isinstance(coordinate, tuple):
+            if coordinate in self.coordinate_index:
+                return coordinate
+            if len(coordinate) == len(self.axes):
+                normalized = tuple(
+                    self._normalize_component(value, axis)
+                    for axis, value in enumerate(coordinate)
+                )
+                if normalized in self.coordinate_index:
+                    return normalized
+        elif coordinate in self.coordinate_index:  # type: ignore[operator]
+            return coordinate  # type: ignore[return-value]
+        # match partial coordinate components against every axis
+        parts = (
+            tuple(coordinate)  # type: ignore[arg-type]
+            if isinstance(coordinate, tuple)
+            else (coordinate,)
+        )
+        matches = []
+        for candidate in self.coords:
+            if len(parts) == 1:
+                if self._matches(candidate[self.fov_axis], parts[0]):
+                    matches.append(candidate)
+                continue
+            if all(
+                any(self._matches(value, part) for value in candidate)
+                for part in parts
+            ):
+                matches.append(candidate)
+        if len(matches) == 1:
+            return matches[0]
+        if isinstance(coordinate, str) and ',' in coordinate:
+            parts = [p.strip() for p in coordinate.split(',')]
+            if len(parts) == len(self.axes):
+                candidate = tuple(
+                    self._normalize_component(part, axis)
+                    for axis, part in enumerate(parts)
+                )
+                if candidate in self.coordinate_index:
+                    return candidate
+        msg = f'{coordinate!r} is not a unique coordinate in the manifest'
+        raise KeyError(msg)
+
+    def _normalize_component(self, value: object, axis: int) -> object:
+        aliases = {
+            str(v).strip().lower(): v for v in self.axis_values[axis]
+        }
+        if isinstance(value, str):
+            value = aliases.get(value.strip().lower(), value)
+            if self.axes[axis] == 'Z':
+                try:
+                    value = int(value)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    pass
+        return value
+
+    @staticmethod
+    def _matches(value: object, part: object) -> bool:
+        if value == part:
+            return True
+        return str(value).strip().lower() == str(part).strip().lower()
+
+    def find(self, **coords: object) -> tuple[object, ...]:
+        values: list[object] = []
+        for axis, name in enumerate(self.axis_names):
+            key = None
+            for candidate in (name, self.axes[axis], name.lower()):
+                if candidate in coords:
+                    key = candidate
+                    break
+            if key is None:
+                msg = f'coordinate does not specify axis {name!r}'
+                raise KeyError(msg)
+            value: object = coords[key]
+            aliases = {
+                str(v).strip().lower(): v for v in self.axis_values[axis]
+            }
+            value = aliases.get(str(value).strip().lower(), value)
+            if self.axes[axis] == 'Z':
+                try:
+                    value = int(value)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    pass
+            values.append(value)
+        candidate = tuple(values)
+        if candidate not in self.coordinate_index:
+            msg = f'{coords!r} is not a coordinate in the manifest'
+            raise KeyError(msg)
+        return candidate
+
+
+@final
 class TiffSequence(FileSequence):
     r"""Sequence of TIFF files containing compatible array data.
 
     Same as :py:class:`FileSequence` with the :py:func:`imread` function,
     ``'\*.tif'`` glob pattern, and ``out_inplace`` enabled by default.
 
+    If an experiment manifest is passed to the ``manifest`` keyword
+    argument, the sequence is resolved against the manifest's complete
+    coordinate grid and acquisition packages. The ``files`` argument is
+    then optional and may be used to supply the delivered files for
+    packages listed by number only.
+
+    Parameters:
+        files:
+            Glob pattern or sequence of file names, or ``None`` to use
+            ``'\*.tif'``. A manifest may list all files, in which case
+            ``files`` can be omitted. Files provided here may also supply
+            the files of packages listed by number in the manifest.
+        imread:
+            Function to read image array from single file.
+        manifest:
+            Experiment manifest. May be a mapping, JSON string, JSON file
+            name, or file-like object. See :py:meth:`preview`.
+        selection:
+            Confirmed acquisition package numbers. Overrides the selection
+            listed in the manifest.
+        **kwargs:
+            Additional arguments passed to :py:class:`FileSequence`.
+
+    Examples:
+        >>> ims = TiffSequence(
+        ...     manifest={
+        ...         'axes': 'ZCF',
+        ...         'packages': [
+        ...             {'number': 'A', 'files': ['Z11_red_F20.tif', ...]},
+        ...         ],
+        ...     }
+        ... )
+        >>> preview = ims.preview()
+        >>> preview.status(('F20',)).state
+        'pending'
+
     """
+
+    _manifest: object
+    _manifest_preview: ManifestPreview | None
 
     @override
     def __init__(
@@ -13060,12 +15621,258 @@ class TiffSequence(FileSequence):
         ) = None,
         *,
         imread: Callable[..., NDArray[Any]] = imread,
+        manifest: object = None,
+        selection: Sequence[str] | str | None = None,
         **kwargs: Any,
     ) -> None:
+        for key in (
+            'experiment',
+            'experiment_manifest',
+            'plan',
+            'sheet',
+            'manifest_path',
+        ):
+            if key in kwargs:
+                value = kwargs.pop(key)
+                if manifest is not None:
+                    msg = 'manifest specified more than once'
+                    raise TypeError(msg)
+                manifest = value
+        for key in (
+            'confirmed',
+            'confirmed_packages',
+            'selection_file',
+            'selection_path',
+        ):
+            if key in kwargs:
+                value = kwargs.pop(key)
+                if selection is not None:
+                    msg = 'selection specified more than once'
+                    raise TypeError(msg)
+                selection = value
+        self._manifest = manifest
+        self._manifest_preview = None
+        # None means the selection was not overridden; an empty sequence
+        # explicitly withdraws all confirmed packages
+        self._manifest_selection = (
+            None
+            if selection is None
+            else _manifest_selection_value(selection)
+        )
+        self._manifest_imreadargs = kwargs.pop('imreadargs', None)
+        if manifest is not None and files is None:
+            # manifest-only mode; the manifest lists all delivered files
+            self._container = None
+            self._codeckey = None
+            self._files = []
+            self.imread = imread
+            self.axes = ''
+            self.dims = ()
+            self.shape = (0,)
+            self.indices = ()
+            return
         super().__init__(imread, '*.tif' if files is None else files, **kwargs)
+
+    @property
+    def preview(self) -> ManifestPreview:
+        """Preview of experiment manifest without reading pixels.
+
+        The preview reports, for every coordinate of the manifest grid,
+        all candidate files submitted by the acquisition packages, the
+        candidates still eligible to be selected, and whether the
+        coordinate is *resolved*, *pending*, or *vacant*.
+
+        The result is immutable and does not change when the manifest file
+        or confirmed selection changes. It may be accessed as an attribute
+        or called as a method.
+
+        Raises:
+            ManifestError: Manifest is invalid or missing.
+
+        """
+        return self.preview_for()
+
+    @property
+    def manifest(self) -> object:
+        """Experiment manifest passed to constructor."""
+        return self._manifest
+
+    def preview_for(
+        self,
+        selection: Sequence[str] | str | None = None,
+    ) -> ManifestPreview:
+        """Return preview for confirmed acquisition package numbers.
+
+        Parameters:
+            selection:
+                Override confirmed package numbers. Pass ``()`` to withdraw
+                all confirmed packages.
+
+        Raises:
+            ManifestError: Manifest is invalid or missing.
+
+        """
+        if self._manifest is None:
+            msg = 'TiffSequence has no experiment manifest'
+            raise ManifestError(msg)
+        if selection is not None:
+            selected = _manifest_selection_value(selection)
+        elif self._manifest_selection is not None:
+            selected = self._manifest_selection
+        else:
+            selected = None
+        spec = _manifest_normalize(self._manifest, list(self._files))
+        if selected is None:
+            selected = spec.selection
+        spec = _ManifestSpec(
+            spec.axes,
+            spec.axis_names,
+            spec.axis_values,
+            spec.coords,
+            spec.packages,
+            tuple(selected),
+            spec.fov_axis,
+            spec.basepath,
+        )
+        resolver = _ManifestResolver(
+            spec,
+            self.imread,
+            imreadargs=self._manifest_imreadargs,
+        )
+        preview = ManifestPreview(
+            resolver,
+            resolver.selection,
+            resolver.maximum,
+            resolver.filled,
+            resolver.fields,
+            resolver.package_statuses,
+        )
+        self._manifest_preview = preview
+        return preview
+
+    def read(
+        self,
+        coordinate: tuple[object, ...] | object,
+        /,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+        selection: Sequence[str] | str | None = None,
+    ) -> NDArray[Any]:
+        """Return image at resolved coordinate.
+
+        Pending and vacant coordinates raise :py:class:`ManifestError`
+        without reading pixel data.
+
+        """
+        preview = self.preview_for(selection)
+        return preview.read(coordinate, imreadargs=imreadargs)
+
+    def field(
+        self,
+        coordinate: tuple[object, ...] | object,
+        /,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+        selection: Sequence[str] | str | None = None,
+    ) -> FieldView:
+        """Return view of field at coordinate without reading its image."""
+        preview = self.preview_for(selection)
+        return preview.field(coordinate, imreadargs=imreadargs)
+
+    def asarray(
+        self,
+        *,
+        selection: Sequence[str] | str | None = None,
+        imreadargs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> NDArray[Any]:
+        """Return resolved fields as masked array.
+
+        Pending and vacant coordinates are masked and are not read.
+        Without a manifest, this is :py:meth:`FileSequence.asarray`.
+
+        """
+        if self._manifest is not None:
+            return self.preview_for(selection).asarray(imreadargs=imreadargs)
+        return super().asarray(imreadargs=imreadargs, **kwargs)
+
+    def mosaic(
+        self,
+        layer: Mapping[object, object] | str | None = None,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+        selection: Sequence[str] | str | None = None,
+        **coords: object,
+    ) -> NDArray[Any]:
+        """Return fields of same layer and channel tiled into width.
+
+        Fields are tiled left to right in manifest order. Pending and
+        vacant fields are masked at their positions and are not read.
+
+        """
+        preview = self.preview_for(selection)
+        return preview.mosaic(layer, imreadargs=imreadargs, **coords)
+
+    def stitch(
+        self,
+        layer: Mapping[object, object] | str | None = None,
+        *,
+        imreadargs: dict[str, Any] | None = None,
+        selection: Sequence[str] | str | None = None,
+        **coords: object,
+    ) -> NDArray[Any]:
+        """Return :py:meth:`mosaic`."""
+        return self.mosaic(
+            layer, imreadargs=imreadargs, selection=selection, **coords
+        )
+
+    def save_selection(
+        self, file: str | os.PathLike[Any], /
+    ) -> None:
+        """Write confirmed package numbers to JSON file."""
+        self.preview_for().save_selection(file)
+
+    def select(self, *packages: str) -> ManifestPreview:
+        """Return preview for confirmed acquisition package numbers."""
+        return self.preview_for(packages)
+
+    def confirm(self, *packages: str) -> ManifestPreview:
+        """Return preview after confirming additional packages.
+
+        Confirmed packages are all-or-nothing. A package that assigns a
+        different file than an already confirmed package is rejected; the
+        existing confirmation and its resolved fields stay in effect.
+
+        """
+        current = self.preview_for().selected
+        return self.preview_for((*current, *packages))
+
+    def withdraw(self, *packages: str) -> ManifestPreview:
+        """Return preview after withdrawing confirmed packages."""
+        current = self.preview_for().selected
+        withdrawn = {str(number) for number in packages}
+        return self.preview_for(
+            tuple(number for number in current if number not in withdrawn)
+        )
+
+    def clear_selection(self) -> ManifestPreview:
+        """Return preview without confirmed acquisition packages."""
+        return self.preview_for(())
+
+    @property
+    def selection(self) -> tuple[str, ...]:
+        """Confirmed acquisition package numbers currently in effect."""
+        if self._manifest is None:
+            return ()
+        return self.preview_for().selected
 
     @override
     def __repr__(self) -> str:
+        if self._manifest is not None:
+            return (
+                f'<tifffile.TiffSequence manifest '
+                f'@0x{id(self):016X}>'
+            )
         return f'<tifffile.TiffSequence @0x{id(self):016X}>'
 
 

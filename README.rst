@@ -803,6 +803,46 @@ threads:
     >>> image_sequence.dtype
     dtype('float64')
 
+Resolve retaken fields of view from acquisition packages listed in an
+experiment manifest as a preview, then read only the coordinates that are
+certain. The preview never reads pixel data and reports for each coordinate
+of the complete grid which candidate files were submitted, which are still
+eligible to be selected, and whether the coordinate is resolved, pending,
+or vacant:
+
+.. code-block:: python
+
+    >>> manifest = {
+    ...     'axes': 'ZCF',
+    ...     'packages': [
+    ...         {'number': 'A', 'files': ['A/Z11_red_F20.tif',
+    ...                                    'A/Z11_red_F10.tif']},
+    ...         {'number': 'B', 'files': ['B/Z11_red_F10.tif',
+    ...                                    'B/Z11_red_F30.tif']},
+    ...         {'number': 'C', 'files': ['C/Z11_red_F40.tif']},
+    ...     ],
+    ...     'selection': ['B'],
+    ... }
+    >>> image_sequence = TiffSequence(manifest=manifest)
+    >>> preview = image_sequence.preview()
+    >>> preview.status(('F40',)).state
+    'resolved'
+    >>> preview.status(('F40',)).source
+    'C'
+    >>> preview.mosaic('Z=11,C=red').shape
+    (2, 12)
+    >>> preview.read(('F20',))
+    Traceback (most recent call last):
+    ...
+    tifffile.tifffile.ManifestError: coordinate (11, 'red', 'F20') is vacant; ...
+
+Packages are all-or-nothing: confirming a package accepts all its fields.
+Among all selections that fill the most coordinates while honoring confirmed
+packages, a coordinate is *resolved* only if the same file is chosen in every
+such selection, is *pending* if the file or its presence varies, and is
+*vacant* if no such selection fills it. Pending and vacant coordinates never
+read pixel data.
+
 Read an image stack from a series of TIFF files with a file name pattern
 as NumPy or Zarr arrays:
 

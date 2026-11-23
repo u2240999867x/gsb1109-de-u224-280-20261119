@@ -129,6 +129,9 @@ from tifffile import (  # noqa: F401
     FileCache,
     FileHandle,
     FileSequence,
+    FieldStatus,
+    ManifestError,
+    ManifestPreview,
     OmeXml,
     OmeXmlError,
     StoredShape,
@@ -25413,6 +25416,202 @@ def test_sequence_axes_pattern_suffix(
     dims, parsedshape, _, _ = parse_filenames(filenames, 'axes')
     assert dims == axes
     assert parsedshape == shape
+
+
+def _manifest_fixtures(directory: str) -> dict[str, list[str]]:
+    """Write manifest TIFF fixtures and return package file paths."""
+    fields = ('F20', 'F10', 'F30', 'F40')
+    for z in (10, 11, 12):
+        for color in ('red', 'green'):
+            for field in fields:
+                imwrite(
+                    os.path.join(directory, f'Z{z}_{color}_{field}.tif'),
+                    numpy.zeros((2, 3), dtype=numpy.uint8),
+                )
+    values = {'A': {'F20': 20, 'F10': 10}, 'B': {'F10': 11, 'F30': 30}}
+    result: dict[str, list[str]] = {}
+    for package, fields_ in (
+        ('A', ('F20', 'F10')),
+        ('B', ('F10', 'F30')),
+        ('C', ('F40',)),
+        ('D', ('F30',)),
+    ):
+        os.makedirs(os.path.join(directory, package))
+        paths = []
+        for field in fields_:
+            value = values.get(package, {}).get(field, 0)
+            path = os.path.join(directory, package, f'Z11_red_{field}.tif')
+            imwrite(path, numpy.full((2, 3), value, dtype=numpy.uint8))
+            paths.append(path)
+        result[package] = paths
+    return result
+
+
+def test_sequence_manifest_preview_phases() -> None:
+    """Test TiffSequence experiment manifest resolution phases."""
+    with tempfile.TemporaryDirectory() as directory:
+        files = _manifest_fixtures(directory)
+
+        def manifest(packages: list[str], selection: list[str] | None = None):
+            result: dict[str, Any] = {
+                'axes': 'ZCF',
+                'packages': [
+                    {'number': number, 'files': files[number]}
+                    for number in packages
+                ],
+            }
+            if selection is not None:
+                result['selection'] = selection
+            return result
+
+        # initial delivery: A, B, C, no selection
+        tifs = TiffSequence(manifest=manifest(['A', 'B', 'C']))
+        preview = tifs.preview()
+        assert preview.shape == (1, 1, 4)
+        assert preview.axes == 'ZCF'
+        assert preview.maximum == 3
+        assert preview.filled == 0
+        assert preview.status(('F20',)).state == 'pending'
+        assert preview.status(('F10',)).state == 'pending'
+        assert preview.status(('F30',)).state == 'pending'
+        assert preview.status(('F40',)).state == 'resolved'
+        assert preview.status(('F40',)).source == 'C'
+        # all candidates are reported with their package numbers
+        assert preview.packages_at(('F10',)) == ('A', 'B')
+        assert len(preview.candidates(('F10',))) == 2
+        # pending and vacant fields do not read pixel data
+        with pytest.raises(ManifestError):
+            preview.read(('F20',))
+        # mosaic: F40 in manifest order is the fourth tile; pixels are zero
+        mosaic = preview.mosaic('Z=11,C=red')
+        assert mosaic.shape == (2, 4 * 3)
+        assert mosaic.mask[0].tolist() == [True] * 9 + [False] * 3
+        assert mosaic.data[0, 9:12].tolist() == [0, 0, 0]
+        assert mosaic.data.sum() == 0
+        assert [s.state for s in mosaic.statuses] == [
+            'pending',
+            'pending',
+            'pending',
+            'resolved',
+        ]
+
+        # operator confirms B
+        tifs = TiffSequence(manifest=manifest(['A', 'B', 'C'], ['B']))
+        preview = tifs.preview()
+        assert preview.maximum == 3
+        assert preview.status(('F20',)).state == 'vacant'
+        assert preview.status(('F10',)).source == 'B'
+        assert preview.status(('F30',)).source == 'B'
+        assert preview.status(('F40',)).source == 'C'
+
+        # retake D for F30; reverse delivery order; B stays confirmed
+        tifs = TiffSequence(
+            manifest=manifest(['C', 'B', 'A', 'D'], ['B'])
+        )
+        preview = tifs.preview()
+        assert preview.maximum == 3
+        assert preview.status(('F20',)).state == 'vacant'
+        assert preview.status(('F10',)).source == 'B'
+        assert preview.status(('F30',)).source == 'B'
+        assert preview.status(('F40',)).source == 'C'
+        # A is rejected because F10 conflicts with confirmed B
+        assert not preview.package_status('A').eligible
+        assert ('F10',) in [
+            c[2] for c in preview.package_status('A').conflicts
+        ] or any(
+            isinstance(c, tuple) and c[2] == 'F10'
+            for c in preview.package_status('A').conflicts
+        )
+        # previously delivered preview is unchanged
+        assert preview.status(('F20',)).state == 'vacant'
+
+        # withdraw B confirmation; same delivery reopens A and D
+        tifs = TiffSequence(manifest=manifest(['C', 'B', 'A', 'D'], []))
+        preview = tifs.preview()
+        assert preview.maximum == 4
+        assert preview.status(('F20',)).source == 'A'
+        assert preview.status(('F10',)).source == 'A'
+        assert preview.status(('F30',)).source == 'D'
+        assert preview.status(('F40',)).source == 'C'
+
+
+def test_sequence_manifest_immutable_preview() -> None:
+    """Test manifest previews do not change after reopening."""
+    with tempfile.TemporaryDirectory() as directory:
+        files = _manifest_fixtures(directory)
+
+        def manifest(selection: list[str]):
+            return {
+                'axes': 'ZCF',
+                'packages': [
+                    {'number': number, 'files': files[number]}
+                    for number in ('A', 'B', 'C')
+                ],
+                'selection': selection,
+            }
+
+        before = TiffSequence(manifest=manifest([])).preview()
+        TiffSequence(manifest=manifest(['B'])).preview()
+        assert before.status(('F20',)).state == 'pending'
+        after = TiffSequence(manifest=manifest(['B'])).preview()
+        assert after.status(('F20',)).state == 'vacant'
+
+
+def test_sequence_manifest_conflicting_confirmation() -> None:
+    """Test later conflicting confirmation does not invalidate the first."""
+    with tempfile.TemporaryDirectory() as directory:
+        files = _manifest_fixtures(directory)
+        tifs = TiffSequence(
+            manifest={
+                'axes': 'ZCF',
+                'packages': [
+                    {'number': number, 'files': files[number]}
+                    for number in ('A', 'B', 'C')
+                ],
+                'selection': ['B', 'A'],
+            }
+        )
+        preview = tifs.preview()
+        assert preview.selected == ('B',)
+        assert preview.package_status('B').selected
+        assert not preview.package_status('A').eligible
+        assert preview.status(('F10',)).source == 'B'
+
+
+def test_sequence_manifest_single_image_package() -> None:
+    """Test manifest package with a single field and alias names."""
+    with tempfile.TemporaryDirectory() as directory:
+        files = _manifest_fixtures(directory)
+        tifs = TiffSequence(
+            manifest={
+                'axes': 'ZCF',
+                'aliases': {'C': {'R': 'red', 'G': 'green'}},
+                'packages': {
+                    'A': files['A'],
+                    'B': files['B'],
+                    'C': files['C'],
+                },
+            }
+        )
+        preview = tifs.preview()
+        assert preview.status(('F40',)).source == 'C'
+        assert preview.calibration('C') is None
+
+
+def test_sequence_manifest_none_behaves_as_before() -> None:
+    """Test TiffSequence without manifest keeps original behavior."""
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, 'a_C001T001.tif')
+        imwrite(path, numpy.zeros((4, 5), dtype=numpy.uint8))
+        with TiffSequence([path]) as tifs:
+            assert len(tifs) == 1
+            assert tifs.shape == (1,)
+            assert tifs.asarray().shape == (1, 4, 5)
+            assert not hasattr(tifs, '_manifest_preview') or (
+                tifs._manifest_preview is None
+            )
+            with pytest.raises(ManifestError):
+                tifs.preview
 
 
 def test_sequence_parse_filenames_shape() -> None:
