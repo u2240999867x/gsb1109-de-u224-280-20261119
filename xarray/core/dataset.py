@@ -148,6 +148,7 @@ if TYPE_CHECKING:
     from xarray.computation.rolling import DatasetCoarsen, DatasetRolling
     from xarray.computation.weighted import DatasetWeighted
     from xarray.core.dataarray import DataArray
+    from xarray.core.delivery import DeliveryGroupBy, DeliveryManifest
     from xarray.core.groupby import DatasetGroupBy
     from xarray.core.resample import DatasetResample
     from xarray.core.types import (
@@ -10612,8 +10613,9 @@ class Dataset(
         squeeze: Literal[False] = False,
         restore_coord_dims: bool = False,
         eagerly_compute_group: Literal[False] | None = None,
+        manifest: DeliveryManifest | Iterable[tuple[str, str | None]] | None = None,
         **groupers: Grouper,
-    ) -> DatasetGroupBy:
+    ) -> DatasetGroupBy | DeliveryGroupBy:
         """Return a DatasetGroupBy object for performing grouped operations.
 
         Parameters
@@ -10629,6 +10631,13 @@ class Dataset(
             coordinates.
         eagerly_compute_group: False, optional
             This argument is deprecated.
+        manifest : DeliveryManifest or iterable of (str, str or None), optional
+            Delivery manifest (交付清单) to summarize the records against. If
+            given, ``group`` and ``groupers`` must not be used, and a
+            :py:class:`~xarray.core.delivery.DeliveryGroupBy` is returned
+            instead; use its ``deliver`` method to reduce the records of one
+            file (or one contiguous span of files) to a mergeable segment
+            dataset. If not given, ``groupby`` behaves as usual.
         **groupers : Mapping of str to Grouper or Resampler
             Mapping of variable name to group by to :py:class:`Grouper` or :py:class:`Resampler` object.
             One of ``group`` or ``groupers`` must be provided.
@@ -10711,6 +10720,16 @@ class Dataset(
             _parse_group_and_groupers,
             _validate_groupby_squeeze,
         )
+
+        if manifest is not None:
+            if group is not None or groupers:
+                raise ValueError(
+                    "groupby with a delivery manifest does not accept "
+                    "'group' or groupers"
+                )
+            from xarray.core.delivery import DeliveryGroupBy
+
+            return DeliveryGroupBy(self, manifest)
 
         _validate_groupby_squeeze(squeeze)
         rgroupers = _parse_group_and_groupers(

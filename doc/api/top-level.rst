@@ -35,6 +35,7 @@ Combining Data
    broadcast
    concat
    merge
+   merge_delivery_segments
    combine_by_coords
    combine_nested
 
@@ -46,6 +47,7 @@ Creation
    DataArray
    Dataset
    DataTree
+   DeliveryManifest
    full_like
    zeros_like
    ones_like

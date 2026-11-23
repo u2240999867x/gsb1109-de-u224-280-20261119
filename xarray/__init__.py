@@ -35,6 +35,7 @@ from xarray.core.dataarray import DataArray
 from xarray.core.dataset import Dataset
 from xarray.core.datatree import DataTree
 from xarray.core.datatree_mapping import map_over_datasets
+from xarray.core.delivery import DeliveryManifest, merge_delivery_segments
 from xarray.core.extensions import (
     register_dataarray_accessor,
     register_dataset_accessor,
@@ -102,6 +103,7 @@ __all__ = (  # noqa: RUF022
     "map_blocks",
     "map_over_datasets",
     "merge",
+    "merge_delivery_segments",
     "ones_like",
     "open_dataarray",
     "open_dataset",
@@ -127,6 +129,7 @@ __all__ = (  # noqa: RUF022
     "DataArray",
     "DataTree",
     "Dataset",
+    "DeliveryManifest",
     "Index",
     "IndexSelResult",
     "IndexVariable",

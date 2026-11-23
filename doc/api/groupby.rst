@@ -94,3 +94,14 @@ Resampler Objects
 
    groupers.TimeResampler
    groupers.TimeResampler.compute_chunks
+
+Delivery manifest
+-----------------
+
+.. currentmodule:: xarray.core.delivery
+
+.. autosummary::
+   :toctree: ../generated/
+
+   DeliveryGroupBy
+   DeliveryGroupBy.deliver

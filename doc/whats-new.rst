@@ -13,6 +13,14 @@ v2026.09.1 (unreleased)
 
 New Features
 ~~~~~~~~~~~~
+- ``Dataset.groupby`` accepts a ``manifest`` to summarize instrument sampling
+  records against an ordered delivery manifest (交付清单). The new
+  :py:class:`~xarray.core.delivery.DeliveryGroupBy` reduces one file (or one
+  contiguous span of files) to a compact, mergeable segment dataset whose size
+  does not grow with the number of fully processed rounds; adjacent segments
+  built from the same manifest combine with
+  :py:func:`~xarray.merge_delivery_segments`, and the report and the
+  out-of-manifest list are viewed through the ``delivery`` accessor.
 - :py:func:`apply_ufunc` accepts dimension names for ``vectorize``, e.g.
   ``vectorize=["time"]``, to only loop over these broadcast dimensions and pass
   all other broadcast dimensions to ``func`` in bulk. This is much faster than
