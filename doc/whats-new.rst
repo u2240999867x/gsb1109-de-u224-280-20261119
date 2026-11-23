@@ -62,6 +62,16 @@ New Features
   succeeds, e.g. ``"group/subgroup" in tree`` or ``"/group/var" in tree``.
   Previously only names in the current node were found (:issue:`9354`, :pull:`11701`).
   By `Yagnik Trivedi <https://github.com/Yagnik-Trivedi>`_.
+- New :py:func:`~xarray.combine_tiled_by_coords` adds a layout-aware mode to
+  tile combination: pass a :py:class:`~xarray.TileLayout` describing whole
+  image pixel centers, each tile's internal extent and the shared edge strips
+  that may be compared. It returns a :py:class:`~xarray.TileLayoutCombiner`
+  whose ``open_window`` crops lazy, versioned windows and whose edge
+  comparisons estimate additive per-tile corrections. Windows distinguish
+  ``"ok"``, ``"no_baseline"`` and ``"conflict"`` states, name the edges and
+  tile versions behind contradictory corrections, and keep observations
+  unread until a window is materialized. Without a layout the function keeps
+  the existing :py:func:`~xarray.combine_by_coords` behavior.
 - The HTML representation can show or hide the attributes and data of all
   variables of a section at once, and shows the expanded attributes and data
   more compactly and indented below their variable (:pull:`11284`).

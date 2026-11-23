@@ -57,6 +57,17 @@ from xarray.structure.chunks import unify_chunks
 from xarray.structure.combine import combine_by_coords, combine_nested
 from xarray.structure.concat import concat
 from xarray.structure.merge import Context, MergeError, merge
+from xarray.structure.tile_combine import (
+    CombinedTileWindow,
+    SharedStrip,
+    TileCalibrationConflict,
+    TileCalibrationDiagnostic,
+    TileLayout,
+    TileLayoutCombiner,
+    TileLayoutError,
+    TilePlacement,
+    combine_tiled_by_coords,
+)
 from xarray.util.print_versions import show_versions
 
 try:
@@ -84,6 +95,7 @@ __all__ = (  # noqa: RUF022
     "cftime_range",
     "combine_by_coords",
     "combine_nested",
+    "combine_tiled_by_coords",
     "concat",
     "corr",
     "cov",
@@ -122,6 +134,7 @@ __all__ = (  # noqa: RUF022
     "zeros_like",
     # Classes
     "CFTimeIndex",
+    "CombinedTileWindow",
     "Context",
     "Coordinates",
     "DataArray",
@@ -131,6 +144,12 @@ __all__ = (  # noqa: RUF022
     "IndexSelResult",
     "IndexVariable",
     "NamedArray",
+    "SharedStrip",
+    "TileCalibrationConflict",
+    "TileCalibrationDiagnostic",
+    "TileLayout",
+    "TileLayoutCombiner",
+    "TilePlacement",
     "Variable",
     # Exceptions
     "AlignmentError",
@@ -139,6 +158,7 @@ __all__ = (  # noqa: RUF022
     "MergeError",
     "NotFoundInTreeError",
     "SerializationWarning",
+    "TileLayoutError",
     "TreeIsomorphismError",
     # Constants
     "ALL_DIMS",

@@ -37,6 +37,21 @@ Combining Data
    merge
    combine_by_coords
    combine_nested
+   combine_tiled_by_coords
+
+Tiled combination
+~~~~~~~~~~~~~~~~~
+
+.. autosummary::
+   :toctree: ../generated/
+
+   TileLayout
+   TilePlacement
+   SharedStrip
+   TileLayoutCombiner
+   CombinedTileWindow
+   TileCalibrationDiagnostic
+   TileCalibrationConflict
 
 Creation
 --------

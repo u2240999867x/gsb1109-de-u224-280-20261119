@@ -10,6 +10,7 @@ Exceptions
    CoordinateValidationError
    MergeError
    SerializationWarning
+   TileLayoutError
 
 DataTree
 --------
