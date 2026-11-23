@@ -13,6 +13,13 @@ v2026.09.1 (unreleased)
 
 New Features
 ~~~~~~~~~~~~
+- Added :py:func:`~xarray.fill_short_gaps` and
+  :py:func:`~xarray.iter_fill_short_gaps` for filling short gaps in chunked
+  daily archives indexed by non-standard calendars. The functions deliver
+  dates without coordinates, use only the nearest original observations as
+  interpolation endpoints, never reuse filled values, and keep shutdown days
+  missing. Chunk reads are demand driven and each raw chunk is fetched once.
+  By `xarray developers <https://github.com/pydata/xarray>`_.
 - :py:func:`apply_ufunc` accepts dimension names for ``vectorize``, e.g.
   ``vectorize=["time"]``, to only loop over these broadcast dimensions and pass
   all other broadcast dimensions to ``func`` in bulk. This is much faster than

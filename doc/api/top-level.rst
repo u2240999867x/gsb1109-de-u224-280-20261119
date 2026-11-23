@@ -20,10 +20,23 @@ Computation
    corr
    cross
    dot
+   fill_short_gaps
+   iter_fill_short_gaps
    map_blocks
    polyval
    unify_chunks
    where
+
+Gap filling
+-----------
+
+.. autosummary::
+   :toctree: ../generated/
+
+   GapStore
+   GapChunk
+   MemoryGapStore
+   GAP_STATUSES
 
 Combining Data
 --------------

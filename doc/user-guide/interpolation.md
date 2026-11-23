@@ -295,6 +295,84 @@ filled.interp(x=[0.5, 1.5, 2.5], method="cubic")
 For the details of {py:meth}`~xarray.DataArray.interpolate_na`,
 see {ref}`Missing values <missing_values>`.
 
+## Filling short gaps in chunked daily archives
+
+{py:func}`~xarray.fill_short_gaps` fills short gaps in archives that are stored
+as many lazily loaded chunks and indexed by a non-standard calendar. Unlike
+{py:meth}`~xarray.DataArray.interpolate_na`, it also delivers dates that have no
+coordinate in the archive, never reuses a filled value as an interpolation
+endpoint, and refuses to borrow across shutdown days.
+
+The archive is exposed through the small {py:class}`~xarray.GapStore` protocol.
+`chunks` is a cheap coordinate lookup, while `read` materializes a chunk:
+
+```{code-cell}
+class ChunkedStore:
+    def __init__(self, readings, chunk_size=1):
+        self.readings = readings
+        self.chunk_size = chunk_size
+        self.reads = []
+
+    def chunks(self, stations, start, end):
+        for station in stations or sorted(self.readings):
+            dates = sorted(self.readings[station])
+            for i in range(0, len(dates), self.chunk_size):
+                group = dates[i : i + self.chunk_size]
+                yield xr.GapChunk(
+                    stations=(station,), times=tuple(group), key=(station, tuple(group))
+                )
+
+    def read(self, chunk):
+        self.reads.append(chunk.key)
+        station, dates = chunk.key
+        times = xr.date_range(
+            dates[0], periods=len(dates), calendar="360_day", use_cftime=True
+        )
+        values = [[self.readings[station][d] for d in dates]]
+        return xr.Dataset(
+            {"temp": (("station", "time"), values)},
+            coords={"station": [station], "time": times},
+        )
+
+
+readings = {
+    "A": {"2001-02-27": 4.0, "2001-02-29": 10.0, "2001-03-02": 16.0},
+    "B": {"2001-02-29": 10.0, "2001-03-02": 16.0},
+}
+store = ChunkedStore(readings)
+result = xr.fill_short_gaps(
+    store,
+    "2001-02-30",
+    "2001-03-01",
+    stations=["A", "B"],
+    shutdown={"B": ["2001-02-30"]},
+    max_gap=5,
+)
+result
+```
+
+The result has a `status` variable with one of `"observed"`, `"filled"`,
+`"shutdown"` and `"missing"`, and a `coordinate_present` variable recording
+whether the archive originally had a coordinate for that station and day.
+`max_gap` counts calendar days between the two endpoint observations, and a gap
+whose endpoints are exactly that far apart is still filled.
+
+Multi-year requests are processed one calendar year at a time by
+{py:func}`~xarray.iter_fill_short_gaps`, so the whole request is never
+assembled into a single computation block:
+
+```{code-cell}
+blocks = list(
+    xr.iter_fill_short_gaps(
+        readings, "2001-01-01", "2002-12-30", stations=["A"], max_gap=5
+    )
+)
+[len(block["time"]) for block in blocks]
+```
+
+For in-memory data, {py:class}`~xarray.MemoryGapStore` provides a ready-made
+store, and a plain `{station: {date: value}}` mapping is accepted directly.
+
 ## Example
 
 Let's see how {py:meth}`~xarray.DataArray.interp` works on real data.

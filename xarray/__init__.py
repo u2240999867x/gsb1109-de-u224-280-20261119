@@ -40,6 +40,14 @@ from xarray.core.extensions import (
     register_dataset_accessor,
     register_datatree_accessor,
 )
+from xarray.core.gapfill import (
+    GAP_STATUSES,
+    GapChunk,
+    GapStore,
+    MemoryGapStore,
+    fill_short_gaps,
+    iter_fill_short_gaps,
+)
 from xarray.core.indexes import Index
 from xarray.core.indexing import IndexSelResult
 from xarray.core.options import get_options, set_options
@@ -92,10 +100,12 @@ __all__ = (  # noqa: RUF022
     "date_range_like",
     "decode_cf",
     "dot",
+    "fill_short_gaps",
     "full_like",
     "get_options",
     "group_subtrees",
     "infer_freq",
+    "iter_fill_short_gaps",
     "load_dataarray",
     "load_dataset",
     "load_datatree",
@@ -127,9 +137,13 @@ __all__ = (  # noqa: RUF022
     "DataArray",
     "DataTree",
     "Dataset",
+    "GAP_STATUSES",
+    "GapChunk",
+    "GapStore",
     "Index",
     "IndexSelResult",
     "IndexVariable",
+    "MemoryGapStore",
     "NamedArray",
     "Variable",
     # Exceptions
