@@ -1,0 +1,459 @@
+{
+  "case": "base",
+  "description": "基线：M IFD0 不分差，M IFD1 水平差分，M IFD2 不分差",
+  "series_axes": "ZYX",
+  "series_shape": [
+    4,
+    4,
+    4
+  ],
+  "rows": [
+    {
+      "layer": "Z2",
+      "expected": {
+        "file": "M.ome.tif",
+        "ifd": 2
+      },
+      "source": {
+        "file": "M.ome.tif",
+        "ifd": 2,
+        "offset": 1558,
+        "kind": "TiffFrame",
+        "keyframe_file": "M.ome.tif",
+        "keyframe_ifd": 1,
+        "keyframe_offset": 1302,
+        "keyframe_predictor": 2
+      },
+      "source_matches_expected": true,
+      "status": "REF_OK_PIXELS_WRONG",
+      "decision": "暂缓：引用对但像素按错规则解释",
+      "zero": false,
+      "zero_class": null,
+      "zero_probe_first_row": null,
+      "zero_probe_changed": false,
+      "preview_first_row": [
+        20,
+        44,
+        73,
+        108
+      ],
+      "direct_expected": {
+        "file": "M.ome.tif",
+        "ifd": 2,
+        "offset": 1558,
+        "kind": "TiffPage",
+        "predictor": 1,
+        "compression": 32946,
+        "rowsperstrip": 2,
+        "shape": [
+          4,
+          4
+        ],
+        "first_row": [
+          20,
+          24,
+          29,
+          35
+        ],
+        "raw_first_row": [
+          20,
+          24,
+          29,
+          35
+        ],
+        "raw_under_own_rule": [
+          20,
+          24,
+          29,
+          35
+        ],
+        "array": [
+          [
+            20,
+            24,
+            29,
+            35
+          ],
+          [
+            20,
+            24,
+            29,
+            35
+          ],
+          [
+            20,
+            24,
+            29,
+            35
+          ],
+          [
+            20,
+            24,
+            29,
+            35
+          ]
+        ]
+      },
+      "direct_actual": {
+        "file": "M.ome.tif",
+        "ifd": 2,
+        "offset": 1558,
+        "kind": "TiffPage",
+        "predictor": 1,
+        "compression": 32946,
+        "rowsperstrip": 2,
+        "shape": [
+          4,
+          4
+        ],
+        "first_row": [
+          20,
+          24,
+          29,
+          35
+        ],
+        "raw_first_row": [
+          20,
+          24,
+          29,
+          35
+        ],
+        "raw_under_own_rule": [
+          20,
+          24,
+          29,
+          35
+        ],
+        "array": [
+          [
+            20,
+            24,
+            29,
+            35
+          ],
+          [
+            20,
+            24,
+            29,
+            35
+          ],
+          [
+            20,
+            24,
+            29,
+            35
+          ],
+          [
+            20,
+            24,
+            29,
+            35
+          ]
+        ]
+      },
+      "keyframe_direct": {
+        "file": "M.ome.tif",
+        "ifd": 1,
+        "offset": 1302,
+        "kind": "TiffPage",
+        "predictor": 2,
+        "compression": 32946,
+        "rowsperstrip": 2,
+        "shape": [
+          4,
+          4
+        ],
+        "first_row": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "raw_first_row": [
+          10,
+          3,
+          4,
+          5
+        ],
+        "raw_under_own_rule": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "array": [
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ]
+        ]
+      },
+      "pixel_match_expected": false,
+      "pixel_match_actual": false,
+      "rule_check": {
+        "raw_first_row": [
+          20,
+          24,
+          29,
+          35
+        ],
+        "source_ifd_predictor": 1,
+        "source_own_rule_first_row": [
+          20,
+          24,
+          29,
+          35
+        ],
+        "preview_keyframe_predictor": 2,
+        "preview_rule_first_row": [
+          20,
+          44,
+          73,
+          108
+        ],
+        "preview_first_row": [
+          20,
+          44,
+          73,
+          108
+        ],
+        "preview_equals_own_rule": false,
+        "preview_equals_preview_rule": true,
+        "keyframe_first_row": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "keyframe_ifd": 1,
+        "keyframe_file": "M.ome.tif"
+      },
+      "direct_error": null
+    },
+    {
+      "layer": "Rule of Z2",
+      "expected": {
+        "file": "M.ome.tif",
+        "ifd": 1
+      },
+      "source": {
+        "file": "M.ome.tif",
+        "ifd": 1,
+        "offset": 1302,
+        "kind": "TiffPage",
+        "keyframe_file": "M.ome.tif",
+        "keyframe_ifd": 1,
+        "keyframe_offset": 1302,
+        "keyframe_predictor": 2
+      },
+      "source_matches_expected": true,
+      "status": "COMPARISON",
+      "decision": "对照页：只用于解释可疑层的解码规则",
+      "zero": false,
+      "zero_class": null,
+      "zero_probe_first_row": null,
+      "zero_probe_changed": false,
+      "preview_first_row": [
+        10,
+        13,
+        17,
+        22
+      ],
+      "direct_expected": {
+        "file": "M.ome.tif",
+        "ifd": 1,
+        "offset": 1302,
+        "kind": "TiffPage",
+        "predictor": 2,
+        "compression": 32946,
+        "rowsperstrip": 2,
+        "shape": [
+          4,
+          4
+        ],
+        "first_row": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "raw_first_row": [
+          10,
+          3,
+          4,
+          5
+        ],
+        "raw_under_own_rule": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "array": [
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ]
+        ]
+      },
+      "direct_actual": {
+        "file": "M.ome.tif",
+        "ifd": 1,
+        "offset": 1302,
+        "kind": "TiffPage",
+        "predictor": 2,
+        "compression": 32946,
+        "rowsperstrip": 2,
+        "shape": [
+          4,
+          4
+        ],
+        "first_row": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "raw_first_row": [
+          10,
+          3,
+          4,
+          5
+        ],
+        "raw_under_own_rule": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "array": [
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ]
+        ]
+      },
+      "keyframe_direct": {
+        "file": "M.ome.tif",
+        "ifd": 1,
+        "offset": 1302,
+        "kind": "TiffPage",
+        "predictor": 2,
+        "compression": 32946,
+        "rowsperstrip": 2,
+        "shape": [
+          4,
+          4
+        ],
+        "first_row": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "raw_first_row": [
+          10,
+          3,
+          4,
+          5
+        ],
+        "raw_under_own_rule": [
+          10,
+          13,
+          17,
+          22
+        ],
+        "array": [
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ],
+          [
+            10,
+            13,
+            17,
+            22
+          ]
+        ]
+      },
+      "pixel_match_expected": true,
+      "pixel_match_actual": true,
+      "rule_check": null,
+      "direct_error": null
+    }
+  ]
+}
