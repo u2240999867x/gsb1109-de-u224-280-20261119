@@ -1,9 +1,12 @@
 import asyncio
+import concurrent.futures
 from glob import glob
+import json
 import queue
 import os
 import time
 from inspect import isawaitable
+from typing import Any, NamedTuple
 
 from tornado import gen
 import weakref
@@ -329,6 +332,134 @@ class from_http_server(Source):
             self.stopped = True
 
 
+class ProcessRecord(NamedTuple):
+    """One JSON-lines data record emitted by ``from_process(json_lines=True)``
+
+    Attributes
+    ----------
+    run_id: int
+        Identifies which process start ("run") produced this record. It is
+        incremented every time the source is (re)started, so records from
+        different device handovers can always be told apart, even if the
+        command is identical and the device restarts its own sequence
+        numbers from 1.
+    data: dict
+        The parsed JSON object, decoded from one newline-terminated line
+        of the process' STDOUT.
+    """
+    run_id: int
+    data: Any
+
+
+class ProcessRun:
+    """Lifecycle state and diagnostics for one start of a ``from_process``
+    source in JSON-lines mode
+
+    A new instance is created on every ``start()`` and appended to
+    ``source.runs``; the most recent one is ``source.current_run``. All
+    attributes belong exclusively to this run: a late-finishing previous
+    run never touches the state of a later one.
+
+    Attributes
+    ----------
+    run_id: int
+        1-based identifier of this run, matching ``ProcessRecord.run_id``.
+    cmd: list of str
+        The exact command line used for this start.
+    pid: int or None
+        PID of the child process, once spawned.
+    process: asyncio.subprocess.Process or None
+        The child process object of this run.
+    exit_code: int or None
+        The process exit code, once it has exited and been reaped.
+        Negative values indicate termination by a signal.
+    reason: str or None
+        Why this run ended: ``'exited'`` if the process finished on its
+        own, ``'stopped'`` if it was killed by a manual ``stop()``.
+    stop_requested: bool
+        Whether ``stop()`` was requested while this was the current run.
+    records_emitted: int
+        Number of complete JSON-object records emitted downstream.
+    partial_line: bytes
+        Trailing STDOUT bytes not terminated by a newline when the stream
+        ended. Kept as diagnostics only: never emitted as data and never
+        concatenated with the output of the next run.
+    discarded_lines: list of bytes
+        Complete lines that were not valid JSON objects. Diagnostics only.
+    exited: bool
+        True once the child process has exited and been reaped. Note that
+        complete records may still be in flight downstream at this point;
+        compare ``sinks_done``/``done``.
+    output_done: bool
+        True once STDOUT reached end-of-stream and was fully consumed.
+    sinks_done: bool
+        True once the asynchronous downstream sinks of every complete
+        record of this run have returned.
+    done: bool
+        True once this run is fully complete: the process was reaped, all
+        output was collected and all of this run's record sinks returned.
+    completion: concurrent.futures.Future
+        Resolved exactly once, with this ``ProcessRun``, when ``done``
+        becomes true. Never borrows state from a later run.
+    stderr: bytes
+        The raw STDERR of this run, captured independently of the data
+        stream (property).
+    stderr_tail: bytes
+        The (truncated) tail of STDERR, at most ``stderr_tail_bytes``
+        long (property).
+    stderr_truncated: bool
+        True if STDERR is longer than the kept tail (property).
+    """
+
+    def __init__(self, run_id, cmd, stderr_tail_bytes=4096):
+        self.run_id = run_id
+        self.cmd = list(cmd)
+        self.pid = None
+        self.process = None
+        self.exit_code = None
+        self.reason = None
+        self.stop_requested = False
+        self.records_emitted = 0
+        self.partial_line = b''
+        self.discarded_lines = []
+        self.exited = False
+        self.output_done = False
+        self.sinks_done = False
+        self.done = False
+        self.completion = concurrent.futures.Future()
+        self._stderr = bytearray()
+        self._stderr_tail_bytes = stderr_tail_bytes
+        self._signalled = False
+        self._pump_task = None
+        self._stderr_task = None
+        self._supervisor_task = None
+
+    @property
+    def returncode(self):
+        """Alias for ``exit_code``"""
+        return self.exit_code
+
+    @property
+    def stderr(self):
+        return bytes(self._stderr)
+
+    @property
+    def stderr_tail(self):
+        tail = self._stderr_tail_bytes
+        if tail and len(self._stderr) > tail:
+            return bytes(self._stderr[-tail:])
+        return bytes(self._stderr)
+
+    @property
+    def stderr_truncated(self):
+        return bool(self._stderr_tail_bytes) and \
+            len(self._stderr) > self._stderr_tail_bytes
+
+    def __repr__(self):
+        return ('<ProcessRun run_id={} exit_code={} reason={} done={}>'
+                .format(self.run_id, self.exit_code, self.reason, self.done))
+
+
 @Stream.register_api(staticmethod)
 class from_process(Source):
     """Messages from a running external process
@@ -342,10 +473,41 @@ class from_process(Source):
     open_kwargs : dict
         To pass on the the process open function, see ``subprocess.Popen``.
     with_stderr : bool
-        Whether to include the process STDERR in the stream
+        Whether to include the process STDERR in the stream. Only applies
+        when ``json_lines`` is False; in JSON-lines mode STDERR is always
+        captured separately per run (see ``ProcessRun.stderr``) and never
+        mixed into the data.
+    with_end : bool
+        Whether to emit a final trailing frame that is not terminated by
+        a newline. Only applies when ``json_lines`` is False; in JSON-lines
+        mode an unterminated tail is kept as diagnostics only
+        (see ``ProcessRun.partial_line``).
+    json_lines : bool
+        If True, enable JSON-lines mode: only complete, newline-terminated
+        JSON objects from STDOUT are emitted downstream, as
+        ``ProcessRecord(run_id, data)`` namedtuples. Each ``start()``
+        begins a new run (see ``ProcessRun``) with its own process,
+        readers, diagnostics and completion tracking, so devices can be
+        swapped (stop, change ``cmd``, start again) without tearing down
+        downstream nodes and without mixing up records or diagnostics
+        between runs.
+    stop_timeout : float
+        Seconds to wait for a graceful termination after ``stop()`` before
+        forcefully killing a process that ignores the terminate signal.
+        Only used in JSON-lines mode.
+    stderr_tail_bytes : int
+        Maximum size of the truncated STDERR tail kept per run
+        (``ProcessRun.stderr_tail``). Only used in JSON-lines mode.
     start : bool
         Whether to immediately startup the process. Usually you want to connect
         downstream nodes first, and then call ``.start()``.
+
+    Attributes
+    ----------
+    runs : list of ProcessRun
+        One entry per ``start()``, in order (JSON-lines mode only).
+    current_run : ProcessRun or None
+        The most recently started run (JSON-lines mode only).
 
     Example
     -------
@@ -353,24 +515,57 @@ class from_process(Source):
     """
 
     def __init__(self, cmd, open_kwargs=None, with_stderr=False, with_end=True,
+                 json_lines=False, stop_timeout=1.0, stderr_tail_bytes=4096,
                  **kwargs):
         self.cmd = cmd
         self.open_kwargs = open_kwargs or {}
         self.with_stderr = with_stderr
         self.with_end = with_end
+        self.json_lines = json_lines
+        self.stop_timeout = stop_timeout
+        self.stderr_tail_bytes = stderr_tail_bytes
         self.process = None
+        self.runs = []
+        self.current_run = None
         super().__init__(**kwargs)
 
-    async def run(self):
+    def _argv(self):
         import shlex
-        import subprocess
-        stderr = subprocess.STDOUT if self.with_stderr else None
         if isinstance(self.cmd, (list, tuple)):
-            cmd, *args = self.cmd
-        else:
-            cmd, *args = shlex.split(self.cmd)
+            return list(self.cmd)
+        return shlex.split(self.cmd)
+
+    def start(self):
+        if not self.json_lines:
+            return super().start()
+        if self.stopped:
+            self.stopped = False
+            self.started = True
+            run = ProcessRun(run_id=len(self.runs) + 1, cmd=self._argv(),
+                             stderr_tail_bytes=self.stderr_tail_bytes)
+            self.runs.append(run)
+            self.current_run = run
+            self.loop.add_callback(self._launch_run, run)
+
+    def stop(self):
+        if not self.json_lines:
+            return super().stop()
+        if not self.stopped:
+            self.stopped = True
+        run = self.current_run
+        if run is not None and not run.stop_requested and not run.done:
+            run.stop_requested = True
+            self.loop.add_callback(self._begin_stop, run)
+
+    async def run(self):
+        import subprocess
+        if self.json_lines:
+            # JSON-lines runs are launched and supervised independently of
+            # this coroutine; see start()/_launch_run().
+            return
+        stderr = subprocess.STDOUT if self.with_stderr else None
         process = await asyncio.create_subprocess_exec(
-            cmd, *args, stdout=subprocess.PIPE,
+            *self._argv(), stdout=subprocess.PIPE,
             stderr=stderr, **self.open_kwargs)
         while not self.stopped:
             try:
@@ -386,6 +581,135 @@ class from_process(Source):
         if process.returncode is not None:
             process.terminate()
             await process.wait()
+
+    async def _launch_run(self, run):
+        """Spawn the child process and its dedicated supervisor/reader tasks
+
+        Each run gets exactly one stdout pump, one stderr drain and one
+        supervisor, so repeated handovers leave neither child processes nor
+        old readers behind.
+        """
+        import subprocess
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *run.cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                **self.open_kwargs)
+        except Exception as exc:
+            run.exited = True
+            run.output_done = True
+            run.sinks_done = True
+            run.done = True
+            if not run.completion.done():
+                run.completion.set_exception(exc)
+            return
+        run.process = process
+        run.pid = process.pid
+        self.process = process
+        run._pump_task = asyncio.ensure_future(self._pump_stdout(run))
+        run._stderr_task = asyncio.ensure_future(self._drain_stderr(run))
+        run._supervisor_task = asyncio.ensure_future(self._supervise(run))
+        if run.stop_requested:
+            self._begin_stop(run)
+
+    async def _pump_stdout(self, run):
+        """Emit complete JSON-object lines of one run, in order
+
+        Backpressure is per run: awaiting a slow downstream sink here never
+        blocks other runs, and this run's records keep their original order.
+        """
+        stdout = run.process.stdout
+        while True:
+            line = await stdout.readline()
+            if not line:
+                break
+            if line.endswith(b'\n'):
+                await self._emit_json_line(run, line)
+            else:
+                # Unterminated trailing data at end of stream: diagnostics
+                # only, never emitted and never carried into the next run.
+                run.partial_line += line
+        run.output_done = True
+        run.sinks_done = True
+
+    async def _emit_json_line(self, run, line):
+        try:
+            obj = json.loads(line.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            obj = None
+        if not isinstance(obj, dict):
+            run.discarded_lines.append(line)
+            return
+        run.records_emitted += 1
+        record = ProcessRecord(run.run_id, obj)
+        await asyncio.gather(*self._emit(
+            record, metadata=[{'run_id': run.run_id, 'process_run': run}]))
+
+    async def _drain_stderr(self, run):
+        """Continuously drain STDERR of one run into its diagnostics buffer
+
+        This is independent of downstream backpressure on the data stream,
+        so a chatty process can never be blocked on a full stderr pipe
+        while a sink is paused.
+        """
+        stderr = run.process.stderr
+        while True:
+            chunk = await stderr.read(4096)
+            if not chunk:
+                break
+            run._stderr.extend(chunk)
+
+    async def _supervise(self, run):
+        """Reap the child process of one run, then finalize that run
+
+        Reaping waits only for process exit - not for another stdout line
+        and not for paused downstream sinks of older records.
+        """
+        process = run.process
+        run.exit_code = await process.wait()
+        run.exited = True
+        if run.reason is None:
+            if run._signalled and run.exit_code is not None \
+                    and run.exit_code < 0:
+                run.reason = 'stopped'
+            else:
+                run.reason = 'exited'
+        # The process is reaped; now wait for this run's own readers to
+        # finish delivering buffered output (they end at end-of-stream).
+        await asyncio.gather(run._pump_task, run._stderr_task,
+                             return_exceptions=True)
+        self._finalize_run(run)
+
+    def _begin_stop(self, run):
+        """Ask one run's process to terminate, escalating to a kill"""
+        process = run.process
+        if process is None or process.returncode is not None:
+            return
+        try:
+            process.terminate()
+            run._signalled = True
+        except ProcessLookupError:
+            return
+        self.loop.call_later(self.stop_timeout, self._kill_run, run)
+
+    def _kill_run(self, run):
+        process = run.process
+        if process is None or process.returncode is not None:
+            return
+        try:
+            process.kill()
+            run._signalled = True
+        except ProcessLookupError:
+            pass
+
+    def _finalize_run(self, run):
+        """Mark one run complete, exactly once, from its own state only"""
+        if run.done:
+            return
+        if not (run.exited and run.output_done and run.sinks_done):
+            return
+        run.done = True
+        if not run.completion.done():
+            run.completion.set_result(run)
 
 
 @Stream.register_api(staticmethod)
