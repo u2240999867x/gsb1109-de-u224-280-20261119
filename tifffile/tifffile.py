@@ -872,6 +872,7 @@ __all__ = [
     'tiff2fsspec',
     'tiffcomment',
     'transpose_axes',
+    'TiffMapError',
     'update_kwargs',
     'validate_jhove',
     'xml2dict',
@@ -886,6 +887,7 @@ import itertools
 import json
 import logging
 import math
+import mmap
 import os
 import re
 import struct
@@ -1679,6 +1681,19 @@ def memmap(
 
 class TiffFileError(ValueError):
     """Exception to indicate invalid TIFF structure."""
+
+
+class TiffMapError(ValueError):
+    """Exception to indicate selected pixels cannot be mapped without copy.
+
+    Raised by :py:meth:`TiffPageSeries.zview` when the requested, logical
+    Z range cannot be represented as a single read-only NumPy view with one
+    fixed set of strides on one open source file.
+    The message identifies the file boundary, Z plane, or row layout that
+    blocks the mapping. No partial array is returned and no pixel data are
+    copied to a temporary file.
+
+    """
 
 
 @final
@@ -4553,6 +4568,10 @@ class TiffFile:
         self._files = {fh.name: self}
         self._decoders = {}
         self._series = {}
+        # dedicated read-only file descriptors pinning source inodes for
+        # zview; they survive atomic replacement of the on-disk path
+        self._pins: dict[str, Any] = {}
+        self._files_pinned = False
         self._root = self if _root is None else _root
         self._superres = 0 if superres is None else max(0, int(superres))
 
@@ -4687,6 +4706,51 @@ class TiffFile:
         """Close open file handle(s)."""
         for tif in self._files.values():
             tif.filehandle.close()
+            # release the inode-pinning descriptors; mappings already handed
+            # to views remain valid through their own reference
+            for pin in tif._pins.values():
+                with contextlib.suppress(Exception):
+                    pin.close()
+            tif._pins.clear()
+            tif._files_pinned = False
+
+    def _pin_self(self) -> None:
+        """Open a dedicated read-only descriptor to pin this file's inode.
+
+        Regular files are opened once by path and cached. The descriptor
+        keeps pointing at the current inode even if the path is atomically
+        replaced later. Streams and non-regular files are skipped silently;
+        :py:meth:`TiffPageSeries.zview` reports them as not mappable.
+
+        """
+        fh = self.filehandle
+        if fh.name in self._pins:
+            return
+        with fh.lock:
+            closed = fh.closed
+            if closed:
+                fh.open()
+            try:
+                # embedded files are regions of a container, not standalone
+                # paths, and cannot be mapped by absolute page offset
+                if fh._offset != 0 or not fh.is_file or fh.size <= 0:
+                    return
+                pin = open(fh.path, 'rb')  # noqa: SIM115
+            except OSError:
+                return
+            finally:
+                if closed:
+                    fh.close()
+        self._pins[fh.name] = pin
+
+    def _pin_source_files(self) -> None:
+        """Pin inodes of every file backing this multi-file TIFF."""
+        root = self._root
+        if root._files_pinned:
+            return
+        for tif in root._files.values():
+            tif._pin_self()
+        root._files_pinned = True
 
     def asarray(
         self,
@@ -5194,6 +5258,7 @@ class TiffFile:
             for i, s in enumerate(result):
                 s._index = i
             self._series[(kind, False)] = result
+            self._pin_source_files()
             return result
 
         assert self.pages.keyframe is not None
@@ -5228,6 +5293,7 @@ class TiffFile:
         for i, s in enumerate(series):
             s._index = i
         self._series[(kind, False)] = series
+        self._pin_source_files()
         return series
 
     def _lsm_load_pages(self) -> None:
@@ -12263,6 +12329,283 @@ class TiffPageSeries(Sequence[TiffPage | TiffFrame | None]):
                     result[key] = dict(value)
         return result
 
+    def zview(
+        self,
+        start: int | None = None,
+        stop: int | None = None,
+        /,
+        *,
+        native: bool = False,
+    ) -> NDArray[Any]:
+        """Return a zero-copy, read-only NumPy view over a logical Z range.
+
+        The selected planes ``series[start:stop]`` (zero-based, half-open)
+        are returned as a read-only array of shape ``(planes, Y, X)`` mapped
+        directly onto the bytes of one open source file with one fixed set
+        of strides. No pixel data are copied and no temporary file is used.
+        Gaps between planes or rows and a physical storage order opposite to
+        the logical Z order are represented by negative or enlarged strides.
+
+        Parameters:
+            start:
+                First logical Z plane (inclusive). Defaults to 0.
+            stop:
+                Last logical Z plane (exclusive). Defaults to the number of
+                planes in the series.
+            native:
+                Require the returned dtype to use the machine's native byte
+                order. If the source is byte-swapped, raise
+                :py:class:`TiffMapError` instead of returning a view with a
+                non-native dtype.
+
+        Returns:
+            Read-only NumPy array of shape ``(stop - start, Y, X)`` sharing
+            the file mapping. The array stays valid after
+            :py:meth:`TiffFile.close`.
+
+        Raises:
+            TiffMapError:
+                The selection spans more than one file, references a missing
+                or non-mappable plane, cannot be expressed with fixed
+                strides (for example, an incompatible row layout), or the
+                native byte order requirement cannot be met. The error
+                message identifies the responsible file boundary, plane, or
+                row. No partial array is returned.
+
+        """
+        if self.parent is None:
+            msg = 'no parent'
+            raise TiffMapError(msg)
+        if set(self._axes) - set('ZYX'):
+            msg = (
+                f'series axes {self._axes!r} contain dimensions other than '
+                'Z, Y, X; zview only maps ZYX series'
+            )
+            raise TiffMapError(msg)
+        if (
+            'Z' not in self._axes
+            or 'Y' not in self._axes
+            or 'X' not in self._axes
+        ):
+            msg = (
+                f'series axes {self._axes!r} do not provide Z, Y, and X '
+                'dimensions for a Z view'
+            )
+            raise TiffMapError(msg)
+        if self._axes[-2:] != 'YX':
+            msg = f'series axes {self._axes!r} do not end in YX'
+            raise TiffMapError(msg)
+
+        nplanes = self._shape[self._axes.index('Z')]
+        if start is None:
+            start = 0
+        if stop is None:
+            stop = nplanes
+        start, stop, step = slice(int(start), int(stop)).indices(nplanes)
+        if step != 1 or stop <= start:
+            msg = f'Z range [{start}, {stop}) is empty or non-contiguous'
+            raise TiffMapError(msg)
+        count = stop - start
+
+        # series pages are flattened over all non-YX axes; Z is the leading
+        # axis of a ZYX (possibly with squeezed length-1 T/C/S) series
+        pages: list[TiffPage | TiffFrame | None] = [
+            self._getitem(z) for z in range(start, stop)
+        ]
+        if any(page is None for page in pages):
+            missing = start + next(
+                i for i, page in enumerate(pages) if page is None
+            )
+            msg = f'logical Z{missing} is missing and cannot be mapped'
+            raise TiffMapError(msg)
+
+        first = pages[0]
+        assert first is not None
+        keyframe = first.keyframe
+        if (
+            keyframe.dtype is None
+            or keyframe.compression != 1
+            or keyframe.fillorder != 1
+            or keyframe.predictor != 1
+            or keyframe.is_subsampled
+            or keyframe.is_tiled
+            or keyframe.samplesperpixel != 1
+            or keyframe.imagedepth != 1
+        ):
+            msg = (
+                f'logical Z{start} storage is not uncompressed, one-strip-'
+                'per-row, single-sample image data and cannot be mapped '
+                'without a copy'
+            )
+            raise TiffMapError(msg)
+
+        itemsize = keyframe.dtype.itemsize
+        width = keyframe.imagewidth
+        rows = keyframe.imagelength
+        x_stride = itemsize
+        rowbytes = width * itemsize
+
+        # every selected plane must live in the same open source file
+        owner = first.parent
+        owner_name = owner.filehandle.name
+        for i, page in enumerate(pages[1:], start=1):
+            if page.parent is not owner:
+                msg = (
+                    f'Z range [{start}, {stop}) crosses a file boundary '
+                    f'between logical Z{start + i - 1} in '
+                    f'{owner_name!r} and Z{start + i} in '
+                    f'{page.parent.filehandle.name!r}; a single mapped view '
+                    'cannot span multiple files'
+                )
+                raise TiffMapError(msg)
+
+        # series construction pins every backing inode; make sure this file
+        # is pinned even if the series was built through another TiffFile
+        owner._pin_self()
+        pin = owner._pins.get(owner_name)
+        if pin is None or pin.closed:
+            msg = (
+                f'{owner_name!r} is not a regular, memory-mappable file; '
+                'cannot deliver a zero-copy view'
+            )
+            raise TiffMapError(msg)
+        try:
+            mapping = mmap.mmap(pin.fileno(), 0, access=mmap.ACCESS_READ)
+        except (OSError, ValueError) as exc:
+            msg = (
+                f'cannot memory-map {owner_name!r} for a zero-copy view: '
+                f'{exc}'
+            )
+            raise TiffMapError(msg) from exc
+
+        # validate one fixed (z_stride, y_stride) across the whole selection
+        y_stride: int | None = None
+        plane_first_row: list[int] = []
+        for index, page in enumerate(pages):
+            z = start + index
+            # derive the absolute file offset of every row from the strips,
+            # supporting both one-strip-per-row and multi-row (even whole
+            # plane) strip layouts
+            row_offsets: list[int] = []
+            strip_offsets = page.dataoffsets
+            strip_counts = page.databytecounts
+            if len(strip_offsets) == 0:
+                msg = f'logical Z{z} has no strip data and cannot be mapped'
+                raise TiffMapError(msg)
+            for strip_index, strip_offset in enumerate(strip_offsets):
+                strip_count = strip_counts[strip_index]
+                rows_in_strip = strip_count // rowbytes
+                if (
+                    rows_in_strip < 1
+                    or strip_count != rows_in_strip * rowbytes
+                ):
+                    msg = (
+                        f'logical Z{z} strip {strip_index} of '
+                        f'{strip_count} bytes is not a whole number of '
+                        f'{rowbytes}-byte rows and cannot be mapped'
+                    )
+                    raise TiffMapError(msg)
+                for row_in_strip in range(rows_in_strip):
+                    row_offsets.append(
+                        strip_offset + row_in_strip * rowbytes
+                    )
+            if len(row_offsets) != rows:
+                msg = (
+                    f'logical Z{z} strips hold {len(row_offsets)} rows but '
+                    f'the image has {rows} rows'
+                )
+                raise TiffMapError(msg)
+            if row_offsets[0] % itemsize != 0:
+                msg = (
+                    f'logical Z{z} first row offset {row_offsets[0]} is not '
+                    f'aligned to the {itemsize}-byte sample'
+                )
+                raise TiffMapError(msg)
+            # rows of one plane must share a constant byte stride
+            plane_y = (
+                row_offsets[1] - row_offsets[0] if rows > 1 else rowbytes
+            )
+            if plane_y <= 0 or plane_y < rowbytes:
+                msg = (
+                    f'logical Z{z} row layout is incompatible: row stride '
+                    f'{plane_y} does not fit a {rowbytes}-byte row'
+                )
+                raise TiffMapError(msg)
+            for row in range(1, rows):
+                if row_offsets[row] - row_offsets[row - 1] != plane_y:
+                    msg = (
+                        f'logical Z{z} row {row} has an irregular layout: '
+                        f'offset {row_offsets[row]} does not follow the '
+                        f'{plane_y}-byte row stride'
+                    )
+                    raise TiffMapError(msg)
+            if y_stride is None:
+                y_stride = plane_y
+            elif plane_y != y_stride:
+                msg = (
+                    f'logical Z{z} row stride {plane_y} bytes is '
+                    f'incompatible with the {y_stride}-byte stride of the '
+                    'preceding planes in the selection'
+                )
+                raise TiffMapError(msg)
+            plane_first_row.append(row_offsets[0])
+
+        assert y_stride is not None
+        # planes must share a constant Z byte stride (may be negative)
+        if count > 1:
+            z_stride = plane_first_row[1] - plane_first_row[0]
+            for index in range(2, count):
+                if plane_first_row[index] - plane_first_row[index - 1] != (
+                    z_stride
+                ):
+                    z = start + index
+                    msg = (
+                        f'logical Z{z} cannot share a fixed Z stride: plane '
+                        f'first-row offsets {plane_first_row} are not an '
+                        'arithmetic progression'
+                    )
+                    raise TiffMapError(msg)
+        else:
+            z_stride = y_stride * rows
+
+        byteorder = owner.byteorder
+        assert keyframe.dtype is not None
+        dtype = numpy.dtype(keyframe.dtype).newbyteorder(byteorder)
+        if native and not dtype.isnative:
+            msg = (
+                f'{owner_name!r} stores samples in {dtype.byteorder} byte '
+                f'order; native byte order was requested, which would '
+                'require a copy'
+            )
+            raise TiffMapError(msg)
+
+        base_offset = plane_first_row[0]
+        # ensure every addressed sample stays inside the mapped file
+        map_size = len(mapping)
+        for index in range(count):
+            first_byte = plane_first_row[index]
+            last_byte = first_byte + (rows - 1) * y_stride + rowbytes
+            lo = min(first_byte, last_byte)
+            hi = max(first_byte, last_byte)
+            if lo < 0 or hi > map_size:
+                z = start + index
+                msg = (
+                    f'logical Z{z} pixel bytes [{lo}, {hi}) fall outside '
+                    f'the {map_size}-byte mapping of {owner_name!r}'
+                )
+                raise TiffMapError(msg)
+        base = numpy.ndarray(
+            shape=(count, rows, width),
+            dtype=dtype,
+            buffer=mapping,
+            offset=base_offset,
+            strides=(z_stride, y_stride, x_stride),
+        )
+        view = numpy.lib.stride_tricks.as_strided(
+            base, base.shape, base.strides, writeable=False
+        )
+        return view
+
     def asarray(
         self, *, level: int | None = None, **kwargs: Any
     ) -> NDArray[Any]:
@@ -18799,8 +19142,6 @@ class _TIFF:
     @cached_property
     def ALLOCATIONGRANULARITY(self) -> int:
         # alignment for writing contiguous data to TIFF
-        import mmap
-
         return mmap.ALLOCATIONGRANULARITY
 
     @cached_property

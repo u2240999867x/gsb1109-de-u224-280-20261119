@@ -62,7 +62,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator
+    from collections.abc import Generator, Iterator, Sequence
     from typing import Any, Literal
 
     from numpy.typing import ArrayLike, DTypeLike, NDArray
@@ -13909,6 +13909,247 @@ def test_read_ome_multifile_bytesio(caplog: pytest.LogCaptureFixture) -> None:
             assert_aszarr_method(tif, data, mode='r')
         del data
         assert__str__(tif)
+
+
+def _write_rowstrip_tiff(
+    filename: str,
+    byteorder: str,
+    data: NDArray[Any],
+    *,
+    description: bytes | None = None,
+) -> None:
+    """Write uncompressed uint16 TIFF with one strip per row."""
+    bo = '>' if byteorder == '>' else '<'
+    arr = numpy.asarray(data, dtype=f'{bo}u2')
+    with TiffWriter(filename, byteorder=bo) as tif:
+        tif.write(
+            arr,
+            photometric='minisblack',
+            rowsperstrip=1,
+            metadata=None,
+            description=None if description is None else description.decode(),
+        )
+
+
+def _relocate_rows(
+    filename: str,
+    plane_bases: Sequence[int],
+    plane_gaps: Sequence[int],
+    total: int,
+) -> None:
+    """Move strip pixels to target row offsets; pad free bytes with 0xEE."""
+    datatype_size = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8}
+    with open(filename, 'rb') as fh:
+        original = fh.read()
+    with TiffFile(filename) as tif:
+        pages = list(tif.pages)
+        patch: list[tuple[int, list[int], str]] = []
+        pixel_writes: list[tuple[int, bytes]] = []
+        for index, page in enumerate(pages):
+            base = plane_bases[index]
+            gap = plane_gaps[index]
+            tag = page.tags[273]
+            old_offsets = list(page.dataoffsets)
+            new_offsets = [base + row * gap for row in range(len(old_offsets))]
+            entry_size = tag.count * datatype_size[int(tag.dtype)]
+            assert entry_size > 4
+            patch.append((tag.valueoffset, new_offsets, page.parent.byteorder))
+            for old, new in zip(old_offsets, new_offsets):
+                pixel_writes.append((new, original[old : old + 4]))
+    pixel_ranges = sorted(
+        (off, off + bc)
+        for page in pages
+        for off, bc in zip(page.dataoffsets, page.databytecounts)
+    )
+    merged: list[tuple[int, int]] = []
+    for start, end in pixel_ranges:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    keep: list[tuple[int, int]] = []
+    pos = 0
+    for start, end in merged:
+        if start > pos:
+            keep.append((pos, start))
+        pos = max(pos, end)
+    if pos < len(original):
+        keep.append((pos, len(original)))
+    buf = bytearray(b'\xee' * total)
+    for start, end in keep:
+        buf[start:end] = original[start:end]
+    with open(filename, 'wb') as fh:
+        fh.write(buf)
+        for offset, payload in pixel_writes:
+            fh.seek(offset)
+            fh.write(payload)
+        for valueoffset, new_offsets, bo in patch:
+            fh.seek(valueoffset)
+            for offset in new_offsets:
+                fh.write(struct.pack(f'{bo}I', offset))
+
+
+def _zview_omexml() -> bytes:
+    uuid = 'urn:uuid:12345678-1234-1234-1234-123456789abc'
+    uuid_b = 'urn:uuid:abcdef12-1234-1234-1234-123456789abc'
+    return (
+        '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06" '
+        f'UUID="{uuid}">'
+        '<Image ID="Image:0"><Pixels ID="Pixels:0" DimensionOrder="XYZCT" '
+        'Type="uint16" SizeX="2" SizeY="3" SizeZ="7" SizeC="1" SizeT="1">'
+        '<TiffData FirstZ="0" IFD="0"><UUID FileName="zview_a.ome.tif">'
+        f'{uuid}</UUID></TiffData>'
+        '<TiffData FirstZ="1" NumPlanes="6" IFD="0">'
+        f'<UUID FileName="zview_b.ome.tif">{uuid_b}</UUID></TiffData>'
+        '</Pixels></Image></OME>'
+    ).encode()
+
+
+def _zview_make_a(filename: str) -> None:
+    data = numpy.array(
+        [[[1000 + 10 * y + x for x in range(2)] for y in range(3)]],
+        dtype='<u2',
+    )
+    _write_rowstrip_tiff(filename, '<', data, description=_zview_omexml())
+    _relocate_rows(filename, [4480], [12], 4600)
+
+
+def _zview_make_b(filename: str, *, new: bool) -> None:
+    base = 2000 if new else 1000
+    data = numpy.array(
+        [
+            [
+                [base + 100 * (p + 1) + 10 * y + x for x in range(2)]
+                for y in range(3)
+            ]
+            for p in range(6)
+        ],
+        dtype='>u2',
+    )
+    _write_rowstrip_tiff(filename, '>', data)
+    gaps = (
+        [12, 12, 12, 12, 14, 12] if new else [12, 12, 14, 12, 12, 12]
+    )
+    _relocate_rows(
+        filename, [4416, 4352, 4288, 4224, 4160, 4096], gaps, 4600
+    )
+
+
+def test_series_zview_multifile_atomic() -> None:
+    """Test zero-copy Z views across an atomically replaced companion file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        a = os.path.join(tmpdir, 'zview_a.ome.tif')
+        b = os.path.join(tmpdir, 'zview_b.ome.tif')
+        _zview_make_a(a)
+        _zview_make_b(b, new=False)
+
+        tif_old = TiffFile(a)
+        series_old = tif_old.series[0]
+        assert series_old.shape == (7, 3, 2)
+        assert series_old.axes == 'ZYX'
+        assert series_old.is_multifile
+
+        # atomically replace the companion before any view is requested
+        b_replacement = os.path.join(tmpdir, 'zview_b_new.ome.tif')
+        _zview_make_b(b_replacement, new=True)
+        os.replace(b_replacement, b)
+
+        tif_new = TiffFile(a)
+        series_new = tif_new.series[0]
+
+        # [1, 5): old layout fails on Z3, new layout maps
+        with pytest.raises(TiffMapError, match='Z3'):
+            series_old.zview(1, 5)
+        view_new = series_new.zview(1, 5)
+        assert view_new.shape == (4, 3, 2)
+        assert view_new.strides == (-64, 12, 2)
+        assert view_new.dtype == numpy.dtype('>u2')
+        assert not view_new.flags.writeable
+        for li, z in enumerate(range(1, 5)):
+            for y in range(3):
+                for x in range(2):
+                    assert view_new[li, y, x] == 2000 + 100 * z + 10 * y + x
+
+        # [4, 7): old layout maps, new layout fails on Z5
+        view_old = series_old.zview(4, 7)
+        assert view_old.shape == (3, 3, 2)
+        assert view_old.strides == (-64, 12, 2)
+        assert view_old.dtype == numpy.dtype('>u2')
+        for li, z in enumerate(range(4, 7)):
+            for y in range(3):
+                for x in range(2):
+                    assert view_old[li, y, x] == 1000 + 100 * z + 10 * y + x
+        with pytest.raises(TiffMapError, match='Z5'):
+            series_new.zview(4, 7)
+
+        # single planes with the 14-byte row stride still map
+        single_old = series_old.zview(3, 4)
+        assert single_old.shape == (1, 3, 2)
+        assert single_old.strides == (single_old.strides[0], 14, 2)
+        assert single_old[0, 0, 0] == 1300
+        single_new = series_new.zview(5, 6)
+        assert single_new.strides[1:] == (14, 2)
+        assert single_new[0, 0, 0] == 2500
+
+        # after a failed range, both series still serve [1, 3)
+        view_13_old = series_old.zview(1, 3)
+        view_13_new = series_new.zview(1, 3)
+        assert view_13_old[0, 0, 0] == 1100
+        assert view_13_new[0, 0, 0] == 2100
+
+        # native byte order is refused for the big-endian companion
+        with pytest.raises(TiffMapError, match='byte order'):
+            series_old.zview(1, 3, native=True)
+
+        # [0, 3) crosses the A/B file boundary even if strides would fit
+        with pytest.raises(TiffMapError, match='Z0.*Z1'):
+            series_old.zview(0, 3)
+
+        # views outlive the TiffFiles
+        tif_old.close()
+        tif_new.close()
+        assert view_13_old[0, 0, 0] == 1100
+        assert view_13_new[0, 0, 0] == 2100
+
+        # existing page and whole-series reads keep working
+        import warnings
+
+        with TiffFile(a) as tif:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', UserWarning)
+                assert tif.series[0][1].asarray().shape == (3, 2)
+            assert tif.asarray().shape == (7, 3, 2)
+
+
+def test_series_zview_single_file() -> None:
+    """Test zero-copy Z view on a regular single-file ZYX series."""
+    data = numpy.arange(2 * 3 * 2, dtype='<u2').reshape(2, 3, 2)
+    with TempFileName('series_zview_single_file', ext='.ome.tif') as filename:
+        with TiffWriter(filename) as tif:
+            tif.write(
+                data,
+                photometric='minisblack',
+                rowsperstrip=1,
+                metadata={'axes': 'ZYX'},
+            )
+        with TiffFile(filename) as tif:
+            series = tif.series[0]
+            view = series.zview()
+            assert view.shape == (2, 3, 2)
+            assert view.dtype == numpy.uint16
+            assert view.dtype.isnative
+            assert not view.flags.writeable
+            assert array_equal(view, data)
+            sub = series.zview(1, 2)
+            assert array_equal(sub[0], data[1])
+            # native byte order is satisfied for a native file
+            assert array_equal(series.zview(native=True), data)
+
+        # a binary stream cannot be memory-mapped and must be refused cleanly
+        with open(filename, 'rb') as fh:
+            with TiffFile(BytesIO(fh.read())) as tif:
+                with pytest.raises(TiffMapError, match='memory-mappable'):
+                    tif.series[0].zview()
 
 
 def test_read_ome_multifile_outside_directory(
