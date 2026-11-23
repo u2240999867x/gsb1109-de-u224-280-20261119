@@ -1,0 +1,467 @@
+{
+  "cases": {
+    "cal360_feb30_aux": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 5097600000000,
+          "min": 0,
+          "start": 0,
+          "stop": 4
+        },
+        {
+          "block": 1,
+          "max": 10281600000000,
+          "min": 5184000000000,
+          "start": 4,
+          "stop": 8
+        }
+      ],
+      "calendar": "360_day",
+      "dimensions": {
+        "record": 8
+      },
+      "file": "cal360_feb30_aux.cdf5",
+      "fill_code": null,
+      "header_bytes": 904,
+      "layout": "aux",
+      "sha256": "54178c936b788f3da746ff2a1b671396b7e8484092786562db0de8711cfc5fc7",
+      "units": "microseconds",
+      "visible_attrs": {
+        "calendar": "360_day",
+        "units": "microseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        2,
+        5
+      ]
+    },
+    "cal360_feb30_dim": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 5097600000000,
+          "min": 0,
+          "start": 0,
+          "stop": 4
+        },
+        {
+          "block": 1,
+          "max": 10281600000000,
+          "min": 5184000000000,
+          "start": 4,
+          "stop": 8
+        }
+      ],
+      "calendar": "360_day",
+      "dimensions": {
+        "time": 8
+      },
+      "file": "cal360_feb30_dim.cdf5",
+      "fill_code": null,
+      "header_bytes": 864,
+      "layout": "dim",
+      "sha256": "6d5a4912d4da983fb1874082aeb41c0d84e571aab8a3fa2c9a378f0f0fd6f588",
+      "units": "microseconds",
+      "visible_attrs": {
+        "calendar": "360_day",
+        "units": "microseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        2,
+        5
+      ]
+    },
+    "pair1_tail_1ns_aux": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 604800000000000,
+          "min": 0,
+          "start": 0,
+          "stop": 8
+        },
+        {
+          "block": 1,
+          "max": 1209600000000000,
+          "min": 345600000000000,
+          "start": 8,
+          "stop": 16
+        },
+        {
+          "block": 2,
+          "max": 6311347200000000000,
+          "min": 1382400000000000,
+          "start": 16,
+          "stop": 24
+        }
+      ],
+      "calendar": "standard",
+      "dimensions": {
+        "record": 24
+      },
+      "file": "pair1_tail_1ns_aux.cdf5",
+      "fill_code": null,
+      "header_bytes": 944,
+      "layout": "aux",
+      "sha256": "18edbabaa577ef4cbdfd14a57e29057b9c29adcfc4b74601ef8af6a99e92de2f",
+      "units": "nanoseconds",
+      "visible_attrs": {
+        "calendar": "standard",
+        "units": "nanoseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        4,
+        12
+      ]
+    },
+    "pair1_tail_1ns_dim": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 604800000000000,
+          "min": 0,
+          "start": 0,
+          "stop": 8
+        },
+        {
+          "block": 1,
+          "max": 1209600000000000,
+          "min": 345600000000000,
+          "start": 8,
+          "stop": 16
+        },
+        {
+          "block": 2,
+          "max": 6311347200000000000,
+          "min": 1382400000000000,
+          "start": 16,
+          "stop": 24
+        }
+      ],
+      "calendar": "standard",
+      "dimensions": {
+        "time": 24
+      },
+      "file": "pair1_tail_1ns_dim.cdf5",
+      "fill_code": null,
+      "header_bytes": 904,
+      "layout": "dim",
+      "sha256": "dbddb9eef3ff30ae9b7f61e0db52a7997afaf5ed3e763a58a99363b7d7ad10fe",
+      "units": "nanoseconds",
+      "visible_attrs": {
+        "calendar": "standard",
+        "units": "nanoseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        4,
+        12
+      ]
+    },
+    "pair1_whole_second_aux": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 604800000000000,
+          "min": 0,
+          "start": 0,
+          "stop": 8
+        },
+        {
+          "block": 1,
+          "max": 1209600000000000,
+          "min": 345600000000000,
+          "start": 8,
+          "stop": 16
+        },
+        {
+          "block": 2,
+          "max": 6311347200000000000,
+          "min": 1382400000000000,
+          "start": 16,
+          "stop": 24
+        }
+      ],
+      "calendar": "standard",
+      "dimensions": {
+        "record": 24
+      },
+      "file": "pair1_whole_second_aux.cdf5",
+      "fill_code": null,
+      "header_bytes": 944,
+      "layout": "aux",
+      "sha256": "13d8db7e1f7a31699a95ac18a518b0c06c4861e7d2be4602c7a59c35a6a73fb4",
+      "units": "nanoseconds",
+      "visible_attrs": {
+        "calendar": "standard",
+        "units": "nanoseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        4,
+        12
+      ]
+    },
+    "pair1_whole_second_dim": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 604800000000000,
+          "min": 0,
+          "start": 0,
+          "stop": 8
+        },
+        {
+          "block": 1,
+          "max": 1209600000000000,
+          "min": 345600000000000,
+          "start": 8,
+          "stop": 16
+        },
+        {
+          "block": 2,
+          "max": 6311347200000000000,
+          "min": 1382400000000000,
+          "start": 16,
+          "stop": 24
+        }
+      ],
+      "calendar": "standard",
+      "dimensions": {
+        "time": 24
+      },
+      "file": "pair1_whole_second_dim.cdf5",
+      "fill_code": null,
+      "header_bytes": 904,
+      "layout": "dim",
+      "sha256": "a1e68e950bc211e5a0a0b24b02302399170fe06dd9da60a7c389c84a8791073a",
+      "units": "nanoseconds",
+      "visible_attrs": {
+        "calendar": "standard",
+        "units": "nanoseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        4,
+        12
+      ]
+    },
+    "pair2_fill_only_aux": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 604800000000000,
+          "min": 0,
+          "start": 0,
+          "stop": 8
+        },
+        {
+          "block": 1,
+          "max": 1296000000000000,
+          "min": 691200000000000,
+          "start": 8,
+          "stop": 16
+        },
+        {
+          "block": 2,
+          "max": 4985971200000000000,
+          "min": 1382400000000000,
+          "start": 16,
+          "stop": 24
+        }
+      ],
+      "calendar": "standard",
+      "dimensions": {
+        "record": 24
+      },
+      "file": "pair2_fill_only_aux.cdf5",
+      "fill_code": 4985971200000000000,
+      "header_bytes": 984,
+      "layout": "aux",
+      "sha256": "f506e13c8b2cc5040879658025ae93ecc9950da61194f754d03e34db1ee0b726",
+      "units": "nanoseconds",
+      "visible_attrs": {
+        "_FillValue": 4985971200000000000,
+        "calendar": "standard",
+        "units": "nanoseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        4,
+        12
+      ]
+    },
+    "pair2_fill_only_dim": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 604800000000000,
+          "min": 0,
+          "start": 0,
+          "stop": 8
+        },
+        {
+          "block": 1,
+          "max": 1296000000000000,
+          "min": 691200000000000,
+          "start": 8,
+          "stop": 16
+        },
+        {
+          "block": 2,
+          "max": 4985971200000000000,
+          "min": 1382400000000000,
+          "start": 16,
+          "stop": 24
+        }
+      ],
+      "calendar": "standard",
+      "dimensions": {
+        "time": 24
+      },
+      "file": "pair2_fill_only_dim.cdf5",
+      "fill_code": 4985971200000000000,
+      "header_bytes": 944,
+      "layout": "dim",
+      "sha256": "98a318b8c0c5d51cb5f8a1e3f38abf3a253b4cd5116f1532528016e9b0321b59",
+      "units": "nanoseconds",
+      "visible_attrs": {
+        "_FillValue": 4985971200000000000,
+        "calendar": "standard",
+        "units": "nanoseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        4,
+        12
+      ]
+    },
+    "pair2_fill_plus_real_far_aux": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 604800000000000,
+          "min": 0,
+          "start": 0,
+          "stop": 8
+        },
+        {
+          "block": 1,
+          "max": 1296000000000000,
+          "min": 691200000000000,
+          "start": 8,
+          "stop": 16
+        },
+        {
+          "block": 2,
+          "max": 4985971200000000000,
+          "min": 1382400000000000,
+          "start": 16,
+          "stop": 24
+        }
+      ],
+      "calendar": "standard",
+      "dimensions": {
+        "record": 24
+      },
+      "file": "pair2_fill_plus_real_far_aux.cdf5",
+      "fill_code": 4985971200000000000,
+      "header_bytes": 984,
+      "layout": "aux",
+      "sha256": "7ab7af69dc8c1de5851097ed13165e7fc3b2b14a7bb87ab385f5581213b938dc",
+      "units": "nanoseconds",
+      "visible_attrs": {
+        "_FillValue": 4985971200000000000,
+        "calendar": "standard",
+        "units": "nanoseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        4,
+        12
+      ]
+    },
+    "pair2_fill_plus_real_far_dim": {
+      "block_extrema": [
+        {
+          "block": 0,
+          "max": 604800000000000,
+          "min": 0,
+          "start": 0,
+          "stop": 8
+        },
+        {
+          "block": 1,
+          "max": 1296000000000000,
+          "min": 691200000000000,
+          "start": 8,
+          "stop": 16
+        },
+        {
+          "block": 2,
+          "max": 4985971200000000000,
+          "min": 1382400000000000,
+          "start": 16,
+          "stop": 24
+        }
+      ],
+      "calendar": "standard",
+      "dimensions": {
+        "time": 24
+      },
+      "file": "pair2_fill_plus_real_far_dim.cdf5",
+      "fill_code": 4985971200000000000,
+      "header_bytes": 944,
+      "layout": "dim",
+      "sha256": "b09b4d482f90b47c570781556f6be29af2f973adbe44ca708492496a6c98b152",
+      "units": "nanoseconds",
+      "visible_attrs": {
+        "_FillValue": 4985971200000000000,
+        "calendar": "standard",
+        "units": "nanoseconds since 2100-01-01 00:00:00"
+      },
+      "window": [
+        4,
+        12
+      ]
+    }
+  },
+  "pairs": {
+    "pair1_aux": {
+      "catalog_sha256": {
+        "left": "d127b80e27623c5e212292a014dfe75f558464ac2637a66e2a23c83325a771d7",
+        "right": "d127b80e27623c5e212292a014dfe75f558464ac2637a66e2a23c83325a771d7"
+      },
+      "members": [
+        "pair1_tail_1ns_aux",
+        "pair1_whole_second_aux"
+      ]
+    },
+    "pair1_dim": {
+      "catalog_sha256": {
+        "left": "e6e1d5d190ca72978f588664bf1a5d1f6b5214f5556bc307556d0ebf8721c025",
+        "right": "e6e1d5d190ca72978f588664bf1a5d1f6b5214f5556bc307556d0ebf8721c025"
+      },
+      "members": [
+        "pair1_tail_1ns_dim",
+        "pair1_whole_second_dim"
+      ]
+    },
+    "pair2_aux": {
+      "catalog_sha256": {
+        "left": "f7eb27034c065dd6abf282327f1704cc5d6dbd6abb02de7dac2d1a5cccc26487",
+        "right": "f7eb27034c065dd6abf282327f1704cc5d6dbd6abb02de7dac2d1a5cccc26487"
+      },
+      "members": [
+        "pair2_fill_only_aux",
+        "pair2_fill_plus_real_far_aux"
+      ]
+    },
+    "pair2_dim": {
+      "catalog_sha256": {
+        "left": "eb1e0e55aa2b7915df75a51645f8089bd2b2d44419fe20abfa7b0f659dee34f0",
+        "right": "eb1e0e55aa2b7915df75a51645f8089bd2b2d44419fe20abfa7b0f659dee34f0"
+      },
+      "members": [
+        "pair2_fill_only_dim",
+        "pair2_fill_plus_real_far_dim"
+      ]
+    }
+  },
+  "reference": "2100-01-01T00:00:00"
+}
