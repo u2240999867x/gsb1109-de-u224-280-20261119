@@ -8,7 +8,8 @@ from inspect import isawaitable
 from tornado import gen
 import weakref
 
-from .core import Stream, convert_interval, RefCounter, sync
+from .core import (Stream, convert_interval, RefCounter, sync, ReplayRound,
+                   _replay_round_ids)
 
 
 def sink_to_file(filename, upstream, mode='w', prefix='', suffix='\n', flush=False):
@@ -779,21 +780,162 @@ class from_iterable(Source):
     >>> source.start()
     >>> L
     [0, 1, 2]
+
+    Each call to ``start`` runs one replay round.  The round's result can be
+    awaited to distinguish natural input exhaustion, an input error, and a
+    failed write::
+
+        result = source.start()
+        result = await result
+        result.status  # 'completed' | 'input_error' | 'write_error'
     """
 
     def __init__(self, iterable, **kwargs):
         self._iterable = iterable
+        self._rounds = []
+        self._round_ids = 0
+        self._current_round = None
+        self._round_task = None
+        self._stop_requested = False
         super().__init__(**kwargs)
 
-    async def run(self):
-        for x in self._iterable:
-            if self.stopped:
-                break
-            await asyncio.gather(*self._emit(x))
-            if self.stopped:
-                break
-        self.stopped = True
+    def stop(self):
+        """Stop the current round after the current item.
 
+        Data already emitted is still allowed to settle; tails that were not
+        delivered stay in the round result instead of being written.
+        """
+        if not self.stopped:
+            self._stop_requested = True
+            if self._current_round is not None:
+                self._current_round._stop_requested = True
+            self.stopped = True
+
+    @property
+    def current_round(self):
+        return self._current_round
+
+    @property
+    def rounds(self):
+        return list(self._rounds)
+
+    @property
+    def current_result(self):
+        return self._current_round.result if self._current_round else None
+
+    @property
+    def last_result(self):
+        return self._rounds[-1].result if self._rounds else None
+
+    @property
+    def replay_result(self):
+        return self.current_result
+
+    def start(self):
+        """Start a new replay round.
+
+        Returns an awaitable :class:`~streamz.core.ReplayResult`.  Existing
+        callers may ignore the return value; ``start`` still returns
+        immediately and keeps the old non-blocking behavior.
+        """
+        if not self.stopped:
+            return (self._current_round.result if self._current_round
+                    else None)
+        self.stopped = False
+        self.started = True
+        self._stop_requested = False
+        self._round_ids += 1
+        round_id = next(_replay_round_ids)
+        round = ReplayRound(round_id, loop=self.loop,
+                            iterable=self._iterable)
+        round._iterable = self._iterable
+        round._source = self
+        self._rounds.append(round)
+        self._current_round = round
+        self._round_task = self.loop.add_callback(self._run_round, round)
+        return round.result
+
+    async def replay(self, iterable=None):
+        """Run one round and await its result.
+
+        ``iterable`` replaces the source's iterable for this round only; the
+        original iterable stays in place for subsequent ``start`` calls.
+        """
+        if iterable is not None:
+            self._iterable = iterable
+        result = self.start()
+        return await result
+
+    def wait_for_replay(self):
+        """Return the awaitable result for the current round."""
+        if self._current_round is None:
+            raise RuntimeError("No replay round has been started")
+        return self._current_round.result
+
+    wait_for_completion = wait_for_replay
+    wait_for_round = wait_for_replay
+    wait_for_result = wait_for_replay
+    wait_for_finish = wait_for_replay
+    wait_for_end = wait_for_replay
+    replay_done = wait_for_replay
+
+    def result(self):
+        """Return the awaitable result for the most recent round."""
+        if not self._rounds:
+            raise RuntimeError("No replay round has been started")
+        return self._rounds[-1].result
+
+    async def join(self):
+        """Await the most recent round's result."""
+        return await self.result()
+
+    def _finalize_round(self, round, error=None):
+        """Close input and wait for all writes initiated in this round."""
+        round.input_ended = True
+        round.input_error = error
+        round.natural_end = (error is None and not round._stop_requested)
+        partitions = list(round.partitions)
+        if error is None and not round._stop_requested:
+            for partition in partitions:
+                partition._finalize_round(round)
+        else:
+            reason = 'input_error' if error is not None else 'stopped'
+            for partition in partitions:
+                partition._close_round_input(round, reason=reason)
+
+    async def _wait_round(self, round):
+        await round.wait_writes()
+        round.result._resolve()
+
+    async def _run_round(self, round):
+        error = None
+        try:
+            for x in round._iterable:
+                if round._stop_requested:
+                    break
+                record = round.new_record(x)
+                metadata = [{'replay': round, 'record': record}]
+                await asyncio.gather(*self._emit(x, metadata=metadata))
+                if round._stop_requested:
+                    break
+        except Exception as exc:
+            error = exc
+        finally:
+            # Only the current round may leave the source stopped.  An old
+            # round finishing late must not stop a newer replay.
+            if self._current_round is round:
+                self.stopped = True
+        self._finalize_round(round, error)
+        await self._wait_round(round)
+        if self._current_round is round:
+            self._round_task = None
+
+    async def run(self):
+        round = self._current_round
+        if round is None:
+            self.start()
+            return
+        await self._run_round(round)
 
 @Stream.register_api()
 class from_websocket(Source):

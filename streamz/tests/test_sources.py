@@ -192,3 +192,262 @@ def test_from_iterable_stop():
     assert source.stopped
     with pytest.raises(Failed):
         wait_for(lambda: L == [0, 1, 2], 0.1)
+
+
+class ControlledWriter:
+    """A sink that starts every write immediately and waits for a gate."""
+
+    def __init__(self):
+        self.calls = []
+        self.gates = {}
+        self.failures = {}
+
+    def __call__(self, values):
+        self.calls.append(values)
+        gate = self.gates.setdefault(values, asyncio.Event())
+
+        async def write():
+            await gate.wait()
+            if values in self.failures:
+                raise self.failures[values]
+        return write()
+
+    def release(self, values, error=None):
+        if error is not None:
+            self.failures[values] = error
+        self.gates[values].set()
+
+
+def _replay_graph(items, timeout=10):
+    from tornado.ioloop import IOLoop
+    source = Source.from_iterable(items, asynchronous=True,
+                                  loop=IOLoop.current())
+    partitioned = source.partition(2, timeout=timeout, key=lambda x: x[0])
+    writer = ControlledWriter()
+    partitioned.sink(writer)
+    return source, partitioned, writer
+
+
+def _values(result):
+    return [batch.values for batch in result.batches]
+
+
+async def _turn(predicate=None, turns=50):
+    for _ in range(turns):
+        await asyncio.sleep(0)
+        if predicate is None or predicate():
+            return
+    if predicate is not None:
+        assert predicate()
+
+
+async def _started(writer, count):
+    await _turn(lambda: len(writer.calls) >= count)
+
+
+def _run(coro):
+    asyncio.run(coro)
+
+
+def test_replay_waits_for_writes_at_natural_end():
+    async def main():
+        source, partitioned, writer = _replay_graph(
+            [('A', '1'), ('B', '1'), ('C', '1'), ('A', '2')])
+        result = source.start()
+        await _started(writer, 3)
+
+        # A is a full batch, B and C are non-empty tails at EOF.
+        assert _values(result) == [
+            (('A', '1'), ('A', '2')),
+            (('B', '1'),),
+            (('C', '1'),),
+        ]
+        writer.release((('A', '1'), ('A', '2')))
+        writer.release((('B', '1'),))
+        await _turn()
+
+        assert not result.done()
+        assert result.status == 'pending'
+        assert result.pending_batches == []
+
+        writer.release((('C', '1'),))
+        finished = await asyncio.wait_for(result, 1)
+        assert finished.status == 'completed'
+        assert finished.natural_end
+        assert finished.input_finished
+        assert not finished.write_failed
+        assert all(batch.acknowledged for batch in finished.batches)
+        assert {record.value for record in finished.records} == {
+            ('A', '1'), ('B', '1'), ('C', '1'), ('A', '2')}
+        for record in finished.records:
+            assert record.delivered
+            assert record.acknowledged
+            assert record.round_id == finished.round_id
+            assert record.batch_id is not None
+
+    _run(main())
+
+
+def test_replay_timeout_and_eof_deliver_once():
+    async def main():
+        from tornado.ioloop import IOLoop
+        from streamz.core import ReplayRound
+
+        stream = Source(asynchronous=True, loop=IOLoop.current())
+        partitioned = stream.partition(2, timeout=10, key=lambda x: x[0])
+        writer = ControlledWriter()
+        partitioned.sink(writer)
+
+        round = ReplayRound(1, loop=IOLoop.current())
+        for value in [('A', '1'), ('B', '1'), ('C', '1'), ('A', '2')]:
+            record = round.new_record(value)
+            await asyncio.gather(*partitioned.update(
+                value, metadata=[{'replay': round, 'record': record}]))
+
+        # A fills at A2.  Now let C's timeout deliver before EOF.
+        callback = partitioned._round_callbacks[round.round_id].pop('C')
+        callback.cancel()
+        partitioned._flush_round(round.round_id, 'C', reason='timeout')
+        await _started(writer, 2)
+        assert writer.calls == [
+            (('A', '1'), ('A', '2')),
+            (('C', '1'),),
+        ]
+
+        # EOF then owns only B's tail; it must not deliver C again or an
+        # empty C batch.
+        round.natural_end = True
+        round.input_ended = True
+        partitioned._finalize_round(round)
+        await _started(writer, 3)
+        assert writer.calls.count((('C', '1'),)) == 1
+        assert writer.calls.count((('B', '1'),)) == 1
+        assert writer.calls.count((('A', '1'), ('A', '2'))) == 1
+        for values in writer.calls:
+            writer.release(values)
+        await _turn(lambda: all(batch.done for batch in round.batches))
+        assert round.write_failures == []
+        assert [batch.values for batch in round.batches].count(
+            (('C', '1'),)) == 1
+        assert len(round.batches) == 3
+
+    _run(main())
+
+
+def test_replay_input_error_keeps_tails_unwritten():
+    async def main():
+        def items():
+            yield ('A', '1')
+            yield ('B', '1')
+            yield ('C', '1')
+            yield ('A', '2')
+            raise ValueError('source broke')
+
+        source, partitioned, writer = _replay_graph(items())
+        result = source.start()
+        await _turn(lambda: result.round.input_error is not None)
+        await _started(writer, 1)
+
+        assert writer.calls == [(('A', '1'), ('A', '2'))]
+        writer.release((('A', '1'), ('A', '2')))
+        finished = await asyncio.wait_for(result, 1)
+
+        assert finished.status == 'input_error'
+        assert isinstance(finished.input_error, ValueError)
+        assert not finished.natural_end
+        assert not finished.success
+        assert {batch.values for batch in finished.pending_batches} == {
+            (('B', '1'),), (('C', '1'),)}
+        assert all(not batch.delivered for batch in finished.pending_batches)
+        # Undelivered tails are retained in the round result but never sent.
+        assert writer.calls == [(('A', '1'), ('A', '2'))]
+        for batch in finished.pending_batches:
+            assert all(not record.delivered for record in batch.records)
+
+    _run(main())
+
+
+def test_replay_write_failure_keeps_lineage():
+    async def main():
+        source, partitioned, writer = _replay_graph(
+            [('A', '1'), ('B', '1'), ('C', '1'), ('A', '2')])
+        result = source.start()
+        await _started(writer, 3)
+
+        writer.release((('A', '1'), ('A', '2')))
+        writer.release((('B', '1'),))
+        writer.release((('C', '1'),), error=RuntimeError('write broke'))
+        finished = await asyncio.wait_for(result, 1)
+
+        assert finished.status == 'write_error'
+        assert not finished.success
+        assert len(finished.write_failures) == 1
+        failed = finished.write_failures[0]
+        assert failed.round_id == finished.round_id
+        assert failed.values == (('C', '1'),)
+        assert isinstance(failed.error, RuntimeError)
+        record = next(record for record in finished.records
+                      if record.value == ('C', '1'))
+        assert record.delivered
+        assert not record.acknowledged
+        assert record.batch is failed
+        assert isinstance(record.error, RuntimeError)
+
+    _run(main())
+
+
+def test_replay_old_round_cannot_touch_new_round():
+    async def main():
+        source, partitioned, first_writer = _replay_graph(
+            [('A', '1'), ('B', '1'), ('C', '1'), ('A', '2')])
+        first = source.start()
+        await _started(first_writer, 3)
+
+        # The first day has consumed its input and is waiting on receipts.
+        await _turn(lambda: first.round.input_ended)
+        first_values = set(record.value for record in first.records)
+        assert first.status == 'pending'
+
+        # Start the next day's replay while the first one's writes are open.
+        source._iterable = [('A', '3'), ('B', '2'), ('C', '2'), ('A', '4')]
+        second = source.start()
+        await _started(first_writer, 6)
+
+        assert _values(first) == [
+            (('A', '1'), ('A', '2')),
+            (('B', '1'),),
+            (('C', '1'),),
+        ]
+        assert _values(second) == [
+            (('A', '3'), ('A', '4')),
+            (('B', '2'),),
+            (('C', '2'),),
+        ]
+        # The old timeout handles were canceled and the old tail cannot be
+        # delivered again into the shared partition.
+        assert len(first_writer.calls) == 6
+        old_values = {('A', '1'), ('B', '1'), ('C', '1'), ('A', '2')}
+        for values in first_writer.calls:
+            if values in old_values:
+                first_writer.release(values)
+        await _turn()
+        assert not second.done()
+        assert _values(second) == [
+            (('A', '3'), ('A', '4')),
+            (('B', '2'),),
+            (('C', '2'),),
+        ]
+
+        for values in first_writer.calls:
+            if values not in old_values:
+                first_writer.release(values)
+        one = await asyncio.wait_for(first, 1)
+        two = await asyncio.wait_for(second, 1)
+        assert one.status == 'completed'
+        assert two.status == 'completed'
+        assert one.round_id != two.round_id
+        assert {record.value for record in one.records} == old_values
+        assert {record.value for record in two.records} == {
+            ('A', '3'), ('B', '2'), ('C', '2'), ('A', '4')}
+
+    _run(main())

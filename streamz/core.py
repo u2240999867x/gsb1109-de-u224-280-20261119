@@ -2,7 +2,7 @@ import asyncio
 import concurrent.futures
 from collections import deque, defaultdict
 from datetime import timedelta
-from itertools import chain
+from itertools import chain, count
 import functools
 import logging
 import threading
@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 _io_loops = []
+
+_replay_round_ids = count(1)
 
 
 def get_io_loop(asynchronous=None):
@@ -1076,6 +1078,393 @@ class slice(Stream):
                 upstream._remove_downstream(self)
 
 
+class ReplayRecord:
+    """One input item of a replay round.
+
+    A record is created by :class:`~streamz.sources.from_iterable` before the
+    item is emitted.  Once a :class:`partition` groups it into a batch the
+    record links back to that batch, so callers can answer which round and
+    which batch an input belonged to and whether its write was acknowledged.
+    """
+
+    def __init__(self, round, index, value):
+        self.round = round
+        self.round_id = round.round_id
+        self.index = index
+        self.sequence = index
+        self.value = value
+        self.item = value
+        self.payload = value
+        self.batch = None
+        self.delivered = False
+        self.acknowledged = False
+        self.receipt = False
+        self.error = None
+        self.write_error = None
+
+    @property
+    def batch_id(self):
+        return self.batch.batch_id if self.batch is not None else None
+
+    @property
+    def key(self):
+        return self.batch.key if self.batch is not None else None
+
+    @property
+    def pending(self):
+        return not self.delivered
+
+    @property
+    def undelivered(self):
+        return not self.delivered
+
+    @property
+    def status(self):
+        if not self.delivered:
+            return 'pending'
+        if self.error is not None:
+            return 'write_failed'
+        if self.acknowledged:
+            return 'acknowledged'
+        return 'writing'
+
+    def _assign_batch(self, batch):
+        if self.batch is not None and self.batch is not batch:
+            raise RuntimeError("A replay record cannot belong to two batches")
+        self.batch = batch
+
+    def _mark_delivered(self, batch):
+        self._assign_batch(batch)
+        self.delivered = True
+
+    def _mark_acknowledged(self):
+        self.acknowledged = True
+        self.receipt = True
+        self.error = None
+        self.write_error = None
+
+    def _mark_failed(self, error):
+        self.acknowledged = False
+        self.receipt = False
+        self.error = error
+        self.write_error = error
+
+    def __repr__(self):
+        return '<ReplayRecord round=%s index=%s batch=%s status=%s>' % (
+            self.round_id, self.index, self.batch_id, self.status)
+
+
+class ReplayBatch:
+    """A non-empty group of records delivered by a :class:`partition`."""
+
+    def __init__(self, round, key, records, reason, partition, sequence):
+        self.round = round
+        self.round_id = round.round_id
+        self.key = key
+        self.store = key
+        self.records = tuple(records)
+        self.reason = reason
+        self.partition = partition
+        self.sequence = sequence
+        self.batch_id = '%s:%s' % (round.round_id, sequence)
+        self.id = self.batch_id
+        self.delivered = False
+        self.pending = False
+        self.acknowledged = False
+        self.receipt = False
+        self.error = None
+        self.errors = []
+        self.task = None
+        self.metadata = None
+
+    @property
+    def values(self):
+        return tuple(record.value for record in self.records)
+
+    @property
+    def items(self):
+        return self.values
+
+    @property
+    def complete(self):
+        return self.acknowledged
+
+    @property
+    def done(self):
+        return self.acknowledged or self.error is not None
+
+    @property
+    def status(self):
+        if self.pending:
+            return 'undelivered'
+        if self.error is not None:
+            return 'write_failed'
+        if self.acknowledged:
+            return 'acknowledged'
+        if self.delivered:
+            return 'writing'
+        return 'pending'
+
+    def __repr__(self):
+        return '<ReplayBatch id=%s key=%r values=%r status=%s>' % (
+            self.batch_id, self.key, self.values, self.status)
+
+
+class ReplayResult:
+    """The awaitable result of one replay round.
+
+    The object is both a snapshot and an awaitable.  ``await result`` (or
+    ``await result.wait()``) waits until the round's input has ended and every
+    write that was actually initiated for that round has received a receipt.
+    A late timeout callback or receipt from another round cannot resolve this
+    result.
+    """
+
+    _terminal = {'completed', 'input_error', 'write_error', 'stopped'}
+
+    def __init__(self, round):
+        self.round = round
+        self.round_id = round.round_id
+        self._done = False
+        self._future = concurrent.futures.Future()
+
+    def __await__(self):
+        return asyncio.wrap_future(self._future).__await__()
+
+    async def wait(self):
+        await asyncio.wrap_future(self._future)
+        return self
+
+    def __call__(self):
+        return self
+
+    def _resolve(self):
+        if self._done:
+            return
+        self._done = True
+        if not self._future.done():
+            self._future.set_result(self)
+
+    def done(self):
+        return self._done
+
+    @property
+    def is_done(self):
+        return self._done
+
+    @property
+    def status(self):
+        if not self._done:
+            return 'pending'
+        if self.round.input_error is not None:
+            return 'input_error'
+        if self.round.write_failures:
+            return 'write_error'
+        if not self.round.natural_end:
+            return 'stopped'
+        return 'completed'
+
+    @property
+    def state(self):
+        return self.status
+
+    @property
+    def success(self):
+        return self.status == 'completed'
+
+    @property
+    def ok(self):
+        return self.success
+
+    @property
+    def succeeded(self):
+        return self.success
+
+    @property
+    def failed(self):
+        return self._done and not self.success
+
+    @property
+    def natural_end(self):
+        return self.round.natural_end
+
+    @property
+    def input_finished(self):
+        return self.round.input_ended and self.round.input_error is None
+
+    @property
+    def input_completed(self):
+        return self.input_finished
+
+    @property
+    def input_error(self):
+        return self.round.input_error
+
+    @property
+    def error(self):
+        if self.round.input_error is not None:
+            return self.round.input_error
+        if self.round.write_failures:
+            return self.round.write_failures[0].error
+        return None
+
+    @property
+    def write_error(self):
+        return self.error if self.round.input_error is None else None
+
+    @property
+    def write_failed(self):
+        return bool(self.round.write_failures)
+
+    @property
+    def input_failed(self):
+        return self.round.input_error is not None
+
+    @property
+    def completed(self):
+        return self.status == 'completed'
+
+    @property
+    def write_failures(self):
+        return list(self.round.write_failures)
+
+    @property
+    def write_errors(self):
+        return [batch.error for batch in self.round.write_failures]
+
+    @property
+    def failed_batches(self):
+        return list(self.round.write_failures)
+
+    def raise_for_status(self):
+        """Raise the input error or first write error, if any."""
+        if self.round.input_error is not None:
+            raise self.round.input_error
+        if self.round.write_failures:
+            raise self.round.write_failures[0].error
+        return self
+
+    @property
+    def errors(self):
+        errors = []
+        if self.round.input_error is not None:
+            errors.append(self.round.input_error)
+        errors.extend(batch.error for batch in self.round.write_failures)
+        return errors
+
+    @property
+    def batches(self):
+        return list(self.round.batches)
+
+    @property
+    def delivered_batches(self):
+        return [batch for batch in self.round.batches if batch.delivered]
+
+    @property
+    def pending_batches(self):
+        return [batch for batch in self.round.batches if batch.pending]
+
+    @property
+    def undelivered_batches(self):
+        return self.pending_batches
+
+    @property
+    def records(self):
+        return list(self.round.records)
+
+    @property
+    def transactions(self):
+        return self.records
+
+    @property
+    def delivered_records(self):
+        return [record for record in self.round.records if record.delivered]
+
+    @property
+    def pending_records(self):
+        return [record for record in self.round.records if not record.delivered]
+
+    @property
+    def undelivered_records(self):
+        return self.pending_records
+
+    @property
+    def acknowledged_records(self):
+        return [record for record in self.round.records if record.acknowledged]
+
+    @property
+    def failed_records(self):
+        return [record for record in self.round.records if record.error is not None]
+
+    def __repr__(self):
+        return '<ReplayResult round=%s status=%s batches=%d records=%d>' % (
+            self.round_id, self.status, len(self.round.batches),
+            len(self.round.records))
+
+
+class ReplayRound:
+    """Bookkeeping shared by a finite source and its partition chain."""
+
+    def __init__(self, round_id, loop=None, iterable=None):
+        self.round_id = round_id
+        self.id = round_id
+        self.sequence = round_id
+        self.loop = loop
+        self.iterable = iterable
+        self.records = []
+        self.batches = []
+        self.partitions = set()
+        self.write_failures = []
+        self.input_error = None
+        self.input_ended = False
+        self.natural_end = False
+        self.delivery_closed = False
+        self._stop_requested = False
+        self._closed = False
+        self._task_set = set()
+        self._writes_started = 0
+        self._writes_settled = 0
+        self._batch_sequence = 0
+        self.result = ReplayResult(self)
+
+    def new_record(self, value):
+        record = ReplayRecord(self, len(self.records), value)
+        self.records.append(record)
+        return record
+
+    def new_batch(self, key, records, reason, partition):
+        self._batch_sequence += 1
+        batch = ReplayBatch(self, key, records, reason, partition,
+                            self._batch_sequence)
+        self.batches.append(batch)
+        for record in records:
+            record._assign_batch(batch)
+        return batch
+
+    def add_write_failure(self, batch):
+        if batch not in self.write_failures:
+            self.write_failures.append(batch)
+
+    def register_task(self, task):
+        self._task_set.add(task)
+        self._writes_started += 1
+
+        def _done(_):
+            self._task_set.discard(task)
+            self._writes_settled += 1
+        task.add_done_callback(_done)
+        return task
+
+    async def wait_writes(self):
+        while self._task_set:
+            await asyncio.gather(*list(self._task_set),
+                                 return_exceptions=True)
+
+    def __repr__(self):
+        return '<ReplayRound id=%s records=%d batches=%d>' % (
+            self.round_id, len(self.records), len(self.batches))
+
+
 @Stream.register_api()
 class partition(Stream):
     """ Partition stream into tuples of equal size
@@ -1092,6 +1481,15 @@ class partition(Stream):
         Emit items with the same key together as a separate partition.
         If ``key`` is callable, partition will be identified by ``key(x)``,
         otherwise by ``x[key]``. Defaults to ``None``.
+
+    Notes
+    -----
+    When the incoming data carries replay metadata (as emitted by
+    :class:`~streamz.sources.from_iterable`), buffers and timeout callbacks
+    are kept separately for each replay round.  This allows a new replay to
+    start while writes from the previous round are still in flight; late
+    callbacks or receipts from the old round can then never flush or mutate
+    the new round.
 
     Examples
     --------
@@ -1127,6 +1525,11 @@ class partition(Stream):
         self._buffer = defaultdict(lambda: [])
         self._metadata_buffer = defaultdict(lambda: [])
         self._callbacks = {}
+        self._round_buffers = {}
+        self._round_metadata = {}
+        self._round_records = {}
+        self._round_callbacks = {}
+        self._rounds = {}
         kwargs["ensure_io_loop"] = True
         Stream.__init__(self, upstream, **kwargs)
 
@@ -1137,32 +1540,259 @@ class partition(Stream):
             return self._key(x)
         return x[self._key]
 
+    def _get_replay_metadata(self, metadata):
+        if not metadata:
+            return None, None
+        for entry in metadata:
+            if isinstance(entry, dict) and 'replay' in entry:
+                return entry['replay'], entry
+        return None, None
+
+    def _register_round(self, round):
+        if round.round_id in self._rounds:
+            return
+        self._rounds[round.round_id] = round
+        round.partitions.add(self)
+        self._round_buffers[round.round_id] = defaultdict(list)
+        self._round_metadata[round.round_id] = defaultdict(list)
+        self._round_records[round.round_id] = defaultdict(list)
+        self._round_callbacks[round.round_id] = {}
+
+    def _flush_round_key(self, round_id, key):
+        return self._flush_round(round_id, key, reason='full')
+
+    def _flush_round(self, round_id, key, reason='timeout'):
+        buffers = self._round_buffers.get(round_id)
+        if buffers is None:
+            return ()
+        values = buffers.get(key)
+        if not values:
+            return ()
+        round = self._rounds[round_id]
+        if round.delivery_closed:
+            return ()
+        callback = self._round_callbacks[round_id].pop(key, None)
+        if callback is not None:
+            callback.cancel()
+        record_buffer = self._round_records[round_id].pop(key, None)
+        values = buffers.pop(key, [])
+        metadata_result = self._round_metadata[round_id].pop(key, [])
+        if not values:
+            return ()
+        if not record_buffer:
+            record_buffer = []
+        if len(record_buffer) < len(values):
+            record_buffer = list(record_buffer) + [
+                round.new_record(value)
+                for value in values[len(record_buffer):]
+            ]
+        batch = round.new_batch(key, record_buffer, reason, self)
+        batch.metadata = list(metadata_result)
+        tuple_values = tuple(values)
+
+        async def deliver():
+            try:
+                result = self._emit(tuple_values, list(metadata_result))
+                if gen.is_future(result):
+                    outcomes = [await result]
+                else:
+                    outcomes = await asyncio.gather(*result,
+                                                    return_exceptions=True)
+                errors = [outcome for outcome in outcomes
+                          if isinstance(outcome, BaseException)]
+                if errors:
+                    raise errors[0]
+            except Exception as exc:
+                batch.error = exc
+                batch.errors = [exc]
+                for record in record_buffer:
+                    record._mark_failed(exc)
+                round.add_write_failure(batch)
+            else:
+                batch.acknowledged = True
+                batch.receipt = True
+                for record in record_buffer:
+                    record._mark_acknowledged()
+            finally:
+                self._release_refs(metadata_result)
+
+        batch.delivered = True
+        batch.pending = False
+        for record in record_buffer:
+            record._mark_delivered(batch)
+        task = self.loop.asyncio_loop.create_task(deliver())
+        batch.task = task
+        round.register_task(task)
+        return batch
+
+    def _round_timeout_callback(self, round_id, key):
+        self._flush_round(round_id, key, reason='timeout')
+
+    def _pending_round_batches(self, round, reason):
+        """Freeze non-empty tails as undelivered batches without writing."""
+        pending = []
+        buffers = self._round_buffers.get(round.round_id)
+        if buffers is None:
+            return pending
+        records_by_key = self._round_records[round.round_id]
+        for key in list(buffers):
+            values = buffers.get(key) or []
+            records = records_by_key.get(key) or []
+            if not values:
+                buffers.pop(key, None)
+                records_by_key.pop(key, None)
+                continue
+            records = list(records)
+            if len(records) < len(values):
+                records += [
+                    round.new_record(value)
+                    for value in values[len(records):]
+                ]
+            batch = round.new_batch(key, records[:len(values)], reason, self)
+            metadata = self._round_metadata[round.round_id].pop(key, [])
+            batch.metadata = list(metadata)
+            # No write is started for a frozen tail.  Drop the refs that
+            # were retained when the items entered the partition.
+            self._release_refs(metadata)
+            batch.pending = True
+            batch.delivered = False
+            for record in batch.records:
+                record.delivered = False
+            pending.append(batch)
+            buffers.pop(key, None)
+            records_by_key.pop(key, None)
+        self._round_metadata[round.round_id].clear()
+        for callback in list(self._round_callbacks[round.round_id].values()):
+            callback.cancel()
+        self._round_callbacks[round.round_id].clear()
+        return pending
+
+    def _finalize_round(self, round):
+        """Deliver every non-empty tail buffer belonging to ``round``.
+
+        Empty keys never produce a batch, and this method is idempotent so
+        it cannot deliver the same tail on both EOF and a timed callback.
+        """
+        if round.round_id not in self._rounds:
+            return []
+        if round.delivery_closed:
+            return []
+        batches = []
+        reason = 'eof' if round.natural_end else 'input_error'
+        buffers = self._round_buffers[round.round_id]
+        records_by_key = self._round_records[round.round_id]
+        # Keep insertion order to preserve in-store delivery order, while
+        # still covering keys present in only one of the two containers.
+        keys = list(buffers)
+        keys.extend(key for key in records_by_key if key not in buffers)
+        for key in keys:
+            batch = self._flush_round(round.round_id, key, reason=reason)
+            if batch:
+                batches.append(batch)
+        round.delivery_closed = True
+        for callback in list(self._round_callbacks[round.round_id].values()):
+            callback.cancel()
+        self._round_callbacks[round.round_id].clear()
+        return batches
+
+    def _close_round_input(self, round, reason='input_error'):
+        if round.round_id not in self._rounds:
+            return []
+        if round.delivery_closed:
+            return []
+        pending = self._pending_round_batches(round, reason)
+        round.delivery_closed = True
+        return pending
+
+    @property
+    def replay_rounds(self):
+        return list(self._rounds.values())
+
+    @property
+    def replay_records(self):
+        records = []
+        for round in self._rounds.values():
+            records.extend(round.records)
+        return records
+
+    @property
+    def replay_batches(self):
+        return [batch for round in self._rounds.values()
+                for batch in round.batches]
+
+    def record_for(self, value):
+        """Return the replay record for ``value``, if this partition saw it."""
+        for round in self._rounds.values():
+            for record in round.records:
+                if record.value is value:
+                    return record
+        return None
+
+    def _discard_round(self, round):
+        if round.round_id not in self._rounds:
+            return
+        for callback in list(self._round_callbacks[round.round_id].values()):
+            callback.cancel()
+        self._round_callbacks[round.round_id].clear()
+        self._round_buffers.pop(round.round_id, None)
+        self._round_metadata.pop(round.round_id, None)
+        self._round_records.pop(round.round_id, None)
+
     @gen.coroutine
     def _flush(self, key):
         result, self._buffer[key] = self._buffer[key], []
         metadata_result, self._metadata_buffer[key] = self._metadata_buffer[key], []
+        if not result:
+            return
         yield self._emit(tuple(result), list(metadata_result))
         self._release_refs(metadata_result)
 
     @gen.coroutine
     def update(self, x, who=None, metadata=None):
+        round, replay_metadata = self._get_replay_metadata(metadata)
         self._retain_refs(metadata)
         key = self._get_key(x)
-        buffer = self._buffer[key]
-        metadata_buffer = self._metadata_buffer[key]
+        if round is None:
+            buffer = self._buffer[key]
+            metadata_buffer = self._metadata_buffer[key]
+            buffer.append(x)
+            if isinstance(metadata, list):
+                metadata_buffer.extend(metadata)
+            else:
+                metadata_buffer.append(metadata)
+            if len(buffer) == self.n:
+                if self._timeout is not None and self.n > 1:
+                    self._callbacks[key].cancel()
+                yield self._flush(key)
+                return
+            if len(buffer) == 1 and self._timeout is not None:
+                self._callbacks[key] = self.loop.call_later(
+                    self._timeout, self._flush, key
+                )
+            return
+
+        self._register_round(round)
+        buffers = self._round_buffers[round.round_id]
+        metadata_buffers = self._round_metadata[round.round_id]
+        records = self._round_records[round.round_id]
+        callbacks = self._round_callbacks[round.round_id]
+        buffer = buffers[key]
+        metadata_buffer = metadata_buffers[key]
         buffer.append(x)
+        record = replay_metadata.get('record') if replay_metadata else None
+        if record is not None:
+            records[key].append(record)
         if isinstance(metadata, list):
             metadata_buffer.extend(metadata)
         else:
             metadata_buffer.append(metadata)
         if len(buffer) == self.n:
-            if self._timeout is not None and self.n > 1:
-                self._callbacks[key].cancel()
-            yield self._flush(key)
+            self._flush_round(round.round_id, key, reason='full')
             return
         if len(buffer) == 1 and self._timeout is not None:
-            self._callbacks[key] = self.loop.call_later(
-                self._timeout, self._flush, key
+            callbacks[key] = self.loop.call_later(
+                self._timeout, self._round_timeout_callback,
+                round.round_id, key
             )
 
 
