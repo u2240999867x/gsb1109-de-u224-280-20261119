@@ -303,6 +303,13 @@ Bug Fixes
   allocations when combining Dask arrays with different dtypes (:issue:`10928`,
   :pull:`11736`).
   By `Ge Li <https://github.com/galleonli>`_.
+- :py:func:`concat` now preserves ``uint64`` label variables when some datasets
+  store them as ``int64`` (e.g. from older file exporters). Previously the mixed
+  dtypes were promoted to ``float64``, which lost precision for labels above
+  ``2**53``. Fill values added while aligning or concatenating are validated
+  against the unsigned range, and invalid negative labels are reported with
+  their position. Variables that do not mix the two dtypes keep their previous
+  promotion behaviour.
 - :py:meth:`DataArray.str` methods ``center``, ``ljust``, ``rjust``, ``zfill``, ``pad``,
   ``split``, ``rsplit``, ``partition``, ``rpartition`` and ``format`` no longer
   raise ``AttributeError`` on object-dtype arrays of strings, such as string

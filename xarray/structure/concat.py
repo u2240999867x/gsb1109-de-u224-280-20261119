@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Hashable, Iterable
+import functools
+from collections.abc import Hashable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Literal, Union, overload
 
 import numpy as np
@@ -11,9 +12,10 @@ from xarray.core.coordinates import Coordinates
 from xarray.core.duck_array_ops import lazy_array_equiv
 from xarray.core.indexes import Index, PandasIndex
 from xarray.core.types import T_DataArray, T_Dataset, T_Variable
-from xarray.core.utils import emit_user_level_warning
+from xarray.core.utils import emit_user_level_warning, is_dict_like
 from xarray.core.variable import Variable, _as_shared_dtype
 from xarray.core.variable import concat as concat_vars
+from xarray.namedarray.pycompat import is_chunked_array
 from xarray.structure.alignment import align, reindex_variables
 from xarray.structure.merge import (
     _VALID_COMPAT,
@@ -562,6 +564,251 @@ def _calc_concat_over(
     return concat_over, equals, concat_dim_lengths, skip_merge
 
 
+# Device label columns are written by two generations of exporters: the newer
+# one emits uint64 while the older one stores the same non-negative labels as
+# int64. Mixing both in one concatenation would promote the result to float64
+# (losing precision above 2**53), so such columns are handled as exact integers
+# and converted back to uint64. Variables that do not mix the two dtypes keep
+# xarray's usual type promotion rules.
+_LABEL_ITEM_SIZE = 8
+
+
+class _MissingLabel:
+    """Sentinel marking positions that were added while aligning labels."""
+
+    def __repr__(self) -> str:
+        return "<missing label>"
+
+
+_MISSING_LABEL = _MissingLabel()
+_MISSING_LABEL_FILL = np.array(_MISSING_LABEL, dtype=object)
+
+
+def _is_uint64_dtype(dtype: np.dtype) -> bool:
+    return dtype.kind == "u" and dtype.itemsize == _LABEL_ITEM_SIZE
+
+
+def _is_int64_dtype(dtype: np.dtype) -> bool:
+    return dtype.kind == "i" and dtype.itemsize == _LABEL_ITEM_SIZE
+
+
+def _label_fill_value(fill_value: Any, name: Hashable) -> Any:
+    if is_dict_like(fill_value):
+        return fill_value.get(name, dtypes.NA)
+    return fill_value
+
+
+def _mixed_label_names(datasets: list[T_Dataset], dim_name: Hashable) -> set[Hashable]:
+    """Names of non-index variables that mix uint64 and int64 and get concatenated."""
+    concat_over_existing_dim = any(dim_name in ds.dims for ds in datasets)
+    dtypes_by_name: dict[Hashable, set[np.dtype]] = {}
+    for ds in datasets:
+        for name, var in ds.variables.items():
+            if name in ds._indexes:
+                # Index coordinates cannot be represented as object arrays.
+                continue
+            if concat_over_existing_dim and dim_name not in var.dims:
+                # This variable is not concatenated along ``dim_name``; leave it
+                # to the usual merge/promotion rules.
+                continue
+            dtypes_by_name.setdefault(name, set()).add(var.dtype)
+
+    return {
+        name
+        for name, dtypes in dtypes_by_name.items()
+        if any(_is_uint64_dtype(dtype) for dtype in dtypes)
+        and any(_is_int64_dtype(dtype) for dtype in dtypes)
+    }
+
+
+def _fill_value_with_missing_labels(
+    fill_value: Any,
+    names: Iterable[Hashable],
+    mixed_labels: set[Hashable],
+) -> dict[Hashable, Any]:
+    """Build a per-variable fill mapping, marking mixed label gaps specially.
+
+    Mixed label gaps get ``_MISSING_LABEL`` instead of the user's fill so that
+    an invalid fill value only raises when a gap actually has to be filled.
+    Every other variable keeps the user-supplied fill (a scalar applies to all
+    names, a mapping is looked up by name as usual).
+    """
+    result: dict[Hashable, Any] = {}
+    for name in names:
+        if name in mixed_labels:
+            result[name] = _MISSING_LABEL_FILL
+        elif is_dict_like(fill_value):
+            result[name] = fill_value.get(name, dtypes.NA)
+        else:
+            result[name] = fill_value
+    return result
+
+
+def _to_object_dtype(values: Any) -> np.typing.NDArray[np.object_]:
+    return np.asarray(values).astype(object)
+
+
+def _as_exact_integer_labels(var: Variable) -> Variable:
+    """Store 64-bit integer labels as Python ints so no value gets wrapped."""
+    from xarray.coding.common import lazy_elemwise_func
+
+    if var.dtype.kind not in "iu":
+        return var
+    if is_chunked_array(var.data):
+        data = lazy_elemwise_func(var.data, _to_object_dtype, np.dtype(object))
+        return var._replace(data=data)
+    return var._replace(data=var.data.astype(object))
+
+
+def _as_exact_integer_labels_in(ds: T_Dataset, names: Iterable[Hashable]) -> T_Dataset:
+    variables = dict(ds.variables)
+    changed = False
+    for name in names:
+        var = variables.get(name)
+        if var is None:
+            continue
+        new_var = _as_exact_integer_labels(var)
+        if new_var is not var:
+            variables[name] = new_var
+            changed = True
+    if not changed:
+        return ds
+    return ds._replace(variables=variables)
+
+
+def _check_label_fill_value(fill_value: Any, name: Hashable) -> int | None:
+    """Return ``fill_value`` as an int, or raise if it cannot fill uint64."""
+    if fill_value is dtypes.NA or fill_value is None:
+        return None
+    if isinstance(fill_value, float) and np.isnan(fill_value):
+        raise ValueError(
+            f"fill_value {fill_value!r} is not valid for label variable "
+            f"{name!r}: labels are stored as uint64 and cannot hold missing "
+            "values, provide a non-negative integer fill_value"
+        )
+    if isinstance(fill_value, bool) or not isinstance(fill_value, int | np.integer):
+        raise ValueError(
+            f"fill_value {fill_value!r} is not valid for label variable "
+            f"{name!r}: labels are stored as uint64 and need a non-negative "
+            "integer fill_value"
+        )
+    value = int(fill_value)
+    if value < 0:
+        raise ValueError(
+            f"fill_value {fill_value!r} is not valid for label variable "
+            f"{name!r}: labels are stored as uint64 and cannot be negative"
+        )
+    if value > np.iinfo(np.uint64).max:
+        raise ValueError(
+            f"fill_value {fill_value!r} is not valid for label variable "
+            f"{name!r}: labels are stored as uint64 and it does not fit in "
+            "that range"
+        )
+    return value
+
+
+def _format_label_location(
+    position: tuple[int, ...],
+    dims: tuple[Hashable, ...],
+    coord_values: tuple[Any, ...],
+) -> str:
+    parts = []
+    for dim, values, index in zip(dims, coord_values, position, strict=False):
+        if values is not None and index < len(values):
+            label = values[index]
+            label = label.item() if isinstance(label, np.generic) else label
+            parts.append(f"{dim}={label!r}")
+        else:
+            parts.append(f"{dim} position {index}")
+    return ", ".join(parts) if parts else "the concatenated values"
+
+
+def _labels_to_uint64(
+    values: Any,
+    name: Hashable,
+    fill_value: Any,
+    dims: tuple[Hashable, ...],
+    coord_values: tuple[Any, ...],
+) -> np.typing.NDArray[np.uint64]:
+    """Replace missing-label sentinels and convert labels to uint64.
+
+    Negative entries that survive (i.e. are real records, not fill values) are
+    reported as invalid labels. Because this runs on the materialized values it
+    raises identically for eagerly loaded and chunked data.
+    """
+    array = np.asarray(values, dtype=object)
+    # Coordinate labels are only meaningful if the block still spans the whole
+    # dimension (e.g. after slicing the caller may see a sub-range).
+    coords = tuple(
+        coord if coord is not None and len(coord) == size else None
+        for coord, size in zip(coord_values, array.shape, strict=False)
+    )
+    flat = array.ravel()
+    used_fill = any(isinstance(value, _MissingLabel) for value in flat)
+    if used_fill:
+        replacement = _check_label_fill_value(fill_value, name)
+        if replacement is None:
+            raise ValueError(
+                f"label variable {name!r} needs a fill_value, but none that is "
+                "valid for uint64 labels was provided"
+            )
+        missing = np.array(
+            [isinstance(value, _MissingLabel) for value in flat], dtype=bool
+        ).reshape(array.shape)
+        array = np.where(missing, np.asarray(replacement, dtype=object), array)
+
+    # Validate the values (including any replacement fill) before casting.
+    for value, raw_position in zip(
+        array.ravel(), np.ndindex(*array.shape), strict=True
+    ):
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, float) and np.isnan(value):
+            location = _format_label_location(raw_position, dims, coords)
+            raise ValueError(
+                f"label variable {name!r} contains a missing value at "
+                f"{location}, which cannot be represented as uint64; provide "
+                "an integer fill_value"
+            )
+        if isinstance(value, int | np.integer) and value < 0:
+            location = _format_label_location(raw_position, dims, coords)
+            raise ValueError(
+                f"label variable {name!r} contains the invalid negative value "
+                f"{value!r} at {location}, which cannot be represented as "
+                "uint64"
+            )
+    return array.astype(np.uint64)
+
+
+def _finalize_label_variable(
+    var: Variable,
+    name: Hashable,
+    fill_value: Any,
+    coordinates: Mapping[Hashable, Any],
+) -> Variable:
+    """Convert an exact-integer label column back to uint64, validating values.
+
+    Validation happens when the values are materialized, not while building the
+    result. That gives eagerly loaded and chunked inputs identical behaviour
+    (the same labels or the same error when taking the result's values) and
+    keeps valid chunked data readable on demand.
+    """
+    from xarray.coding.common import lazy_elemwise_func
+
+    coord_values = tuple(
+        None if dim not in coordinates else np.asarray(coordinates[dim])
+        for dim in var.dims
+    )
+    func = functools.partial(
+        _labels_to_uint64,
+        name=name,
+        fill_value=fill_value,
+        dims=var.dims,
+        coord_values=coord_values,
+    )
+    return var._replace(data=lazy_elemwise_func(var.data, func, np.uint64))
+
+
 # determine dimensional coordinate names and a dict mapping name to DataArray
 def _parse_datasets(
     datasets: list[T_Dataset],
@@ -640,13 +887,39 @@ def _dataset_concat(
 
     dim_name, index = _calc_concat_dim_index(dim)
 
+    # Columns mixing uint64 and int64 labels (the two exporter generations) are
+    # risky under xarray's usual promotion: mixed int64/uint64 becomes float64,
+    # silently losing precision for labels above 2**53. Keep such columns as
+    # exact Python integers through alignment and concatenation, then convert
+    # back to uint64 once the result is assembled.
+    mixed_labels = _mixed_label_names(datasets, dim_name)
+    label_fill_values = {
+        name: _label_fill_value(fill_value, name) for name in mixed_labels
+    }
+    if mixed_labels:
+        datasets = [_as_exact_integer_labels_in(ds, mixed_labels) for ds in datasets]
+        all_names = set().union(*(ds.variables for ds in datasets))
+        align_fill_value: Any = _fill_value_with_missing_labels(
+            fill_value, all_names, mixed_labels
+        )
+    else:
+        align_fill_value = fill_value
+
     # Make sure we're working on a copy (we'll be loading variables)
     datasets = [ds.copy() for ds in datasets]
     datasets = list(
         align(
-            *datasets, join=join, copy=False, exclude=[dim_name], fill_value=fill_value
+            *datasets,
+            join=join,
+            copy=False,
+            exclude=[dim_name],
+            fill_value=align_fill_value,
         )
     )
+    if mixed_labels:
+        # Values added by alignment (for stations missing in some datasets) are
+        # materialized as Python ints too, so the final conversion sees them.
+        datasets = [_as_exact_integer_labels_in(ds, mixed_labels) for ds in datasets]
 
     all_dims, dim_coords, dims_sizes, coord_names, data_names, vars_order = (
         _parse_datasets(datasets)
@@ -826,7 +1099,9 @@ def _dataset_concat(
                     combined_var = reindex_variables(
                         variables={name: combined_var},
                         dim_pos_indexers={dim_name: variable_reindexer},
-                        fill_value=fill_value,
+                        fill_value=(
+                            _MISSING_LABEL_FILL if name in mixed_labels else fill_value
+                        ),
                     )[name]
                 result_vars[name] = combined_var
 
@@ -861,6 +1136,17 @@ def _dataset_concat(
 
     result = type(datasets[0])(result_data_vars, coords=coords_obj, attrs=result_attrs)
     result.encoding = result_encoding
+
+    if mixed_labels:
+        coordinates = {
+            dim: result.variables[dim].values
+            for dim in result.dims
+            if dim in result.variables
+        }
+        for name in mixed_labels & set(result._variables):
+            result._variables[name] = _finalize_label_variable(
+                result._variables[name], name, label_fill_values[name], coordinates
+            )
 
     return result
 

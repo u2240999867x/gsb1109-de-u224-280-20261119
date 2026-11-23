@@ -1079,6 +1079,168 @@ class TestConcatDataset:
         )
         assert_identical(actual, expected)
 
+    @staticmethod
+    def _label_datasets() -> tuple[Dataset, Dataset, Dataset]:
+        big = 2**63
+        day1 = Dataset(
+            {
+                "label": ("station", np.array([big + 3, big + 4], dtype=np.uint64)),
+                "temp": ("station", np.array([1.0, 2.0])),
+            },
+            coords={"station": ["north", "south"]},
+        )
+        day2 = Dataset(
+            {
+                "label": ("station", np.array([7, -1], dtype=np.int64)),
+                "temp": ("station", np.array([3.0, 4.0])),
+            },
+            coords={"station": ["north", "west"]},
+        )
+        day3 = Dataset(
+            {"temp": ("station", np.array([5.0, 6.0]))},
+            coords={"station": ["north", "south"]},
+        )
+        return day1, day2, day3
+
+    def test_concat_mixed_uint64_int64_labels_inner(self) -> None:
+        big = 2**63
+        fill = big + 5
+        day1, day2, day3 = self._label_datasets()
+        day2["label"] = ("station", np.array([7, 11], dtype=np.int64))
+
+        actual = concat(
+            [day1, day2, day3],
+            dim="day",
+            join="inner",
+            fill_value={"label": fill, "temp": np.nan},
+        )
+        assert actual.label.dtype == np.uint64
+        assert actual.label.values.tolist() == [[big + 3], [7], [fill]]
+
+    def test_concat_mixed_uint64_int64_labels_outer_fill(self) -> None:
+        big = 2**63
+        fill = big + 5
+        day1, day2, day3 = self._label_datasets()
+        day2["label"] = ("station", np.array([7, 11], dtype=np.int64))
+
+        actual = concat(
+            [day1, day2, day3],
+            dim="day",
+            join="outer",
+            fill_value={"label": fill, "temp": np.nan},
+        )
+        expected = np.array(
+            [
+                [big + 3, big + 4, fill],
+                [7, fill, 11],
+                [fill, fill, fill],
+            ],
+            dtype=np.uint64,
+        )
+        assert actual.label.dtype == np.uint64
+        assert_array_equal(actual.label.values, expected)
+        assert np.isnan(actual.temp.values[0, 2])
+
+    def test_concat_mixed_uint64_int64_labels_invalid_negative(self) -> None:
+        big = 2**63
+        fill = big + 5
+        day1, day2, day3 = self._label_datasets()
+
+        result = concat(
+            [day1, day2, day3],
+            dim="day",
+            join="outer",
+            fill_value={"label": fill, "temp": np.nan},
+        )
+        with pytest.raises(ValueError, match=r"'label'.*-1.*day.*station='west'"):
+            _ = result.label.values
+
+    def test_concat_mixed_uint64_int64_labels_negative_fill_needed(self) -> None:
+        day1, day2, day3 = self._label_datasets()
+        day2["label"] = ("station", np.array([7, 11], dtype=np.int64))
+
+        result = concat(
+            [day1, day2, day3],
+            dim="day",
+            join="outer",
+            fill_value={"label": -1, "temp": np.nan},
+        )
+        with pytest.raises(ValueError, match=r"fill_value -1.*'label'"):
+            _ = result.label.values
+
+    def test_concat_mixed_uint64_int64_labels_negative_fill_unused(self) -> None:
+        big = 2**63
+        day1, day2, _ = self._label_datasets()
+        day2["label"] = ("station", np.array([7, 11], dtype=np.int64))
+
+        actual = concat([day1, day2], dim="day", join="inner", fill_value=-1)
+        assert actual.label.dtype == np.uint64
+        assert actual.label.values.tolist() == [[big + 3], [7]]
+
+    def test_concat_mixed_uint64_int64_labels_unmixed_unchanged(self) -> None:
+        # A uint64-only or int64-only column keeps xarray's usual rules.
+        big = 2**63
+        uint1 = Dataset({"label": ("x", np.array([big + 3], dtype=np.uint64))})
+        uint2 = Dataset({"label": ("x", np.array([big + 4], dtype=np.uint64))})
+        result = concat([uint1, uint2], dim="t")
+        assert result.label.dtype == np.uint64
+
+        int1 = Dataset({"label": ("x", np.array([1], dtype=np.int64))})
+        int2 = Dataset({"label": ("x", np.array([2], dtype=np.int64))})
+        result = concat([int1, int2], dim="t")
+        assert result.label.dtype == np.int64
+
+    def test_concat_mixed_uint64_int64_labels_dtype_preserved(self) -> None:
+        # Any variable that mixes the two exporter dtypes keeps exact uint64
+        # labels, not just a column that happens to be named "label".
+        big = 2**63
+        ds1 = Dataset({"value": ("x", np.array([big + 3], dtype=np.uint64))})
+        ds2 = Dataset({"value": ("x", np.array([7], dtype=np.int64))})
+        result = concat([ds1, ds2], dim="t")
+        assert result.value.dtype == np.uint64
+        assert result.value.values.tolist() == [[big + 3], [7]]
+
+    @requires_dask
+    def test_concat_mixed_uint64_int64_labels_chunked(self) -> None:
+        big = 2**63
+        fill = big + 5
+        day1, day2, day3 = self._label_datasets()
+        day2["label"] = ("station", np.array([7, 11], dtype=np.int64))
+        loaded = concat(
+            [day1, day2, day3],
+            dim="day",
+            join="outer",
+            fill_value={"label": fill, "temp": np.nan},
+        )
+
+        chunked = concat(
+            [day1.chunk({"station": 1}), day2.chunk(), day3.chunk()],
+            dim="day",
+            join="outer",
+            fill_value={"label": fill, "temp": np.nan},
+        )
+        # The result stays lazy and is read on demand.
+        assert not isinstance(chunked.label.variable._data, np.ndarray)
+        assert_array_equal(chunked.label.values, loaded.label.values)
+        assert chunked.label.dtype == np.uint64
+
+    @requires_dask
+    def test_concat_mixed_uint64_int64_labels_chunked_error_matches(self) -> None:
+        big = 2**63
+        fill = big + 5
+        day1, day2, day3 = self._label_datasets()
+        kwargs = dict(dim="day", join="outer", fill_value={"label": fill})
+
+        loaded = concat([day1, day2, day3], **kwargs)
+        chunked = concat(
+            [day1.chunk(), day2.chunk(), day3.chunk()],
+            **kwargs,
+        )
+        with pytest.raises(ValueError, match=r"'label'.*-1.*station='west'"):
+            _ = loaded.label.values
+        with pytest.raises(ValueError, match=r"'label'.*-1.*station='west'"):
+            _ = chunked.label.values
+
     @pytest.mark.parametrize("dtype", [str, bytes])
     @pytest.mark.parametrize("dim", ["x1", "x2"])
     def test_concat_str_dtype(self, dtype, dim) -> None:
