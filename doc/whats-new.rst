@@ -13,6 +13,15 @@ v2026.09.1 (unreleased)
 
 New Features
 ~~~~~~~~~~~~
+- Add a ``radar`` dataset accessor with
+  :py:meth:`Dataset.radar.settle_altitude <xarray.core.radar_settlement.settle_altitude>`
+  to settle the altitudes of a radar-ingested dataset against versioned survey
+  reports, driven by a settlement manifest of per-cell cutoff times.  The
+  settled altitude (in meters), the adopted report number and version, and any
+  fallback reason are exposed as auxiliary coordinates on the station/scan-time
+  axes, existing indexes (e.g. on the measured altitude) are preserved, and the
+  radar data variables are never read, so settlement works on lazily loaded
+  datasets.
 - :py:func:`apply_ufunc` accepts dimension names for ``vectorize``, e.g.
   ``vectorize=["time"]``, to only loop over these broadcast dimensions and pass
   all other broadcast dimensions to ``func`` in bulk. This is much faster than

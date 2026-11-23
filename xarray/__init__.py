@@ -29,6 +29,7 @@ from xarray.computation.computation import (
     where,
 )
 from xarray.conventions import SerializationWarning, decode_cf
+from xarray.core import radar_settlement as radar_settlement
 from xarray.core.common import ALL_DIMS, full_like, ones_like, zeros_like
 from xarray.core.coordinates import Coordinates, CoordinateValidationError
 from xarray.core.dataarray import DataArray
