@@ -5,6 +5,7 @@ __license__ = "MIT"
 
 import asyncio
 from builtins import ExceptionGroup
+import hashlib
 import os
 import base64
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Union
 from collections.abc import AsyncGenerator
 from abc import abstractmethod
 from snakemake import wrapper
+from snakemake.checkpoints import compute_revision
 from snakemake.rules import Rule
 
 from snakemake.common.misc import is_conda_env
@@ -134,6 +136,7 @@ class JobFactory:
         targetfile=None,
         update=False,
         groupid=None,
+        cache_new=True,
     ):
         key = (rule.name, *sorted(wildcards_dict.items()))
 
@@ -177,7 +180,8 @@ class JobFactory:
         if update:
             # cache entry has to be replaced because job shall be constructed from scratch
             obj = await new()
-            self.cache[key] = obj
+            if cache_new:
+                self.cache[key] = obj
         else:
             try:
                 # try to get job from cache
@@ -403,9 +407,52 @@ class Job(
             targetfile=self.targetfile,
             update=True,
             groupid=groupid,
+            # Do not publish the re-expanded job in the factory cache before the
+            # DAG has decided whether it replaces the previous job. Otherwise a
+            # re-expansion that turns out to be identical would silently split
+            # the DAG from the cached job object.
+            cache_new=False,
         )
         job.is_updated = True
         return job
+
+    def input_identity(self):
+        """Return a digest of the concrete inputs of this job.
+
+        Two jobs with the same rule, wildcards and outputs but different
+        concrete input files or content get different identities. This is used
+        to decide whether a finished job may be reused after a checkpoint
+        changed the dynamic part of the DAG.
+
+        Only the concrete input path and its content matter. A checkpoint
+        revision may change while a job keeps reading exactly the same inputs;
+        such a result stays valid.
+        """
+        h = hashlib.sha256()
+        h.update(("rule:" + self.rule.name).encode())
+        h.update(b"\0")
+        for name, value in sorted(
+            (str(k), str(v)) for k, v in self.wildcards_dict.items()
+        ):
+            h.update(("wildcard:" + name + "=" + value).encode())
+            h.update(b"\0")
+        for out in self.output:
+            h.update(("output:" + str(out)).encode())
+            h.update(b"\0")
+        for infile in sorted((str(f) for f in self.input)):
+            h.update(("input:" + infile).encode())
+            h.update(b"\0")
+            if not os.path.exists(infile):
+                h.update(b"missing\0")
+                continue
+            # Use the file content, not its metadata. A regeneration of an
+            # upstream checkpoint may rewrite identical bytes to a new path
+            # with a fresh modification time; such an input must still count as
+            # the same input. For directories, the recursive content revision
+            # is used.
+            h.update(compute_revision([infile]).encode())
+            h.update(b"\0")
+        return h.hexdigest()
 
     def is_valid(self):
         """Check if job is valid"""

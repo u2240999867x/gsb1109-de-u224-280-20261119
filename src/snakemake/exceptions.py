@@ -559,6 +559,23 @@ class NestedCoroutineError(WorkflowError):
     pass
 
 
+class JobWithdrawalException(Exception):
+    """Raised by an input function to indicate that a job is no longer needed.
+
+    This is used in dynamically discovered parts of a workflow (e.g. based on a
+    checkpoint output) where a later revision of the discovery result no longer
+    contains an item that an earlier revision contained. Raising this exception
+    from the input function removes the job instead of failing the workflow.
+    """
+
+    def __init__(self, reason: str | None = None):
+        super().__init__(
+            reason
+            or "The job has been withdrawn by its input function and will not be executed."
+        )
+        self.reason = reason
+
+
 class IncompleteCheckpointException(Exception):
     def __init__(self, rule, targetfile):
         super().__init__(

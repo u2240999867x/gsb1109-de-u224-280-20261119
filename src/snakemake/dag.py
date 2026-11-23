@@ -49,6 +49,7 @@ from snakemake.common.misc import (
 from snakemake.settings.types import RerunTrigger, StrictDagEvaluation
 from snakemake.exceptions import (
     AmbiguousRuleException,
+    JobWithdrawalException,
     ChildIOException,
     CyclicGraphException,
     ImproperOutputException,
@@ -172,6 +173,28 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         self._checked_needrun_jobs = set()
         self._seen_outputs: Dict[str, Union[Job, GroupJob]] = dict()
         self._evicted_checkpoint_outputs: Set = set()
+        # Maps a concrete checkpoint output set to the content revision observed
+        # when it became available (or when a change was last processed).
+        self._checkpoint_revisions: Dict[tuple, str] = dict()
+        # Checkpoint jobs that produced output and are monitored for later
+        # rewrites of their output, even after they dropped out of the
+        # reachable DAG.
+        self._monitored_checkpoints: Dict[tuple, Job] = dict()
+        # Guards against re-entering dynamic re-expansion while it is running.
+        self._updating_checkpoints = False
+        # Input states observed when a job was handed to the executor. They
+        # are the authoritative record of what that attempt actually read and
+        # are kept after completion so that a later re-expansion can compare
+        # against them.
+        self._input_snapshot: Dict[Job, Dict[str, Optional[str]]] = dict()
+        # Jobs that have been superseded while still running. The mapping points
+        # from the old attempt to the job that replaces it. The replacement must
+        # not start before the old attempt has exited, because both may write the
+        # same output paths.
+        self._superseded_jobs: Dict[Job, Job] = dict()
+        # Running jobs that have been withdrawn by the current revision of a
+        # checkpoint output. They are removed once they have exited.
+        self._withdrawn_running: Set[Job] = set()
 
         self.job_factory = JobFactory()
         self.group_job_factory = GroupJobFactory()
@@ -1835,7 +1858,14 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         updated = False
         for job in list(self.jobs):
             if job.incomplete_input_expand:
-                newjob = await job.updated()
+                try:
+                    newjob = await job.updated()
+                except JobWithdrawalException:
+                    # The dynamic discovery result changed while the job was
+                    # waiting for its group ids.
+                    self._withdraw_job(job)
+                    updated = True
+                    continue
                 await self.replace_job(job, newjob, recursive=False)
                 updated = True
         return updated
@@ -2145,82 +2175,104 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         return any(job.has_unfinished_queue_input() for job in self.queue_input_jobs)
 
     async def update_checkpoint_dependencies(self, jobs=None):
-        """Update dependencies of checkpoints."""
+        """Re-expand all jobs whose dynamic input depends on a checkpoint.
+
+        A checkpoint (and, more generally, a rule producing an output
+        directory) may change what downstream jobs exist and which concrete
+        inputs they read. The update therefore covers every transitive
+        downstream job, not only the direct dependents: a job further down the
+        DAG can consult the checkpoint again in its own input function.
+
+        Re-expansion is also driven by the *content revision* of the
+        checkpoint output. This catches revisions that happen while the
+        originally planned jobs were already running, including a checkpoint
+        output that is rewritten by the workflow itself.
+        """
 
         async def is_output_present(job):
             return (self.finished(job) or not self.needrun(job)) and all(
                 await asyncio.gather(*(out.exists() for out in job.output))
             )
 
-        job_queue: Dict[Job, Set[Job]] = defaultdict(set)
+        # Checkpoints whose output is available (either finished in this run,
+        # already present from a previous run, or explicitly evicted).
+        available_checkpoints: Set[Job] = set()
         if jobs is None:
-            jobs = [
+            candidates = [
                 job
                 for job in self.jobs
                 if job.is_checkpoint and await is_output_present(job)
             ]
         else:
             # called with finished jobs, no need to check if output is present
-            jobs = [job for job in jobs if job.is_checkpoint]
-        for job in jobs:
-            for depending in self.depending[job]:
-                job_queue[depending].add(job)
+            candidates = [job for job in jobs if job.is_checkpoint]
+        available_checkpoints.update(candidates)
+
+        # Checkpoints whose output was rewritten after it became available.
+        # This covers revisions that happen inside other jobs (e.g. a job that
+        # replaces a manifest). Neither the checkpoint job itself nor its
+        # downstream needs to be scheduled for this.
+        rewritten = []
+        monitored = dict(self._monitored_checkpoints)
+        # Also consider checkpoint jobs that are currently in the DAG but not
+        # yet monitored (e.g. output that appeared in a previous run).
+        for job in self.jobs:
+            if job.is_checkpoint:
+                monitored.setdefault(self._checkpoint_key(job), job)
+        for key, job in monitored.items():
+            if job in available_checkpoints:
+                continue
+            if self.needrun(job) and not self.finished(job):
+                # The checkpoint itself is scheduled to run. Its output is
+                # about to be regenerated and is not a stable source for
+                # re-expanding dynamic jobs.
+                continue
+            if not all(os.path.exists(str(out)) for out in job.output):
+                continue
+            if key not in self._checkpoint_revisions:
+                self._checkpoint_revisions[key] = (
+                    self.workflow.checkpoints.revision(job.output)
+                )
+                self._monitored_checkpoints[key] = job
+                continue
+            current = self.workflow.checkpoints.revision(job.output)
+            if self._checkpoint_revisions[key] != current:
+                rewritten.append(job)
+
+        if not available_checkpoints and not rewritten:
+            return False
+
+        for job in available_checkpoints:
             self.workflow.checkpoints.created_output.update(job.output)
+            self._register_checkpoint_revision(job)
+            self._monitored_checkpoints[self._checkpoint_key(job)] = job
+        if rewritten:
+            logger.info("Checkpoint output changed, updating dependencies.")
+            for job in rewritten:
+                self.workflow.checkpoints.created_output.update(job.output)
+                # Remember the new revision before re-expanding, so the same
+                # change is not detected again by nested postprocessing.
+                self._checkpoint_revisions[self._checkpoint_key(job)] = (
+                    self.workflow.checkpoints.revision(job.output)
+                )
+                self._monitored_checkpoints[self._checkpoint_key(job)] = job
         self.workflow.checkpoints.created_output.update(
             self._evicted_checkpoint_outputs
         )
 
-        updated = len(job_queue) > 0
-        if updated:
-            logger.info("Updating checkpoint dependencies.")
+        changed_checkpoints = list(chain(available_checkpoints, rewritten))
+        affected = self._checkpoint_affected_jobs(changed_checkpoints)
 
-        i = 1
-        while job_queue:
-            logger.debug(f"Checkpoint dependency update round {i}")
-            for noneedrun_checkpoint_deps in job_queue.values():
-                for checkpoint in noneedrun_checkpoint_deps:
-                    self.workflow.checkpoints.created_output.update(checkpoint.output)
+        if not affected:
+            return False
 
-            candidate_job_queue = defaultdict(set)
-            for job in job_queue.keys():
-                prior_checkpoint_targets = {
-                    infile
-                    for infile in job.input
-                    if is_flagged(infile, "checkpoint_target")
-                }
-                updated_job = await job.updated()
+        logger.info("Updating checkpoint dependencies.")
 
-                await self.replace_job(job, updated_job, recursive=False)
-
-                posterior_checkpoint_targets = {
-                    infile
-                    for infile in updated_job.input
-                    if is_flagged(infile, "checkpoint_target")
-                    and infile not in prior_checkpoint_targets
-                }
-                posterior_checkpoint_deps = {
-                    dep
-                    for dep, files in self.dependencies[updated_job].items()
-                    if dep.is_checkpoint
-                    and not files.isdisjoint(posterior_checkpoint_targets)
-                }
-                if posterior_checkpoint_deps:
-                    # there is at least one dep that is a new potentially
-                    # unfinished checkpoint target
-                    candidate_job_queue[updated_job].update(posterior_checkpoint_deps)
-
-            job_queue = defaultdict(set)
-            if candidate_job_queue:
-                await self.update_needrun()
-                for job, posterior_checkpoint_deps in candidate_job_queue.items():
-                    for checkpoint in posterior_checkpoint_deps:
-                        # the second clause ensures that we only process checkpoints
-                        # where the output is present (see test_checkpoint_missing_output)
-                        if not self.needrun(checkpoint) and await is_output_present(
-                            checkpoint
-                        ):
-                            job_queue[job].add(checkpoint)
-            i += 1
+        self._updating_checkpoints = True
+        try:
+            updated = await self._reexpand_downstream(affected)
+        finally:
+            self._updating_checkpoints = False
 
         if updated:
             self.set_until_jobs()
@@ -2228,6 +2280,256 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
             await self.postprocess_after_update()
 
         return updated
+
+    def _checkpoint_affected_jobs(self, checkpoints: Iterable[Job]) -> Set[Job]:
+        """Return all jobs whose dynamic input may be derived from a checkpoint.
+
+        This contains:
+        * the checkpoint jobs themselves and all their transitive dependents,
+        * all jobs with an input below a checkpoint output directory, and
+        * the transitive dependents of those jobs.
+
+        A job that reads e.g. ``published/inputs/sample.txt`` is not a direct
+        successor of the checkpoint job in the DAG; it only exists because the
+        checkpoint published a manifest. It must still be re-expanded.
+        """
+        output_dirs = []
+        for job in checkpoints:
+            for out in job.output:
+                output_dirs.append(os.path.abspath(str(out)))
+
+        def inside_checkpoint_output(path: str) -> bool:
+            path = os.path.abspath(str(path))
+            for directory in output_dirs:
+                if path == directory or path.startswith(directory + os.sep):
+                    return True
+            return False
+
+        seeds: Set[Job] = set(checkpoints)
+        for job in self.jobs:
+            if job in seeds:
+                continue
+            if any(inside_checkpoint_output(infile) for infile in job.input):
+                seeds.add(job)
+
+        affected: Set[Job] = set()
+        for seed in seeds:
+            affected.add(seed)
+            affected.update(self.bfs(self.depending, seed))
+
+        # Downstream of jobs discovered by content location.
+        for job in list(affected):
+            affected.update(self.bfs(self.depending, job))
+        return affected
+
+    @staticmethod
+    def _checkpoint_key(job: Job) -> tuple:
+        return tuple(str(out) for out in job.output)
+
+    def _register_checkpoint_revision(self, job: Job) -> str:
+        """Record the current content revision of a checkpoint job."""
+        revision = self.workflow.checkpoints.revision(job.output)
+        self._checkpoint_revisions[self._checkpoint_key(job)] = revision
+        return revision
+
+    async def _reexpand_downstream(self, affected: Set[Job]) -> bool:
+        """Re-evaluate the concrete inputs of all affected jobs.
+
+        Jobs whose inputs did not change are kept as they are. Jobs whose
+        inputs changed are replaced in the DAG. A job that already finished is
+        only treated as still satisfied when its recorded input identity
+        matches the newly expanded inputs; otherwise the old result is tainted
+        and the job becomes needrun again.
+
+        Jobs that are currently running must not be replaced: their old attempt
+        may still write the same outputs. Instead, the replacement is recorded
+        and becomes eligible once the old attempt has finished. Its completion
+        is then evaluated against the inputs of the new version, so feedback
+        from the old attempt can never satisfy the new version.
+        """
+        affected = set(affected)
+        # Process in topological order so that downstream jobs see the final
+        # inputs of their upstream jobs.
+        changed = False
+        for job in self._topological_subset(affected):
+            if job not in self._dependencies:
+                # Removed from the DAG by a previous replacement.
+                continue
+            try:
+                newjob = await job.updated()
+            except JobWithdrawalException:
+                changed = True
+                self._withdraw_job(job)
+                continue
+            if self.jobs_have_same_inputs(job, newjob):
+                continue
+
+            changed = True
+            reusable = self.results_reusable(job, newjob)
+            if not reusable and self.finished(job):
+                # Only a completed attempt leaves an artifact that could be
+                # mistaken for the result of the new version. A job that is
+                # still going to run will overwrite its output itself.
+                await self._invalidate_outputs(newjob)
+            if job in self._running:
+                # Cannot touch the running attempt. Remember the replacement
+                # and let finish() decide based on the old attempt's actual
+                # inputs whether the new version still has to run.
+                self._superseded_jobs[job] = newjob
+                self._jobid.setdefault(newjob, self._jobid.get(job, len(self._jobid)))
+                self.cache_job(newjob)
+            else:
+                await self.replace_job(
+                    job, newjob, recursive=False, inherit_finished=reusable
+                )
+                if reusable:
+                    # The replacement stands for the same completed attempt;
+                    # keep its observed input state for later comparisons.
+                    snapshot = self._input_snapshot.get(job)
+                    if snapshot is not None:
+                        self._input_snapshot[newjob] = snapshot
+        return changed
+
+    async def _invalidate_outputs(self, job: Job) -> None:
+        """Remove outputs that belong to a superseded version of a job.
+
+        A job whose concrete inputs changed must not keep the artifact of its
+        previous attempt under the same path: downstream consumers, readiness
+        checks and rerun detection would otherwise treat the stale artifact as
+        the result of the current inputs.
+        """
+        for f in job.output:
+            try:
+                if await f.exists_local():
+                    await f.remove(remove_non_empty_dir=True)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(
+                    f"Could not remove stale output {f} of superseded "
+                    f"job {job.rule.name}: {e}"
+                )
+
+    def _withdraw_job(self, job: Job) -> None:
+        """Remove a withdrawn job from the DAG.
+
+        A running job cannot be removed immediately because its executor still
+        owns the output paths; it is removed as soon as it exits.
+        """
+        logger.info(
+            f"Withdrawing job of rule {job.rule.name} "
+            f"because it is no longer part of the current discovery result."
+        )
+        if self.is_running(job):
+            self._withdrawn_running.add(job)
+            return
+        self.delete_job(job, recursive=False)
+        if job in self._superseded_jobs:
+            del self._superseded_jobs[job]
+
+    def _topological_subset(self, jobs: Set[Job]):
+        """Yield the given jobs in topological order (dependencies first)."""
+        dependencies = {
+            job: {dep for dep in self._dependencies.get(job, {}) if dep in jobs}
+            for job in jobs
+        }
+        for level in toposort(dependencies):
+            for job in sorted(
+                level, key=lambda j: (j.rule.name, str(j.targetfile))
+            ):
+                yield job
+
+    def _input_digest(self, path: str) -> str:
+        """Content based digest of a single input path.
+
+        Files above the configured checksum size limit fall back to a stat
+        tuple, mirroring the persistence layer. Directories are hashed
+        recursively. The same function is used for observed and for newly
+        expanded inputs, so both sides remain comparable.
+        """
+        from snakemake.checkpoints import compute_revision
+
+        if os.path.isdir(path):
+            return compute_revision([path])
+        try:
+            st = os.stat(path)
+        except OSError:
+            return "<missing>"
+        if st.st_size > self.max_checksum_file_size:
+            return f"stat:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}"
+        return compute_revision([path])
+
+    def _input_state(self, job: Job) -> Dict[str, Optional[str]]:
+        """Input digest per concrete input path of the given job."""
+        state: Dict[str, Optional[str]] = {}
+        for infile in sorted(str(f) for f in job.input):
+            if os.path.exists(infile):
+                state[infile] = self._input_digest(infile)
+            else:
+                state[infile] = None
+        return state
+
+    def _recorded_input_state(self, job: Job) -> Optional[Dict[str, Optional[str]]]:
+        """Input content recorded by the persistence layer for a job.
+
+        Used for jobs whose outputs exist from a previous invocation and which
+        therefore have no in-memory snapshot. Returns ``None`` if no reliable
+        record is available, in which case the caller must be conservative.
+        """
+        persistence = self.workflow.persistence
+        if persistence is None:
+            return None
+        recorded: Dict[str, Optional[str]] = {}
+        for out in job.output:
+            record = persistence.metadata(out)
+            if record is None or not record.input:
+                return None
+            checksums = record.input_checksums or {}
+            for path in record.input:
+                checksum = checksums.get(path)
+                if checksum is None:
+                    # The file was too large or otherwise not checksummed.
+                    return None
+                recorded[path] = checksum.split(":", 1)[-1]
+        return recorded or None
+
+    def _observed_input_state(self, job: Job) -> Optional[Dict[str, Optional[str]]]:
+        """Best available record of what a job version actually read."""
+        state = self._input_snapshot.get(job)
+        if state is not None:
+            return state
+        return self._recorded_input_state(job)
+
+    def results_reusable(self, job: Job, other: Job) -> bool:
+        """Whether the result of ``job`` can satisfy the version ``other``.
+
+        Reuse is only allowed when the concrete input paths and their content
+        are identical to what the completed attempt actually read. For an
+        attempt that ran in this invocation the input state is the snapshot
+        taken when it was handed to the executor; for an output from a previous
+        invocation the recorded input checksums are used. If neither is
+        available the comparison falls back to the current on-disk state, which
+        can only be less strict, never more permissive, than rerunning.
+        """
+        if job.rule.name != other.rule.name:
+            return False
+        if job.wildcards_dict != other.wildcards_dict:
+            return False
+        if [str(f) for f in job.output] != [str(f) for f in other.output]:
+            return False
+        new_state = self._input_state(other)
+        observed = self._observed_input_state(job)
+        if observed is None:
+            observed = self._input_state(job)
+        return observed == new_state
+
+    def jobs_have_same_inputs(self, job: Job, other: Job) -> bool:
+        """Return whether two versions of a job read exactly the same inputs.
+
+        This is used to avoid replacing a job at all when its expansion did not
+        change. It is stricter than comparing file names: the content of every
+        input is part of the comparison, so an input rewritten under the same
+        name is detected as a change.
+        """
+        return self.results_reusable(job, other)
 
     async def postprocess_after_update(self):
         await self.postprocess()
@@ -2237,6 +2539,11 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
         self._running.update(jobs)
         self._ready_jobs -= jobs
         for job in jobs:
+            if not job.is_group():
+                # Snapshot what this attempt is about to read. It is the
+                # authoritative evidence when the attempt completes after a
+                # dynamic re-expansion.
+                self._input_snapshot[job] = self._input_state(job)
             try:
                 del self._n_until_ready[job]
             except KeyError:
@@ -2265,6 +2572,52 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
             jobs = job
         else:
             jobs = [job]
+
+        if job in self._withdrawn_running:
+            # The job was withdrawn while it was running. Its attempt can no
+            # longer satisfy anything; discard it (and its output) and let the
+            # DAG settle.
+            self._withdrawn_running.discard(job)
+            logger.info(
+                f"Discarding completion of withdrawn job {job.rule.name} "
+                f"({', '.join(str(f) for f in job.output)})."
+            )
+            self.delete_job(job, recursive=False)
+            self.checkpoint_jobs.discard(job)
+            await self._invalidate_outputs(job)
+            await self.postprocess_after_update()
+            return True
+
+        if job in self._superseded_jobs:
+            # The job was replaced while it was running. The completion of the
+            # old attempt may only be reused when it read exactly the inputs of
+            # the new version. Otherwise the old attempt is discarded and the
+            # replacement is scheduled.
+            newjob = self._superseded_jobs.pop(job)
+            reusable = self.results_reusable(job, newjob)
+            if not reusable:
+                await self._invalidate_outputs(newjob)
+            self._finished.add(job)
+            self.checkpoint_jobs.difference_update(
+                j for j in jobs if j.is_checkpoint
+            )
+            if job.is_checkpoint:
+                self.workflow.checkpoints.created_output.update(job.output)
+                self._register_checkpoint_revision(job)
+            await self.replace_job(
+                job, newjob, recursive=False, inherit_finished=reusable
+            )
+            if reusable:
+                snapshot = self._input_snapshot.get(job)
+                if snapshot is not None:
+                    self._input_snapshot[newjob] = snapshot
+            await self.postprocess_after_update()
+            if not reusable:
+                logger.info(
+                    f"Discarding completion of superseded job {job.rule.name} "
+                    "because its inputs differ from the current version."
+                )
+            return True
 
         self._finished.update(jobs)
         self.checkpoint_jobs.difference_update(job for job in jobs if job.is_checkpoint)
@@ -2381,9 +2734,16 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
                 del self.job_cache[(job.rule, f)]
             except KeyError:
                 pass
+        self._input_snapshot.pop(job, None)
 
-    async def replace_job(self, job, newjob, recursive=True):
-        """Replace given job with new job."""
+    async def replace_job(self, job, newjob, recursive=True, inherit_finished=None):
+        """Replace given job with new job.
+
+        ``inherit_finished`` controls whether a finished ``job`` marks
+        ``newjob`` as finished as well. It defaults to the historic behavior
+        (preserve the finished state), but dynamic re-expansion passes an
+        explicit decision based on the concrete input identity.
+        """
         add_to_targetjobs = job in self.targetjobs
         try:
             jobid = self.jobid(job)
@@ -2393,8 +2753,12 @@ class DAG(DAGExecutorInterface, DAGReportInterface, DAGSchedulerInterface):
             jobid = None
 
         depending = list(self.depending[job].items())
-        if self.finished(job):
+        if inherit_finished is None:
+            inherit_finished = self.finished(job)
+        if inherit_finished:
             self._finished.add(newjob)
+        else:
+            self._finished.discard(newjob)
 
         self.delete_job(job, recursive=recursive)
         if jobid is not None:

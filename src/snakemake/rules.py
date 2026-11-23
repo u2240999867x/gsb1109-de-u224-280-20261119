@@ -77,6 +77,7 @@ from snakemake.exceptions import (
     InputFunctionException,
     WorkflowError,
     IncompleteCheckpointException,
+    JobWithdrawalException,
     is_file_not_found_error,
 )
 from snakemake.logging import logger
@@ -86,6 +87,7 @@ from snakemake.common.misc import (
     get_input_function_aux_params,
 )
 from snakemake.common.tbdstring import TBDString
+from snakemake.checkpoints import checkpoint_usage
 from snakemake_interface_common.utils import not_iterable, lazy_property
 from snakemake_interface_common.rules import RuleInterface
 from snakemake.deployment import EnvSpecs as SoftwareEnvSpecs
@@ -707,6 +709,8 @@ class Rule(RuleInterface):
                     # otherwise we would miss any exceptions and
                     # would have to capture them again later.
                     value = list(value)
+            except JobWithdrawalException:
+                raise
             except IncompleteCheckpointException as e:
                 value = incomplete_checkpoint_func(e)
                 incomplete = True
@@ -782,14 +786,23 @@ class Rule(RuleInterface):
                     else:
                         callable_item = item
                     is_derived = self._is_deriving_function(callable_item)
-                item, incomplete = self.apply_input_function(
-                    item,
-                    wildcards,
-                    incomplete_checkpoint_func=incomplete_checkpoint_func,
-                    is_unpack=is_unpack,
-                    groupid=groupid,
-                    **aux_params,
-                )
+                with checkpoint_usage() as usage:
+                    before = set(usage)
+                    item, incomplete = self.apply_input_function(
+                        item,
+                        wildcards,
+                        incomplete_checkpoint_func=incomplete_checkpoint_func,
+                        is_unpack=is_unpack,
+                        groupid=groupid,
+                        **aux_params,
+                    )
+                    if set(usage) - before:
+                        # Values that depend on a checkpoint are derived from
+                        # dynamically discovered input. They must not act as
+                        # independent rerun triggers: whenever the checkpoint
+                        # revision changes, the concrete input identity of the
+                        # job decides whether its previous result stays valid.
+                        is_derived = True
 
             if is_unpack and not incomplete:
                 if not allow_unpack:
