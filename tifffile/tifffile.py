@@ -837,6 +837,10 @@ __all__ = [
     'TiffWriter',
     'TiledSequence',
     'Timer',
+    'WindowAnomaly',
+    'WindowBatch',
+    'WindowDecode',
+    'WindowResult',
     '__version__',
     'askopenfilename',
     'astype',
@@ -863,6 +867,7 @@ __all__ = [
     'rational',
     'read_gdal_structural_metadata',
     'read_micromanager_metadata',
+    'read_windows',
     'read_ndtiff_index',
     'read_scanimage_metadata',
     'repeat_nd',
@@ -895,6 +900,7 @@ import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime as DateTime  # noqa: N812
 from datetime import timedelta as TimeDelta  # noqa: N812
 from fractions import Fraction
@@ -1368,6 +1374,35 @@ def imread(
             out=out,
             **imread_kwargs,
         )
+
+
+def read_windows(
+    tif: TiffFile | str | os.PathLike[Any],
+    windows: Any = None,
+    **kwargs: Any,
+) -> WindowBatch:
+    """Return pixels and availability masks from multiple TIFF windows.
+
+    Parameters:
+        tif: Open :py:class:`TiffFile` or file name.
+        windows: Windows to read. See :py:meth:`TiffFile.read_windows`.
+        **kwargs: Passed to :py:meth:`TiffFile.read_windows`, or to
+            :py:class:`TiffFile` if ``tif`` is a file name.
+
+    Returns:
+        :py:class:`WindowBatch` of :py:class:`WindowResult`.
+
+    """
+    if isinstance(tif, TiffFile):
+        return tif.read_windows(windows, **kwargs)
+    tiffile_kwargs = {
+        key: kwargs.pop(key)
+        for key in list(kwargs)
+        if key in {'mode', 'name', 'offset', 'size', 'omexml', 'superres'}
+        or key.startswith('is_')
+    }
+    with TiffFile(tif, **tiffile_kwargs) as file:
+        return file.read_windows(windows, **kwargs)
 
 
 def imwrite(
@@ -4449,6 +4484,609 @@ class TiffWriter:
         return f'<tifffile.TiffWriter {snipstr(self.filehandle.name, 32)!r}>'
 
 
+@dataclass
+class WindowAnomaly:
+    """Anomaly affecting pixels in one or more TIFF windows.
+
+    Attributes:
+        page: Index of original TIFF page.
+        channel: Index of sample (channel) in page, or ``None``.
+        tile: Linear index of tile in page's TileOffsets/TileByteCounts.
+        kind: One of ``'missing'``, ``'decode_error'``, ``'partial'``,
+            or ``'layout_undetermined'``.
+        window: Window (row0, row1, column0, column1) first affected.
+        offset: Tile offset in file.
+        bytecount: Tile byte count in file.
+        recovered: Number of recovered in-image samples in tile.
+        expected: Number of in-image samples in tile.
+        detail: Human-readable description.
+        tile_index: Normalized (sample, depth, row, column) tile indices.
+        windows: All windows affected by this anomaly.
+
+    """
+
+    page: int
+    channel: int | None
+    tile: int | None
+    kind: str
+    window: tuple[int, int, int, int] | None = None
+    offset: int = 0
+    bytecount: int = 0
+    recovered: int | None = None
+    expected: int | None = None
+    detail: str = ''
+    tile_index: tuple[int, ...] = ()
+    windows: tuple[tuple[int, int, int, int], ...] = ()
+
+    @property
+    def page_index(self) -> int:
+        """Index of original TIFF page."""
+        return self.page
+
+    @property
+    def sample(self) -> int | None:
+        """Index of sample (channel) in page."""
+        return self.channel
+
+    @property
+    def tileindex(self) -> int | None:
+        """Linear index of tile in page."""
+        return self.tile
+
+    @property
+    def tile_index_rc(self) -> tuple[int, ...]:
+        """Normalized tile indices (sample, depth, row, column)."""
+        return self.tile_index
+
+    @property
+    def reason(self) -> str:
+        """Anomaly kind."""
+        return self.kind
+
+    @property
+    def status(self) -> str:
+        """Anomaly kind."""
+        return self.kind
+
+    @property
+    def message(self) -> str:
+        """Human-readable description."""
+        return self.detail
+
+    def get(self, key: str, default: Any = None, /) -> Any:
+        """Return attribute or mapped key, or default."""
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __getitem__(self, key: str, /) -> Any:
+        if key in {'kind', 'reason', 'status'}:
+            return self.kind
+        if key in {'detail', 'message'}:
+            return self.detail
+        if key in {'page', 'pageindex', 'page_index', 'index'}:
+            return self.page
+        if key in {'channel', 'sample'}:
+            return self.channel
+        if key in {'tile', 'tileindex'}:
+            return self.tile
+        if key == 'tile_index':
+            return self.tile_index
+        if key in {'offset', 'dataoffset'}:
+            return self.offset
+        if key in {'bytecount', 'databytecount', 'count'}:
+            return self.bytecount
+        if key in {'recovered', 'recovered_samples'}:
+            return self.recovered
+        if key in {'expected', 'expected_samples'}:
+            return self.expected
+        if key in {'window', 'bbox', 'roi'}:
+            return self.window
+        raise KeyError(key)
+
+    def asdict(self) -> dict[str, Any]:
+        """Return anomaly as dictionary."""
+        return {
+            'page': self.page,
+            'channel': self.channel,
+            'tile': self.tile,
+            'kind': self.kind,
+            'window': self.window,
+            'offset': self.offset,
+            'bytecount': self.bytecount,
+            'recovered': self.recovered,
+            'expected': self.expected,
+            'detail': self.detail,
+            'tile_index': self.tile_index,
+        }
+
+
+@dataclass
+class WindowDecode:
+    """Decoded compressed tile payload and its references in a batch.
+
+    Attributes:
+        offset: Payload offset in file.
+        bytecount: Payload byte count in file.
+        status: ``'ok'`` or ``'decode_error'``.
+        sample_count: Number of decoded samples.
+        pages: Original page indices referencing the payload.
+        channels: Sample indices referencing the payload.
+        tiles: Linear tile indices referencing the payload.
+        references: Number of tile references to the payload.
+        error: Decode error message if status is ``'decode_error'``.
+
+    """
+
+    offset: int
+    bytecount: int
+    status: str = 'ok'
+    sample_count: int = 0
+    pages: tuple[int, ...] = ()
+    channels: tuple[int, ...] = ()
+    tiles: tuple[int, ...] = ()
+    references: int = 1
+    error: str | None = None
+
+    @property
+    def shared(self) -> bool:
+        """Payload is referenced more than once."""
+        return self.references > 1
+
+    @property
+    def deduplicated(self) -> bool:
+        """Payload is referenced more than once."""
+        return self.references > 1
+
+    @property
+    def count(self) -> int:
+        """Number of decoded samples."""
+        return self.sample_count
+
+    @property
+    def reads(self) -> int:
+        """Number of times payload was read from file."""
+        return 1
+
+    @property
+    def decodes(self) -> int:
+        """Number of times payload was decompressed."""
+        return 1
+
+    @property
+    def kind(self) -> str:
+        """Decode status."""
+        return self.status
+
+    @property
+    def message(self) -> str:
+        """Decode error message."""
+        return self.error or ''
+
+    def get(self, key: str, default: Any = None, /) -> Any:
+        """Return attribute or mapped key, or default."""
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __getitem__(self, key: str, /) -> Any:
+        if key == 'offset':
+            return self.offset
+        if key in {'bytecount', 'databytecount'}:
+            return self.bytecount
+        if key in {'status', 'kind'}:
+            return self.status
+        if key in {'count', 'sample_count', 'samples'}:
+            return self.sample_count
+        if key in {'pages', 'page'}:
+            return self.pages
+        if key in {'channels', 'channel'}:
+            return self.channels
+        if key in {'tiles', 'tile'}:
+            return self.tiles
+        if key in {'references', 'refs'}:
+            return self.references
+        if key in {'shared', 'deduplicated'}:
+            return self.shared
+        if key in {'error', 'message'}:
+            return self.error
+        raise KeyError(key)
+
+    def asdict(self) -> dict[str, Any]:
+        """Return decode as dictionary."""
+        return {
+            'offset': self.offset,
+            'bytecount': self.bytecount,
+            'status': self.status,
+            'sample_count': self.sample_count,
+            'pages': self.pages,
+            'channels': self.channels,
+            'tiles': self.tiles,
+            'references': self.references,
+            'shared': self.shared,
+            'error': self.error,
+        }
+
+
+@dataclass(eq=False)
+class WindowResult:
+    """Pixels, availability mask, and anomalies of one TIFF window.
+
+    Attributes:
+        page: Index of original TIFF page.
+        window: Window (row0, row1, column0, column1), zero-based,
+            with exclusive upper bounds.
+        pixels: Window pixels with samples on the first axis for
+            planar-separate images. Unavailable pixels are filled with
+            the page's fill value.
+        mask: Boolean array of same shape as ``pixels``. ``True`` where
+            pixel is available.
+        anomalies: Anomalies affecting this window.
+        channels: Sample indices included in ``pixels``.
+        layouts: Tile layout descriptors used for this page.
+
+    """
+
+    page: int
+    window: tuple[int, int, int, int]
+    pixels: NDArray[Any]
+    mask: NDArray[Any]
+    anomalies: list[WindowAnomaly]
+    channels: tuple[int, ...]
+    layouts: Any = None
+
+    @property
+    def page_index(self) -> int:
+        """Index of original TIFF page."""
+        return self.page
+
+    @property
+    def data(self) -> NDArray[Any]:
+        """Window pixels."""
+        return self.pixels
+
+    @property
+    def array(self) -> NDArray[Any]:
+        """Window pixels."""
+        return self.pixels
+
+    @property
+    def values(self) -> NDArray[Any]:
+        """Window pixels."""
+        return self.pixels
+
+    @property
+    def image(self) -> NDArray[Any]:
+        """Window pixels."""
+        return self.pixels
+
+    @property
+    def available(self) -> NDArray[Any]:
+        """Boolean availability mask."""
+        return self.mask
+
+    @property
+    def availability(self) -> NDArray[Any]:
+        """Boolean availability mask."""
+        return self.mask
+
+    @property
+    def valid(self) -> NDArray[Any]:
+        """Boolean availability mask."""
+        return self.mask
+
+    @property
+    def coverage(self) -> NDArray[Any]:
+        """Boolean availability mask."""
+        return self.mask
+
+    @property
+    def exceptions(self) -> list[WindowAnomaly]:
+        """Anomalies affecting this window."""
+        return self.anomalies
+
+    @property
+    def issues(self) -> list[WindowAnomaly]:
+        """Anomalies affecting this window."""
+        return self.anomalies
+
+    @property
+    def errors(self) -> list[WindowAnomaly]:
+        """Anomalies affecting this window."""
+        return self.anomalies
+
+    @property
+    def rows(self) -> tuple[int, int]:
+        """Row start and stop of window."""
+        return self.window[0], self.window[1]
+
+    @property
+    def columns(self) -> tuple[int, int]:
+        """Column start and stop of window."""
+        return self.window[2], self.window[3]
+
+    @property
+    def cols(self) -> tuple[int, int]:
+        """Column start and stop of window."""
+        return self.window[2], self.window[3]
+
+    @property
+    def bbox(self) -> tuple[int, int, int, int]:
+        """Window (row0, row1, column0, column1)."""
+        return self.window
+
+    @property
+    def roi(self) -> tuple[int, int, int, int]:
+        """Window (row0, row1, column0, column1)."""
+        return self.window
+
+    @property
+    def key(self) -> tuple[int, tuple[int, int, int, int], tuple[int, ...]]:
+        """Hashable request key."""
+        return self.page, self.window, self.channels
+
+    @property
+    def channel(self) -> int | None:
+        """Sample index if exactly one channel was requested."""
+        return self.channels[0] if len(self.channels) == 1 else None
+
+    @property
+    def samples(self) -> tuple[int, ...]:
+        """Sample indices included."""
+        return self.channels
+
+    def get(self, key: Any, default: Any = None, /) -> Any:
+        """Return attribute or mapped key, or default."""
+        try:
+            return self[key]
+        except (KeyError, IndexError, TypeError):
+            return default
+
+    def __getitem__(self, key: str | int, /) -> Any:
+        if isinstance(key, int):
+            if key == 0:
+                return self.pixels
+            if key == 1:
+                return self.mask
+            if key == 2:
+                return self.anomalies
+            raise IndexError(key)
+        if key in {'pixels', 'data', 'array', 'values', 'image'}:
+            return self.pixels
+        if key in {
+            'mask',
+            'available',
+            'availability',
+            'valid',
+            'coverage',
+        }:
+            return self.mask
+        if key in {'anomalies', 'exceptions', 'issues', 'errors'}:
+            return self.anomalies
+        if key in {'page', 'pageindex', 'page_index', 'index'}:
+            return self.page
+        if key in {'window', 'bbox', 'roi'}:
+            return self.window
+        if key in {'rows', 'row'}:
+            return self.rows
+        if key in {'columns', 'cols', 'column'}:
+            return self.columns
+        if key in {'channels', 'samples'}:
+            return self.channels
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[Any]:
+        yield self.pixels
+        yield self.mask
+        yield self.anomalies
+
+    def __len__(self) -> int:
+        return 3
+
+    def asdict(self) -> dict[str, Any]:
+        """Return result as dictionary."""
+        return {
+            'page': self.page,
+            'window': self.window,
+            'pixels': self.pixels,
+            'mask': self.mask,
+            'anomalies': self.anomalies,
+            'channels': self.channels,
+        }
+
+    def __array__(self, dtype: DTypeLike | None = None) -> NDArray[Any]:
+        return self.pixels.astype(dtype, copy=False)  # type: ignore[arg-type]
+
+    def __eq__(self, other: object, /) -> bool:
+        if not isinstance(other, WindowResult):
+            return NotImplemented
+        return (
+            self.page == other.page
+            and self.window == other.window
+            and self.channels == other.channels
+            and numpy.array_equal(self.pixels, other.pixels)
+            and numpy.array_equal(self.mask, other.mask)
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f'<tifffile.WindowResult page={self.page} '
+            f'window={self.window} channels={self.channels} '
+            f'shape={self.pixels.shape} '
+            f'available={int(self.mask.sum())}/{self.mask.size}>'
+        )
+
+
+class WindowBatch(list):
+    """Results of reading multiple TIFF windows in one batch.
+
+    The batch is a sequence of :py:class:`WindowResult` and additionally
+    exposes the anomalies and compressed payloads encountered. Results are
+    sorted by original page and window, independent of request order.
+
+    Attributes:
+        anomalies: Unique anomalies encountered, sorted by page, channel,
+            tile, and kind.
+        decoded: Unique compressed tile payloads read and decompressed.
+        layouts: Normalized tile layout descriptors.
+        segments: All tile references, including duplicates.
+
+    """
+
+    def __init__(
+        self,
+        windows: Sequence[WindowResult],
+        anomalies: Sequence[WindowAnomaly],
+        decoded: Sequence[WindowDecode],
+        *,
+        layouts: Any = None,
+        segments: Sequence[Any] = (),
+    ) -> None:
+        super().__init__(windows)
+        self.anomalies = list(anomalies)
+        self.decoded = list(decoded)
+        self.layouts = layouts
+        self.segments = list(segments)
+
+    @property
+    def windows(self) -> list[WindowResult]:
+        """Window results."""
+        return list(self)
+
+    @property
+    def results(self) -> list[WindowResult]:
+        """Window results."""
+        return list(self)
+
+    @property
+    def exceptions(self) -> list[WindowAnomaly]:
+        """Unique anomalies encountered."""
+        return self.anomalies
+
+    @property
+    def issues(self) -> list[WindowAnomaly]:
+        """Unique anomalies encountered."""
+        return self.anomalies
+
+    @property
+    def errors(self) -> list[WindowAnomaly]:
+        """Unique anomalies encountered."""
+        return self.anomalies
+
+    @property
+    def reads(self) -> list[WindowDecode]:
+        """Unique compressed payloads read from file."""
+        return self.decoded
+
+    @property
+    def payloads(self) -> list[WindowDecode]:
+        """Unique compressed payloads read from file."""
+        return self.decoded
+
+    @property
+    def read_count(self) -> int:
+        """Number of compressed payloads read from file."""
+        return len(self.decoded)
+
+    @property
+    def decode_count(self) -> int:
+        """Number of compressed payloads decompressed."""
+        return len(self.decoded)
+
+    @property
+    def bytes_read(self) -> int:
+        """Number of compressed bytes read from file."""
+        return sum(item.bytecount for item in self.decoded)
+
+    @property
+    def tile_layouts(self) -> Any:
+        """Layouts used per page."""
+        return self.layouts
+
+    @property
+    def payloads_read(self) -> list[WindowDecode]:
+        """Unique compressed payloads read from file."""
+        return self.decoded
+
+    @property
+    def deduplicated(self) -> int:
+        """Number of tile references saved by payload deduplication."""
+        return sum(max(0, item.references - 1) for item in self.decoded)
+
+    def by_key(
+        self,
+    ) -> list[tuple[tuple[int, tuple[int, int, int, int]], WindowResult]]:
+        """Return results keyed by page and window."""
+        return [((result.page, result.window), result) for result in self]
+
+    @property
+    def by_page(self) -> dict[int, list[WindowResult]]:
+        """Results grouped by page."""
+        result: dict[int, list[WindowResult]] = {}
+        for window in self:
+            result.setdefault(window.page, []).append(window)
+        return result
+
+    def get(self, key: Any, default: Any = None, /) -> Any:
+        """Return result by key, or default."""
+        try:
+            return self[key]
+        except (KeyError, IndexError, TypeError):
+            return default
+
+    def asdict(self) -> dict[Any, WindowResult]:
+        """Return mapping of page and window to result."""
+        return dict(self.by_key())
+
+    def __getitem__(self, key: Any, /) -> Any:
+        if isinstance(key, int | slice):
+            return super().__getitem__(key)
+        if isinstance(key, tuple):
+            if len(key) == 2:
+                page, window = key
+                window = tuple(window)
+                for result in self:
+                    if result.page == page and result.window == window:
+                        return result
+            elif len(key) == 3:
+                page, window, channels = key
+                window = tuple(window)
+                if isinstance(channels, int | numpy.integer):
+                    channels = (channels,)
+                for result in self:
+                    if (
+                        result.page == page
+                        and result.window == window
+                        and result.channels == tuple(channels)
+                    ):
+                        return result
+            elif len(key) == 5 and all(
+                isinstance(value, int | numpy.integer) for value in key
+            ):
+                page, row0, row1, col0, col1 = key
+                for result in self:
+                    if result.page == page and result.window == (
+                        row0,
+                        row1,
+                        col0,
+                        col1,
+                    ):
+                        return result
+            else:
+                for result in self:
+                    if result.key == key:
+                        return result
+        if key in {'windows', 'results'}:
+            return self.windows
+        if key in {'anomalies', 'exceptions', 'issues', 'errors'}:
+            return self.anomalies
+        if key in {'decoded', 'reads', 'payloads'}:
+            return self.decoded
+        raise KeyError(key)
+
+
 @final
 class TiffFile:
     """Read image and metadata from TIFF file.
@@ -4687,6 +5325,392 @@ class TiffFile:
         """Close open file handle(s)."""
         for tif in self._files.values():
             tif.filehandle.close()
+
+    def read_windows(
+        self,
+        windows: Any = None,
+        *,
+        pages: Any = None,
+        page: Any = None,
+        channels: Sequence[int] | None = None,
+        fillvalue: float | None = None,
+        layouts: Mapping[int, Any] | None = None,
+        layout: Mapping[int, Any] | Any | None = None,
+        tile_layouts: Mapping[int, Any] | None = None,
+        page_layouts: Mapping[int, Any] | None = None,
+        requests: Any = None,
+        strict: bool = False,
+        **kwargs: Any,
+    ) -> WindowBatch:
+        """Return pixels and availability masks from multiple page windows.
+
+        Only tiles or strips intersecting the requested windows are read and
+        decompressed. Compressed payloads referenced more than once in the
+        batch, for example by different pages at the same file offset and
+        byte count, are read and decompressed only once.
+
+        Currently supports 8-bit, planar-separate (PlanarConfiguration 2)
+        images compressed with Deflate and horizontal differencing.
+
+        Parameters:
+            windows:
+                Windows to read. Either a mapping of page indices to
+                sequences of windows, or a sequence of requests.
+                Each window is ``(row0, row1, column0, column1)`` with
+                zero-based coordinates and exclusive upper bounds.
+                A request may also be ``(page, row0, row1, column0, column1)``
+                or ``(page, window, channels)``.
+            channels:
+                Sample indices to return for all windows. The default is all
+                samples in the page. For planar-separate storage, samples are
+                read individually; unavailable samples do not prevent other
+                samples from being read.
+            fillvalue:
+                Value of unavailable pixels. The default is the page's
+                :py:attr:`TiffPage.fillvalue`.
+            layouts:
+                Mapping of page index to tile layout descriptions.
+                A layout describes how many samples each tile payload
+                contains. It may specify a tile shape ``(rows, columns)``, a
+                row width in samples, a total sample count, ``'compact'``,
+                ``'full'``, or a mapping/projection of tile indices to such
+                descriptions. ``layout``, ``tile_layouts``, and
+                ``page_layouts`` are aliases.
+            requests:
+                Alias for ``windows``.
+            strict:
+                If ``True``, raise ValueError for pages or formats not
+                supported by this method. The default is ``False``, in which
+                case unsupported pages are reported as anomalies and all
+                their window pixels are marked unavailable.
+            **kwargs:
+                Additional layout aliases, such as ``manifest``.
+
+        Returns:
+            :
+                :py:class:`WindowBatch` of :py:class:`WindowResult`,
+                sorted by page and window. Each result contains window
+                pixels, a boolean availability mask of the same shape,
+                anomalies, and the tile layouts used. The batch reports
+                unique anomalies and compressed payloads read.
+
+        Raises:
+            ValueError:
+                Invalid window coordinates or unsupported format when
+                ``strict`` is ``True``.
+
+        """
+        if windows is None:
+            for value in (
+                requests,
+                kwargs.pop('regions', None),
+                kwargs.pop('rois', None),
+                kwargs.pop('bboxes', None),
+                kwargs.pop('page_windows', None),
+            ):
+                if value is not None:
+                    windows = value
+                    break
+        if page is not None and pages is None:
+            pages = page
+        if pages is not None:
+            if isinstance(pages, int | numpy.integer) and isinstance(
+                windows, tuple | list
+            ) and len(windows) == 4 and all(
+                isinstance(value, int | numpy.integer) for value in windows
+            ):
+                windows = [(int(pages), tuple(windows))]
+            elif isinstance(pages, int | numpy.integer):
+                if isinstance(windows, Mapping):
+                    pass
+                else:
+                    windows = {int(pages): windows}
+            else:
+                pages_ = list(pages)
+                if isinstance(windows, Mapping):
+                    pass
+                else:
+                    windows_ = list(windows)
+                    if len(pages_) == len(windows_):
+                        windows = list(zip(pages_, windows_, strict=True))
+        if windows is None:
+            msg = 'missing windows'
+            raise ValueError(msg)
+        if layouts is None:
+            for value in (
+                layout,
+                tile_layouts,
+                page_layouts,
+                kwargs.pop('manifest', None),
+                kwargs.pop('manifests', None),
+                kwargs.pop('layout_manifest', None),
+                kwargs.pop('layout_info', None),
+                kwargs.pop('tile_layout', None),
+            ):
+                if value is not None:
+                    layouts = value  # type: ignore[assignment]
+                    break
+
+        channels_by_page = None
+        if isinstance(channels, Mapping):
+            channels_by_page = {
+                int(key): value for key, value in channels.items()
+            }
+            channels = None
+        requests_ = _normalize_window_requests(windows, channels)
+        if isinstance(layouts, Mapping) and layouts:
+            page_keys = {
+                int(page)
+                for page, _, _ in requests_
+            }
+            has_page_key = any(
+                key in layouts or str(key) in layouts for key in page_keys
+            )
+            has_layout_key = any(
+                key in layouts for key in _WINDOW_LAYOUT_KEYS
+            )
+            if not has_page_key and not has_layout_key and 'pages' not in (
+                layouts
+            ) and len(page_keys) == 1:
+                layouts = {next(iter(page_keys)): layouts}
+        pages = self.pages
+        page_cache: dict[int, TiffPage | TiffFrame | None] = {}
+        results: dict[
+            tuple[int, tuple[int, int, int, int], tuple[int, ...]],
+            WindowResult,
+        ] = {}
+        anomalies: dict[tuple[Any, ...], WindowAnomaly] = {}
+        payloads: dict[tuple[int, int], WindowDecode] = {}
+        payload_bytes: dict[tuple[int, int], bytes | None] = {}
+        seen_refs: set[tuple[int, int, int]] = set()
+        segments: list[dict[str, Any]] = []
+        layouts_out: dict[int, Any] = {}
+
+        def add_anomaly(anomaly: WindowAnomaly) -> None:
+            key = (
+                anomaly.page,
+                anomaly.channel,
+                anomaly.tile,
+                anomaly.kind,
+            )
+            existing = anomalies.get(key)
+            if existing is None:
+                anomaly.windows = (
+                    (anomaly.window,) if anomaly.window is not None else ()
+                )
+                anomalies[key] = anomaly
+                return
+            if anomaly.window is not None:
+                windows_ = set(existing.windows)
+                windows_.add(anomaly.window)
+                existing.windows = tuple(sorted(windows_))
+
+        for pageindex, window, requested_channels in requests_:
+            if pageindex not in page_cache:
+                try:
+                    page = pages[pageindex]
+                except Exception:
+                    page = None
+                page_cache[pageindex] = page
+            page = page_cache[pageindex]
+            if page is None:
+                msg = f'page {pageindex} not found'
+                if strict:
+                    raise ValueError(msg)
+                add_anomaly(
+                    WindowAnomaly(
+                        page=pageindex,
+                        channel=None,
+                        tile=None,
+                        kind='missing_page',
+                        window=window,
+                        detail=msg,
+                        windows=(window,),
+                    )
+                )
+                continue
+
+            if isinstance(page, TiffFrame):
+                page = page.aspage()
+
+            if requested_channels is None:
+                if channels_by_page is not None and (
+                    pageindex in channels_by_page
+                    or str(pageindex) in channels_by_page
+                ):
+                    value = channels_by_page.get(
+                        pageindex, channels_by_page.get(str(pageindex))
+                    )
+                    if isinstance(value, int | numpy.integer):
+                        channels_ = (int(value),)
+                    else:
+                        channels_ = tuple(
+                            dict.fromkeys(int(v) for v in value)
+                        )
+                else:
+                    channels_ = tuple(range(int(page.samplesperpixel)))
+            else:
+                channels_ = requested_channels
+            key = (pageindex, window, channels_)
+            if key in results:
+                continue
+
+            page_layout = _page_layout_for(layouts, pageindex)
+
+            try:
+                result = _read_page_window(
+                    page,
+                    pageindex,
+                    window,
+                    channels_,
+                    fillvalue=fillvalue,
+                    page_layout=page_layout,
+                    payloads=payloads,
+                    payload_bytes=payload_bytes,
+                    seen_refs=seen_refs,
+                    anomalies=add_anomaly,
+                    segments=segments,
+                    strict=strict,
+                )
+            except Exception as exc:
+                msg = f'{exc!r:.128}'
+                if strict:
+                    raise
+                add_anomaly(
+                    WindowAnomaly(
+                        page=pageindex,
+                        channel=None,
+                        tile=None,
+                        kind='unsupported',
+                        window=window,
+                        detail=msg,
+                        windows=(window,),
+                    )
+                )
+                result = _unavailable_window(
+                    page,
+                    pageindex,
+                    window,
+                    channels_,
+                    fillvalue=fillvalue,
+                    anomalies=(),
+                )
+            results[key] = result
+            if result.layouts is not None:
+                layouts_out[pageindex] = result.layouts
+
+        ordered = sorted(
+            results.values(),
+            key=lambda r: (r.page, r.window, r.channels),
+        )
+        anomaly_list = sorted(
+            anomalies.values(),
+            key=lambda a: (
+                a.page,
+                -1 if a.channel is None else a.channel,
+                -1 if a.tile is None else a.tile,
+                a.kind,
+                a.window or (),
+            ),
+        )
+        decoded = sorted(
+            payloads.values(),
+            key=lambda d: (d.offset, d.bytecount, d.status),
+        )
+        segments.sort(
+            key=lambda s: (
+                s['page'],
+                s['channel'],
+                s['tile'],
+                s['window'],
+            )
+        )
+        return WindowBatch(
+            ordered,
+            anomaly_list,
+            decoded,
+            layouts={key: layouts_out[key] for key in sorted(layouts_out)},
+            segments=segments,
+        )
+
+    def windows(self, windows: Any = None, **kwargs: Any) -> WindowBatch:
+        """Alias for :py:meth:`read_windows`."""
+        return self.read_windows(windows, **kwargs)
+
+    def read_window(
+        self,
+        pageindex: int,
+        window: tuple[int, int, int, int] | None = None,
+        *args: int,
+        channels: Sequence[int] | None = None,
+        channel: int | None = None,
+        fillvalue: float | None = None,
+        layouts: Mapping[int, Any] | None = None,
+        layout: Mapping[int, Any] | Any | None = None,
+        strict: bool = False,
+        **kwargs: Any,
+    ) -> WindowResult:
+        """Return pixels and availability mask from one page window."""
+        if args:
+            if window is None:
+                msg = 'invalid window arguments'
+                raise ValueError(msg)
+            if isinstance(window, int | numpy.integer):
+                values = (int(window), *args)
+            elif isinstance(window, tuple | list):
+                values = (*window, *args)
+            else:
+                msg = 'invalid window arguments'
+                raise ValueError(msg)
+            if len(values) != 4:
+                msg = 'invalid window arguments'
+                raise ValueError(msg)
+            window = values  # type: ignore[assignment]
+        if window is None:
+            msg = 'missing window'
+            raise ValueError(msg)
+        if channel is not None and channels is None:
+            channels = (channel,)
+        if layouts is None and layout is not None:
+            if isinstance(layout, Mapping):
+                layouts = layout  # type: ignore[assignment]
+            else:
+                layouts = {int(pageindex): layout}
+        return self.read_windows(
+            [(pageindex, window)],
+            channels=channels,
+            fillvalue=fillvalue,
+            layouts=layouts,
+            strict=strict,
+            **kwargs,
+        )[0]
+
+    def window(
+        self,
+        pageindex: int,
+        window: tuple[int, int, int, int],
+        **kwargs: Any,
+    ) -> WindowResult:
+        """Alias for :py:meth:`read_window`."""
+        return self.read_window(pageindex, window, **kwargs)
+
+    def read_region(
+        self,
+        pageindex: int,
+        window: tuple[int, int, int, int],
+        **kwargs: Any,
+    ) -> WindowResult:
+        """Alias for :py:meth:`read_window`."""
+        return self.read_window(pageindex, window, **kwargs)
+
+    def read_roi(
+        self,
+        pageindex: int,
+        window: tuple[int, int, int, int],
+        **kwargs: Any,
+    ) -> WindowResult:
+        """Alias for :py:meth:`read_window`."""
+        return self.read_window(pageindex, window, **kwargs)
 
     def asarray(
         self,
@@ -7773,6 +8797,76 @@ class TiffPage:
                     flat=False,
                 ):
                     yield from executor.map(decode, chunk)
+
+    def read_window(
+        self,
+        window: tuple[int, int, int, int] | None = None,
+        *args: int,
+        channels: Sequence[int] | None = None,
+        channel: int | None = None,
+        fillvalue: float | None = None,
+        layouts: Mapping[int, Any] | None = None,
+        layout: Any = None,
+        strict: bool = False,
+        **kwargs: Any,
+    ) -> WindowResult:
+        """Return pixels and availability mask from a window."""
+        if args:
+            if window is None:
+                msg = 'invalid window arguments'
+                raise ValueError(msg)
+            if isinstance(window, int | numpy.integer):
+                values = (int(window), *args)
+            elif isinstance(window, tuple | list):
+                values = (*window, *args)
+            else:
+                msg = 'invalid window arguments'
+                raise ValueError(msg)
+            if len(values) != 4:
+                msg = 'invalid window arguments'
+                raise ValueError(msg)
+            window = values  # type: ignore[assignment]
+        if window is None:
+            msg = 'missing window'
+            raise ValueError(msg)
+        if channel is not None and channels is None:
+            channels = (channel,)
+        if layouts is None and layout is not None:
+            layouts = {self.index: layout}
+        elif isinstance(layouts, Mapping) and (
+            self.index not in layouts
+            and str(self.index) not in layouts
+            and 'pages' not in layouts
+        ):
+            # Mapping describes tiles of this page, not pages in file.
+            layouts = {self.index: layouts}
+        return self.parent.read_window(
+            self.index,
+            window,
+            channels=channels,
+            fillvalue=fillvalue,
+            layouts=layouts,
+            strict=strict,
+            **kwargs,
+        )
+
+    def read_windows(
+        self,
+        windows: Sequence[tuple[int, int, int, int]],
+        **kwargs: Any,
+    ) -> WindowBatch:
+        """Return pixels and masks from multiple windows."""
+        return self.parent.read_windows(
+            {self.index: windows}, **kwargs
+        )
+
+    def windows(
+        self,
+        windows: Sequence[tuple[int, int, int, int]],
+        **kwargs: Any,
+    ) -> WindowBatch:
+        """Return pixels and masks from multiple windows."""
+        return self.read_windows(windows, **kwargs)
 
     def asarray(
         self,
@@ -27142,6 +28236,1249 @@ def product(iterable: Iterable[int | numpy.integer], /) -> int:
     for item in iterable:
         prod *= int(item)
     return prod
+
+
+_WINDOW_LAYOUT_KEYS = {
+    'samples',
+    'sample_count',
+    'count',
+    'shape',
+    'rows',
+    'columns',
+    'cols',
+    'width',
+    'row_width',
+    'full_width',
+    'partial_width',
+    'row_samples',
+    'samples_per_row',
+    'samples_per_line',
+    'row_length',
+    'tile_length',
+    'tile_width',
+    'prefix',
+    'compact',
+    'full',
+}
+
+
+def _normalize_window_requests(
+    windows: Any,
+    channels: Sequence[int] | None,
+) -> list[tuple[int, tuple[int, int, int, int], tuple[int, ...] | None]]:
+    """Return canonical (page, window, channels) requests."""
+
+    def normalize_page(page: Any) -> int:
+        if hasattr(page, 'index') and not isinstance(page, int | numpy.integer):
+            try:
+                return int(page.index)
+            except Exception as exc:
+                msg = f'invalid page {page!r}'
+                raise ValueError(msg) from exc
+        try:
+            return int(page)
+        except (TypeError, ValueError) as exc:
+            msg = f'invalid page {page!r}'
+            raise ValueError(msg) from exc
+
+    def normalize_window(window: Any) -> tuple[int, int, int, int]:
+        if isinstance(window, Mapping):
+            for keys in (
+                ('row0', 'row1', 'col0', 'col1'),
+                ('row_start', 'row_stop', 'col_start', 'col_stop'),
+                ('y0', 'y1', 'x0', 'x1'),
+                ('top', 'bottom', 'left', 'right'),
+                ('rows', 'columns'),
+            ):
+                if all(key in window for key in keys):
+                    if len(keys) == 2:
+                        rows = window[keys[0]]
+                        columns = window[keys[1]]
+                        row0, row1 = int(rows[0]), int(rows[1])
+                        col0, col1 = int(columns[0]), int(columns[1])
+                    else:
+                        row0, row1, col0, col1 = (
+                            int(window[key]) for key in keys
+                        )
+                    if (
+                        row0 < 0
+                        or col0 < 0
+                        or row1 < row0
+                        or col1 < col0
+                    ):
+                        msg = f'invalid window {window!r}'
+                        raise ValueError(msg)
+                    return row0, row1, col0, col1
+            msg = f'invalid window {window!r}'
+            raise ValueError(msg)
+        if isinstance(window, tuple | list) and len(window) == 2:
+            rows, columns = window
+            if isinstance(rows, slice) and isinstance(columns, slice):
+                window = (
+                    rows.start or 0,
+                    rows.stop,
+                    columns.start or 0,
+                    columns.stop,
+                )
+        try:
+            row0, row1, col0, col1 = (int(v) for v in window)
+        except (TypeError, ValueError) as exc:
+            msg = f'invalid window {window!r}'
+            raise ValueError(msg) from exc
+        if row0 < 0 or col0 < 0 or row1 < row0 or col1 < col0:
+            msg = f'invalid window {window!r}'
+            raise ValueError(msg)
+        return row0, row1, col0, col1
+
+    def normalize_channels(value: Any) -> tuple[int, ...] | None:
+        if value is None:
+            return None
+        if isinstance(value, int | numpy.integer):
+            value = (value,)
+        result = tuple(dict.fromkeys(int(v) for v in value))
+        if not result or any(v < 0 for v in result):
+            msg = f'invalid channels {value!r}'
+            raise ValueError(msg)
+        return result
+
+    default_channels = normalize_channels(channels)
+    requests: list[
+        tuple[int, tuple[int, int, int, int], tuple[int, ...] | None]
+    ] = []
+
+    def add(pageindex: Any, item: Any, itemchannels: Any = None) -> None:
+        if isinstance(item, Mapping):
+            if 'page' in item or 'page_index' in item or 'index' in item:
+                pageindex = item.get(
+                    'page', item.get('page_index', item.get('index'))
+                )
+            if itemchannels is None and 'channels' in item:
+                itemchannels = item['channels']
+            elif itemchannels is None and 'channel' in item:
+                itemchannels = item['channel']
+            item = {
+                key: value
+                for key, value in item.items()
+                if key
+                not in {
+                    'page',
+                    'page_index',
+                    'index',
+                    'channels',
+                    'channel',
+                }
+            }
+        pageindex = normalize_page(pageindex)
+        if (
+            isinstance(item, tuple | list)
+            and len(item) == 2
+            and isinstance(item[0], tuple | list | Mapping)
+            and (
+                len(item[0]) == 4
+                or isinstance(item[0], Mapping)
+            )
+        ):
+            item, itemchannels = item
+        channels_ = normalize_channels(itemchannels)
+        if channels_ is None:
+            channels_ = default_channels
+        requests.append((pageindex, normalize_window(item), channels_))
+
+    if isinstance(windows, Mapping):
+        for pageindex, pagewindows in windows.items():
+            if isinstance(pageindex, tuple) and len(pageindex) == 2:
+                add(pageindex[0], pageindex[1], pagewindows)
+                continue
+            if (
+                isinstance(pagewindows, tuple | list)
+                and len(pagewindows) == 4
+                and not isinstance(pagewindows[0], tuple | list | Mapping)
+            ):
+                pagewindows = (pagewindows,)
+            for item in pagewindows:
+                add(pageindex, item)
+    else:
+        for item in windows:
+            if isinstance(item, Mapping):
+                pageindex = item.get(
+                    'page', item.get('page_index', item.get('index'))
+                )
+                if pageindex is None:
+                    msg = f'invalid window request {item!r}'
+                    raise ValueError(msg)
+                add(pageindex, item)
+                continue
+            if not isinstance(item, tuple | list):
+                msg = f'invalid window request {item!r}'
+                raise ValueError(msg)
+            if len(item) == 1 and isinstance(item[0], tuple | list):
+                item = item[0]
+            if len(item) in {2, 3}:
+                if isinstance(item[1], tuple | list) and len(item[1]) == 4:
+                    add(
+                        item[0],
+                        item[1],
+                        item[2] if len(item) == 3 else None,
+                    )
+                else:
+                    msg = f'invalid window request {item!r}'
+                    raise ValueError(msg)
+            elif len(item) in {5, 6}:
+                add(
+                    item[0],
+                    tuple(item[1:5]),
+                    item[5] if len(item) == 6 else None,
+                )
+            else:
+                msg = f'invalid window request {item!r}'
+                raise ValueError(msg)
+
+    return requests
+
+
+def _window_intersection(
+    window: tuple[int, int, int, int],
+    row0: int,
+    row1: int,
+    col0: int,
+    col1: int,
+) -> tuple[int, int, int, int] | None:
+    """Return intersection of two windows, or None."""
+    sr0, sr1, sc0, sc1 = window
+    r0 = max(sr0, row0)
+    r1 = min(sr1, row1)
+    c0 = max(sc0, col0)
+    c1 = min(sc1, col1)
+    if r0 >= r1 or c0 >= c1:
+        return None
+    return r0, r1, c0, c1
+
+
+def _page_layout_for(layouts: Any, pageindex: int) -> Any:
+    """Return layout description for a page from a layouts collection."""
+    if layouts is None:
+        return None
+    if isinstance(layouts, str):
+        value = layouts.strip()
+        if value[:1] in '[{':
+            try:
+                layouts = json.loads(value)
+            except ValueError:
+                return layouts
+        else:
+            return layouts
+    if isinstance(layouts, Mapping):
+        if pageindex in layouts:
+            return layouts[pageindex]
+        if str(pageindex) in layouts:
+            return layouts[str(pageindex)]
+        if any(key in layouts for key in _WINDOW_LAYOUT_KEYS):
+            return layouts
+        if 'pages' in layouts:
+            return _page_layout_for(layouts['pages'], pageindex)
+        return None
+    if isinstance(layouts, Sequence) and not isinstance(layouts, str | bytes):
+        if 0 <= pageindex < len(layouts):
+            return layouts[pageindex]
+        return None
+    return layouts
+
+
+def _select_tile_layout(
+    page_layout: Any,
+    *,
+    tile: int,
+    channel: int,
+    tile_in_sample: int,
+    down: int,
+    across: int,
+    channels: int,
+    tiles_per_sample: int,
+) -> Any:
+    """Return tile layout description from a page layout."""
+    if page_layout is None:
+        return None
+    if isinstance(page_layout, Mapping):
+        if any(key in page_layout for key in _WINDOW_LAYOUT_KEYS):
+            return page_layout
+        if tile in page_layout:
+            return page_layout[tile]
+        if str(tile) in page_layout:
+            return page_layout[str(tile)]
+        for key in ('channels', 'by_channel', 'samples', 'per_channel'):
+            if key in page_layout:
+                value = page_layout[key]
+                if isinstance(value, Mapping):
+                    if channel in value:
+                        return _select_tile_layout(
+                            value[channel], tile=tile, channel=channel,
+                            tile_in_sample=tile_in_sample, down=down,
+                            across=across, channels=channels,
+                            tiles_per_sample=tiles_per_sample,
+                        )
+                    if str(channel) in value:
+                        return _select_tile_layout(
+                            value[str(channel)], tile=tile, channel=channel,
+                            tile_in_sample=tile_in_sample, down=down,
+                            across=across, channels=channels,
+                            tiles_per_sample=tiles_per_sample,
+                        )
+                if isinstance(value, Sequence) and not isinstance(
+                    value, str | bytes
+                ):
+                    if 0 <= channel < len(value):
+                        return _select_tile_layout(
+                            value[channel], tile=tile, channel=channel,
+                            tile_in_sample=tile_in_sample, down=down,
+                            across=across, channels=channels,
+                            tiles_per_sample=tiles_per_sample,
+                        )
+                return None
+        for key in ('tiles', 'by_tile', 'per_tile', 'layouts'):
+            if key in page_layout:
+                return _select_tile_layout(
+                    page_layout[key], tile=tile, channel=channel,
+                    tile_in_sample=tile_in_sample, down=down,
+                    across=across, channels=channels,
+                    tiles_per_sample=tiles_per_sample,
+                )
+        if channel in page_layout and isinstance(
+            page_layout[channel], Mapping | Sequence
+        ) and not isinstance(page_layout[channel], str | bytes):
+            return _select_tile_layout(
+                page_layout[channel], tile=tile, channel=channel,
+                tile_in_sample=tile_in_sample, down=down,
+                across=across, channels=channels,
+                tiles_per_sample=tiles_per_sample,
+            )
+        if (down, across) in page_layout:
+            return page_layout[(down, across)]
+        if page_layout.get('relative'):
+            if tile_in_sample in page_layout:
+                return page_layout[tile_in_sample]
+            if str(tile_in_sample) in page_layout:
+                return page_layout[str(tile_in_sample)]
+        return None
+    if isinstance(page_layout, numpy.ndarray):
+        page_layout = page_layout.tolist()
+    if isinstance(page_layout, Sequence) and not isinstance(
+        page_layout, str | bytes
+    ):
+        if len(page_layout) == tiles_per_sample * max(channels, 1):
+            return page_layout[tile]
+        if len(page_layout) == tiles_per_sample:
+            return page_layout[tile_in_sample]
+        if len(page_layout) == max(channels, 1):
+            return page_layout[channel]
+        if len(page_layout) == 2 and all(
+            isinstance(v, int | numpy.integer) for v in page_layout
+        ):
+            return {'shape': (int(page_layout[0]), int(page_layout[1]))}
+        if len(page_layout) in {5, 6} and all(
+            isinstance(v, int | numpy.integer) for v in page_layout
+        ):
+            if int(page_layout[0]) == tile:
+                result: dict[str, Any] = {
+                    'shape': (int(page_layout[2]), int(page_layout[3])),
+                }
+                result['samples'] = int(page_layout[-1])
+                return result
+        return None
+    return page_layout
+
+
+def _normalize_layout(
+    layout: Any,
+    *,
+    tilelength: int,
+    tilewidth: int,
+    rows: int,
+    columns: int,
+    samples: int,
+) -> dict[str, Any] | None:
+    """Normalize a layout description for one edge tile.
+
+    Returned mapping has one of the modes ``'compact'``, ``'shape'``, or
+    ``'row_width'``, and may include ``'samples'``.
+
+    """
+    if layout is None:
+        return None
+    if isinstance(layout, bool):
+        return {'mode': 'compact' if layout else 'shape',
+                'shape': (rows, columns) if layout else (tilelength, tilewidth)}
+    if isinstance(layout, int | numpy.integer):
+        value = int(layout)
+        if value <= 0:
+            return None
+        if value == rows * columns * samples:
+            return {
+                'mode': 'compact',
+                'shape': (rows, columns),
+                'samples': value,
+            }
+        if value == tilelength * tilewidth * samples:
+            return {
+                'mode': 'shape',
+                'shape': (tilelength, tilewidth),
+                'samples': value,
+            }
+        if value <= tilewidth:
+            return {'mode': 'row_width', 'row_width': value}
+        if value % (tilewidth * samples) == 0:
+            row_count = value // (tilewidth * samples)
+            if 0 < row_count <= tilelength:
+                return {
+                    'mode': 'shape',
+                    'shape': (row_count, tilewidth),
+                    'samples': value,
+                }
+        if samples and value % (columns * samples) == 0:
+            row_count = value // (columns * samples)
+            if 0 < row_count <= rows:
+                return {
+                    'mode': 'compact',
+                    'shape': (rows, columns),
+                    'samples': value,
+                }
+        return {'mode': 'shape', 'samples': value}
+    if isinstance(layout, str):
+        value = layout.strip().lower().replace('_', ' ').replace('-', ' ')
+        if value in {'compact', 'trimmed', 'in image', 'cropped'}:
+            return {'mode': 'compact', 'shape': (rows, columns)}
+        if value in {'full', 'padded', 'full width', 'complete'}:
+            return {'mode': 'shape', 'shape': (tilelength, tilewidth)}
+        match = re.fullmatch(
+            r'(?:row|width|cols?|columns?)\s*[=:]?\s*(\d+)', value
+        )
+        if match:
+            return {'mode': 'row_width', 'row_width': int(match.group(1))}
+        match = re.fullmatch(r'(\d+)\s*[x*]\s*(\d+)', value)
+        if match:
+            return {
+                'mode': 'shape',
+                'shape': (int(match.group(1)), int(match.group(2))),
+            }
+        match = re.fullmatch(r'(\d+)', value)
+        if match:
+            return _normalize_layout(
+                int(match.group(1)),
+                tilelength=tilelength,
+                tilewidth=tilewidth,
+                rows=rows,
+                columns=columns,
+                samples=samples,
+            )
+        return None
+
+    if isinstance(layout, numpy.ndarray):
+        layout = layout.tolist()
+
+    if isinstance(layout, Sequence) and not isinstance(layout, str | bytes):
+        if len(layout) == 2 and all(
+            isinstance(v, int | numpy.integer) for v in layout
+        ):
+            return {
+                'mode': 'shape',
+                'shape': (int(layout[0]), int(layout[1])),
+            }
+        return None
+
+    if isinstance(layout, Mapping):
+        if layout.get('compact'):
+            result = {'mode': 'compact', 'shape': (rows, columns)}
+        elif layout.get('full'):
+            result = {'mode': 'shape', 'shape': (tilelength, tilewidth)}
+        elif 'shape' in layout:
+            shape = layout['shape']
+            result = {
+                'mode': 'shape',
+                'shape': (int(shape[0]), int(shape[1])),
+            }
+        elif (
+            ('rows' in layout or 'row' in layout)
+            and (
+                'columns' in layout
+                or 'cols' in layout
+                or 'column' in layout
+            )
+        ):
+            result = {
+                'mode': 'shape',
+                'shape': (
+                    int(layout.get('rows', layout.get('row'))),
+                    int(
+                        layout.get(
+                            'columns',
+                            layout.get('cols', layout.get('column')),
+                        )
+                    ),
+                ),
+            }
+        elif 'row_width' in layout:
+            result = {
+                'mode': 'row_width',
+                'row_width': int(layout['row_width']),
+            }
+        elif 'row_samples' in layout:
+            result = {
+                'mode': 'row_width',
+                'row_width': int(layout['row_samples']),
+            }
+        elif 'samples_per_row' in layout:
+            result = {
+                'mode': 'row_width',
+                'row_width': int(layout['samples_per_row']),
+            }
+        elif 'samples_per_line' in layout:
+            result = {
+                'mode': 'row_width',
+                'row_width': int(layout['samples_per_line']),
+            }
+        elif 'row_length' in layout:
+            result = {
+                'mode': 'row_width',
+                'row_width': int(layout['row_length']),
+            }
+        elif 'tile_length' in layout or 'tile_width' in layout:
+            result = {
+                'mode': 'shape',
+                'shape': (
+                    int(layout.get('tile_length', tilelength)),
+                    int(layout.get('tile_width', tilewidth)),
+                ),
+            }
+        elif 'full_width' in layout:
+            result = {
+                'mode': 'row_width',
+                'row_width': int(layout['full_width']),
+            }
+        elif 'partial_width' in layout:
+            result = {
+                'mode': 'shape',
+                'shape': (int(layout.get('rows', rows)),
+                          int(layout['partial_width'])),
+            }
+        elif 'width' in layout:
+            result = {
+                'mode': 'row_width',
+                'row_width': int(layout['width']),
+            }
+        elif 'columns' in layout or 'cols' in layout:
+            result = {
+                'mode': 'row_width',
+                'row_width': int(layout.get('columns', layout.get('cols'))),
+            }
+        elif 'rows' in layout:
+            row_count = int(layout['rows'])
+            result = {
+                'mode': 'shape',
+                'shape': (row_count,
+                          columns if row_count == rows else tilewidth),
+            }
+        else:
+            result = {'mode': 'shape'}
+        for key in ('samples', 'sample_count', 'count'):
+            if key in layout and layout[key] is not None:
+                result['samples'] = int(layout[key])
+                break
+        if 'prefix' in layout:
+            result['prefix'] = bool(layout['prefix'])
+        return result
+
+    return None
+
+
+def _layout_expected(
+    layout: Mapping[str, Any],
+    *,
+    tilelength: int,
+    tilewidth: int,
+    rows: int,
+    columns: int,
+    samples: int,
+) -> tuple[tuple[int, int], int]:
+    """Return expected tile shape and in-tile sample count."""
+    mode = layout.get('mode', 'shape')
+    if mode == 'compact':
+        if rows == tilelength and columns == tilewidth:
+            shape = (tilelength, tilewidth)
+        else:
+            shape = layout.get('shape', (rows, columns))
+            shape = (int(shape[0]), int(shape[1]))
+    elif mode == 'row_width':
+        row_width = int(layout.get('row_width', tilewidth))
+        row_width = max(1, min(row_width, tilewidth))
+        shape = (int(layout.get('rows', tilelength)), row_width)
+    else:
+        shape = layout.get('shape', (tilelength, tilewidth))
+        shape = (int(shape[0]), int(shape[1]))
+    expected = shape[0] * shape[1] * samples
+    if 'samples' in layout and layout['samples'] is not None:
+        expected = int(layout['samples'])
+    return shape, expected
+
+
+def _decode_payload(
+    page: TiffPage | TiffFrame,
+    encoded: bytes,
+) -> bytes:
+    """Return decompressed payload bytes."""
+    decompress = TIFF.DECOMPRESSORS[page.compression]
+    decoded = decompress(encoded)
+    if isinstance(decoded, numpy.ndarray):
+        return decoded.tobytes()
+    return bytes(decoded)
+
+
+def _undifference_rows(
+    buffer: NDArray[Any],
+    shape: tuple[int, int],
+    samples: int,
+) -> tuple[NDArray[Any], NDArray[Any]]:
+    """Return pixels and availability mask for a sample prefix.
+
+    Samples are in row-major order, each row is horizontally differenced
+    independently, and rows may be cut short. Samples not present are
+    marked unavailable; edge padding is not added.
+
+    """
+    height, width = shape
+    if height < 1 or width < 1:
+        msg = 'invalid tile shape'
+        raise ValueError(msg)
+    row_width = width * samples
+    sample_count = int(buffer.size)
+    if sample_count > height * row_width:
+        msg = f'{sample_count} samples exceed tile capacity'
+        raise ValueError(msg)
+    full_rows = sample_count // row_width
+    remainder = sample_count % row_width
+    recovered_rows = full_rows + (1 if remainder else 0)
+    data = numpy.zeros((height, width), dtype=numpy.uint8)
+    mask = numpy.zeros((height, width), dtype=numpy.bool_)
+    if full_rows:
+        block = buffer[: full_rows * row_width].reshape(
+            full_rows, width, samples
+        )
+        block = numpy.cumsum(block, axis=1, dtype=block.dtype)
+        data[:full_rows] = block.reshape(full_rows, width)
+        mask[:full_rows] = True
+    if remainder and full_rows < height:
+        tail = buffer[full_rows * row_width : sample_count].reshape(
+            remainder, samples
+        )
+        tail = numpy.cumsum(tail, axis=0, dtype=tail.dtype).reshape(-1)
+        data[full_rows, :remainder] = tail
+        mask[full_rows, :remainder] = True
+    return data, mask
+
+
+def _candidate_signature(
+    data: NDArray[Any],
+    mask: NDArray[Any],
+    *,
+    rows: int,
+    columns: int,
+) -> tuple[bytes, bytes, bytes]:
+    """Return in-image positions and values of a candidate tile."""
+    visible_rows = min(data.shape[0], rows)
+    visible_columns = min(data.shape[1], columns)
+    data = data[:visible_rows, :visible_columns]
+    mask = mask[:visible_rows, :visible_columns]
+    row_indices, column_indices = numpy.nonzero(mask)
+    return (
+        row_indices.astype(numpy.int64).tobytes(),
+        column_indices.astype(numpy.int64).tobytes(),
+        data[mask].tobytes(),
+    )
+
+
+def _interpret_tile(
+    decoded: bytes,
+    *,
+    tile: int,
+    tilelength: int,
+    tilewidth: int,
+    rows: int,
+    columns: int,
+    samples: int,
+    layout: Mapping[str, Any] | None,
+) -> tuple[NDArray[Any] | None, NDArray[Any] | None, dict[str, Any]]:
+    """Return pixels, mask, and layout information for one tile payload."""
+    buffer = numpy.frombuffer(decoded, dtype=numpy.uint8)
+    sample_count = int(buffer.size)
+    if layout is not None:
+        shape, expected = _layout_expected(
+            layout,
+            tilelength=tilelength,
+            tilewidth=tilewidth,
+            rows=rows,
+            columns=columns,
+            samples=samples,
+        )
+        if sample_count > expected:
+            # The layout cannot describe this payload. It may only apply
+            # to partially written edge tiles; fall back to inference.
+            layout = None
+        else:
+            data, mask = _undifference_rows(buffer, shape, samples)
+            if sample_count < expected:
+                return data, mask, {
+                    'kind': 'partial',
+                    'partial': True,
+                    'recovered': sample_count,
+                    'expected': expected,
+                    'detail': (
+                        f'tile {tile} recovered {sample_count} of '
+                        f'{expected} declared samples'
+                    ),
+                }
+            return data, mask, {
+                'kind': 'ok',
+                'partial': False,
+                'recovered': sample_count,
+                'expected': expected,
+            }
+
+    # Without a declared layout, consider the plausible physical shapes:
+    # the full tile, the compact in-image edge tile, and the full-height
+    # edge-width tile. Shapes whose sample capacity is exceeded are not
+    # candidates. If candidates disagree on visible pixels, the layout is
+    # undetermined and no pixel of this tile is available.
+    edge_tile = rows != tilelength or columns != tilewidth
+    compact_capacity = rows * columns * samples
+    full_capacity = tilelength * tilewidth * samples
+    if (
+        edge_tile
+        and columns != tilewidth
+        and sample_count <= compact_capacity
+        and sample_count < full_capacity
+    ):
+        # The same length can be a complete compact edge tile or a prefix
+        # of the padded, full-width tile. Without a declared layout, the
+        # pixel positions cannot be determined.
+        return None, None, {
+            'kind': 'layout_undetermined',
+            'recovered': sample_count,
+            'expected': compact_capacity,
+            'detail': (
+                f'tile {tile} sample count {sample_count} could be a '
+                'complete compact edge tile or a partial full-width tile'
+            ),
+        }
+
+    shapes: list[tuple[int, int]] = []
+    for shape in (
+        (tilelength, tilewidth),
+        (rows, columns),
+        (tilelength, columns),
+    ):
+        if shape in shapes:
+            continue
+        if sample_count <= shape[0] * shape[1] * samples:
+            shapes.append(shape)
+    if not shapes:
+        shapes.append((tilelength, tilewidth))
+
+    candidates: list[
+        tuple[tuple[int, int], NDArray[Any], NDArray[Any], bytes]
+    ] = []
+    for shape in shapes:
+        try:
+            data, mask = _undifference_rows(buffer, shape, samples)
+        except ValueError:
+            continue
+        signature = _candidate_signature(
+            data, mask, rows=rows, columns=columns
+        )
+        candidates.append((shape, data, mask, signature))
+
+    if not candidates:
+        return None, None, {
+            'kind': 'layout_undetermined',
+            'recovered': sample_count,
+            'expected': max(
+                rows * columns * samples,
+                tilelength * tilewidth * samples,
+            ),
+            'detail': (
+                f'tile {tile} sample count {sample_count} does not match '
+                'a complete or prefix layout'
+            ),
+        }
+
+    first_signature = candidates[0][3]
+    if any(candidate[3] != first_signature for candidate in candidates[1:]):
+        complete_compact = any(
+            shape == (rows, columns) and mask.all()
+            for shape, _, mask, _ in candidates
+        )
+        detail = (
+            f'tile {tile} sample count {sample_count} could be a '
+            'complete compact edge tile or a partial full-width tile'
+            if complete_compact
+            else (
+                f'tile {tile} sample count {sample_count} matches multiple '
+                'tile layouts with different pixels'
+            )
+        )
+        return None, None, {
+            'kind': 'layout_undetermined',
+            'recovered': sample_count,
+            'expected': max(
+                rows * columns * samples,
+                tilelength * tilewidth * samples,
+            ),
+            'detail': detail,
+        }
+
+    # All candidates agree on visible pixels. Prefer the candidate that
+    # covers most visible pixels, then the smallest physical shape.
+    shape, data, mask, _ = max(
+        candidates,
+        key=lambda item: (
+            int(item[2][:rows, :columns].sum()),
+            -item[0][0] * item[0][1],
+        ),
+    )
+    visible = mask[:rows, :columns]
+    complete = bool(visible.all())
+    expected = min(shape[0], rows) * shape[1] * samples
+    if complete:
+        return data, mask, {
+            'kind': 'ok',
+            'partial': False,
+            'recovered': sample_count,
+            'expected': expected,
+        }
+    return data, mask, {
+        'kind': 'partial',
+        'partial': True,
+        'recovered': sample_count,
+        'expected': expected,
+        'detail': (
+            f'tile {tile} recovered {int(visible.sum())} of '
+            f'{int(visible.size)} visible samples'
+        ),
+    }
+
+
+def _read_page_window(
+    page: TiffPage | TiffFrame,
+    pageindex: int,
+    window: tuple[int, int, int, int],
+    channels: tuple[int, ...],
+    *,
+    fillvalue: float | None,
+    page_layout: Any,
+    payloads: dict[tuple[int, int], WindowDecode],
+    payload_bytes: dict[tuple[int, int], bytes | None],
+    seen_refs: set[tuple[int, int, int]],
+    anomalies: Callable[[WindowAnomaly], None],
+    segments: list[dict[str, Any]],
+    strict: bool,
+) -> WindowResult:
+    """Return window pixels and mask from one page."""
+    row0, row1, col0, col1 = window
+    imagelength = int(page.imagelength)
+    imagewidth = int(page.imagewidth)
+    samplesperpixel = int(page.samplesperpixel)
+    if page.dtype is None or page.dtype.itemsize != 1:
+        msg = 'only 8-bit images are supported'
+        raise ValueError(msg)
+    if page.compression not in {8, 32946}:
+        msg = f'compression {page.compression} not supported'
+        raise ValueError(msg)
+    if page.predictor != 2:
+        msg = f'predictor {page.predictor} not supported'
+        raise ValueError(msg)
+    if samplesperpixel > 1 and page.planarconfig != 2:
+        msg = f'planarconfig {page.planarconfig} not supported'
+        raise ValueError(msg)
+    if not page.is_tiled:
+        msg = 'only tiled images are supported'
+        raise ValueError(msg)
+    if any(channel >= samplesperpixel for channel in channels):
+        msg = f'channel out of range for page {pageindex}'
+        raise ValueError(msg)
+
+    tilelength = int(page.tilelength)
+    tilewidth = int(page.tilewidth)
+    tiledepth = int(page.tiledepth)
+    imagedepth = int(page.imagedepth)
+    depth = math.ceil(imagedepth / tiledepth) if imagedepth > 1 else 1
+    across = math.ceil(imagewidth / tilewidth)
+    down = math.ceil(imagelength / tilelength)
+    area = across * down
+    tiles_per_sample = area * depth
+
+    dtype = page.dtype
+    fill = page._fillvalue(fillvalue)
+    outshape = (
+        (len(channels), row1 - row0, col1 - col0)
+        if samplesperpixel > 1
+        else (row1 - row0, col1 - col0)
+    )
+    result = numpy.full(outshape, fill, dtype=dtype)
+    mask = numpy.zeros(outshape, dtype=numpy.bool_)
+    anomalies_for_window: list[WindowAnomaly] = []
+    seen_anomalies: set[tuple[Any, ...]] = set()
+
+    def add_local(anomaly: WindowAnomaly) -> None:
+        key = (anomaly.page, anomaly.channel, anomaly.tile, anomaly.kind)
+        if key in seen_anomalies:
+            return
+        seen_anomalies.add(key)
+        anomalies_for_window.append(anomaly)
+        anomalies(anomaly)
+
+    visible = _window_intersection(window, 0, imagelength, 0, imagewidth)
+    if visible is None:
+        return WindowResult(
+            page=pageindex,
+            window=window,
+            pixels=result,
+            mask=mask,
+            anomalies=[],
+            channels=channels,
+            layouts={
+                'tilelength': tilelength,
+                'tilewidth': tilewidth,
+                'tiledepth': tiledepth,
+            },
+        )
+
+    visible_row0, visible_row1, visible_col0, visible_col1 = visible
+    dataoffsets = page.dataoffsets
+    databytecounts = page.databytecounts
+    fh = page.parent.filehandle
+
+    for channel in channels:
+        sample_index = 0 if samplesperpixel == 1 else channel
+        for tiledepthindex in range(depth):
+            z0 = tiledepthindex * tiledepth
+            if z0 >= imagedepth:
+                continue
+            for tiledown in range(down):
+                ty0 = tiledown * tilelength
+                ty1 = min(ty0 + tilelength, imagelength)
+                if ty1 <= visible_row0 or ty0 >= visible_row1:
+                    continue
+                for tileacross in range(across):
+                    tx0 = tileacross * tilewidth
+                    tx1 = min(tx0 + tilewidth, imagewidth)
+                    if tx1 <= visible_col0 or tx0 >= visible_col1:
+                        continue
+
+                    tile = (
+                        sample_index * tiles_per_sample
+                        + tiledepthindex * area
+                        + tiledown * across
+                        + tileacross
+                    )
+                    rows = ty1 - ty0
+                    columns = tx1 - tx0
+                    effective_samples = (
+                        samplesperpixel if samplesperpixel == 1 else 1
+                    )
+                    tile_index = (sample_index, z0, ty0, tx0)
+                    descriptor = _select_tile_layout(
+                        page_layout,
+                        tile=tile,
+                        channel=channel,
+                        tile_in_sample=(
+                            tile - sample_index * tiles_per_sample
+                        ),
+                        down=tiledown,
+                        across=tileacross,
+                        channels=samplesperpixel,
+                        tiles_per_sample=tiles_per_sample,
+                    )
+                    layout = _normalize_layout(
+                        descriptor,
+                        tilelength=tilelength,
+                        tilewidth=tilewidth,
+                        rows=rows,
+                        columns=columns,
+                        samples=effective_samples,
+                    )
+                    segments.append(
+                        {
+                            'page': pageindex,
+                            'channel': channel,
+                            'tile': tile,
+                            'tile_index': tile_index,
+                            'window': window,
+                            'offset': (
+                                int(dataoffsets[tile])
+                                if tile < len(dataoffsets)
+                                else 0
+                            ),
+                            'bytecount': (
+                                int(databytecounts[tile])
+                                if tile < len(databytecounts)
+                                else 0
+                            ),
+                        }
+                    )
+
+                    if tile >= len(dataoffsets) or tile >= len(
+                        databytecounts
+                    ):
+                        add_local(
+                            WindowAnomaly(
+                                page=pageindex,
+                                channel=channel,
+                                tile=tile,
+                                kind='missing',
+                                window=window,
+                                detail='tile directory entry missing',
+                                tile_index=tile_index,
+                                windows=(window,),
+                            )
+                        )
+                        continue
+
+                    offset = int(dataoffsets[tile])
+                    bytecount = int(databytecounts[tile])
+                    if offset <= 0 or bytecount <= 0:
+                        add_local(
+                            WindowAnomaly(
+                                page=pageindex,
+                                channel=channel,
+                                tile=tile,
+                                kind='missing',
+                                window=window,
+                                offset=offset,
+                                bytecount=bytecount,
+                                detail='tile data missing',
+                                tile_index=tile_index,
+                                windows=(window,),
+                            )
+                        )
+                        continue
+
+                    key = (offset, bytecount)
+                    payload = payloads.get(key)
+                    if payload is None:
+                        payload = WindowDecode(
+                            offset=offset,
+                            bytecount=bytecount,
+                            pages=(),
+                            channels=(),
+                            tiles=(),
+                            references=0,
+                        )
+                        payloads[key] = payload
+                        try:
+                            with fh.lock:
+                                fh.seek(offset)
+                                encoded = fh.read(bytecount)
+                            if len(encoded) != bytecount:
+                                msg = (
+                                    f'read {len(encoded)} != '
+                                    f'{bytecount} bytes'
+                                )
+                                raise ValueError(msg)
+                            payload_bytes[key] = _decode_payload(
+                                page, encoded
+                            )
+                            payload.sample_count = len(payload_bytes[key])
+                        except Exception as exc:
+                            payload.status = 'decode_error'
+                            payload.error = f'{exc!r:.128}'
+                            payload.sample_count = 0
+                            payload_bytes[key] = None
+
+                    reference = (pageindex, tile, channel)
+                    if reference not in seen_refs:
+                        seen_refs.add(reference)
+                        payload.references += 1
+                        pages_ = set(payload.pages)
+                        pages_.add(pageindex)
+                        payload.pages = tuple(sorted(pages_))
+                        channels_ = set(payload.channels)
+                        channels_.add(channel)
+                        payload.channels = tuple(sorted(channels_))
+                        tiles_ = set(payload.tiles)
+                        tiles_.add(tile)
+                        payload.tiles = tuple(sorted(tiles_))
+                    if payload.status != 'ok':
+                        add_local(
+                            WindowAnomaly(
+                                page=pageindex,
+                                channel=channel,
+                                tile=tile,
+                                kind='decode_error',
+                                window=window,
+                                offset=offset,
+                                bytecount=bytecount,
+                                detail=payload.error or 'decompression failed',
+                                tile_index=tile_index,
+                                windows=(window,),
+                            )
+                        )
+                        continue
+
+                    decoded = payload_bytes.get(key)
+                    if decoded is None:
+                        add_local(
+                            WindowAnomaly(
+                                page=pageindex,
+                                channel=channel,
+                                tile=tile,
+                                kind='decode_error',
+                                window=window,
+                                offset=offset,
+                                bytecount=bytecount,
+                                detail='payload data unavailable',
+                                tile_index=tile_index,
+                                windows=(window,),
+                            )
+                        )
+                        continue
+
+                    try:
+                        data, data_mask, info = _interpret_tile(
+                            decoded,
+                            tile=tile,
+                            tilelength=tilelength,
+                            tilewidth=tilewidth,
+                            rows=rows,
+                            columns=columns,
+                            samples=effective_samples,
+                            layout=layout,
+                        )
+                    except Exception as exc:
+                        add_local(
+                            WindowAnomaly(
+                                page=pageindex,
+                                channel=channel,
+                                tile=tile,
+                                kind='decode_error',
+                                window=window,
+                                offset=offset,
+                                bytecount=bytecount,
+                                detail=f'{exc!r:.128}',
+                                tile_index=tile_index,
+                                windows=(window,),
+                            )
+                        )
+                        continue
+
+                    if data is None:
+                        add_local(
+                            WindowAnomaly(
+                                page=pageindex,
+                                channel=channel,
+                                tile=tile,
+                                kind=info['kind'],
+                                window=window,
+                                offset=offset,
+                                bytecount=bytecount,
+                                recovered=info.get('recovered'),
+                                expected=info.get('expected'),
+                                detail=info.get('detail', ''),
+                                tile_index=tile_index,
+                                windows=(window,),
+                            )
+                        )
+                        continue
+
+                    r0 = max(ty0, visible_row0)
+                    r1 = min(ty1, visible_row1)
+                    c0 = max(tx0, visible_col0)
+                    c1 = min(tx1, visible_col1)
+                    if r0 >= r1 or c0 >= c1:
+                        continue
+                    dr0 = r0 - ty0
+                    dr1 = dr0 + (r1 - r0)
+                    dc0 = c0 - tx0
+                    dc1 = dc0 + (c1 - c0)
+                    orow0 = r0 - row0
+                    orow1 = orow0 + (r1 - r0)
+                    ocol0 = c0 - col0
+                    ocol1 = ocol0 + (c1 - c0)
+                    cur_data = data[dr0:dr1, dc0:dc1]
+                    cur_mask = data_mask[dr0:dr1, dc0:dc1]
+                    if samplesperpixel > 1:
+                        ci = channels.index(channel)
+                        rview = result[ci, orow0:orow1, ocol0:ocol1]
+                        mview = mask[ci, orow0:orow1, ocol0:ocol1]
+                    else:
+                        rview = result[orow0:orow1, ocol0:ocol1]
+                        mview = mask[orow0:orow1, ocol0:ocol1]
+                    rview[cur_mask] = cur_data[cur_mask]
+                    mview |= cur_mask
+
+                    if info.get('partial'):
+                        add_local(
+                            WindowAnomaly(
+                                page=pageindex,
+                                channel=channel,
+                                tile=tile,
+                                kind='partial',
+                                window=window,
+                                offset=offset,
+                                bytecount=bytecount,
+                                recovered=info.get('recovered'),
+                                expected=info.get('expected'),
+                                detail=info.get('detail', ''),
+                                tile_index=tile_index,
+                                windows=(window,),
+                            )
+                        )
+
+    tile_layouts = {}
+    if page_layout is not None:
+        tile_layouts['declared'] = page_layout
+    tile_layouts.update(
+        {
+            'tilelength': tilelength,
+            'tilewidth': tilewidth,
+            'tiledepth': tiledepth,
+            'channels': samplesperpixel,
+        }
+    )
+    return WindowResult(
+        page=pageindex,
+        window=window,
+        pixels=result,
+        mask=mask,
+        anomalies=anomalies_for_window,
+        channels=channels,
+        layouts=tile_layouts,
+    )
+
+
+def _unavailable_window(
+    page: TiffPage | TiffFrame,
+    pageindex: int,
+    window: tuple[int, int, int, int],
+    channels: tuple[int, ...],
+    *,
+    fillvalue: float | None,
+    anomalies: Sequence[WindowAnomaly],
+) -> WindowResult:
+    """Return window with all pixels unavailable."""
+    row0, row1, col0, col1 = window
+    dtype = page.dtype if page.dtype is not None else numpy.dtype(numpy.uint8)
+    fill = page._fillvalue(fillvalue)
+    samplesperpixel = int(page.samplesperpixel)
+    shape = (
+        (len(channels), row1 - row0, col1 - col0)
+        if samplesperpixel > 1
+        else (row1 - row0, col1 - col0)
+    )
+    return WindowResult(
+        page=pageindex,
+        window=window,
+        pixels=numpy.full(shape, fill, dtype=dtype),
+        mask=numpy.zeros(shape, dtype=numpy.bool_),
+        anomalies=list(anomalies),
+        channels=channels,
+    )
 
 
 def peek_iterator(iterator: Iterator[Any], /) -> tuple[Any, Iterator[Any]]:

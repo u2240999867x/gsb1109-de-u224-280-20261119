@@ -26332,3 +26332,317 @@ if __name__ == '__main__':
     argv.append('--cov=tifffile')
     argv.append('--verbose')
     sys.exit(pytest.main(argv))
+
+
+def _window_test_tiff(filename: str) -> None:
+    """Write two-page separate-planar Deflate TIFF with shared special tile."""
+    special = {0: 5, 1: 251, 16: 9}
+    payload = zlib.compress(
+        bytes(special.get(i, 1) for i in range(70))
+    )
+    shape = (3, 23, 26)
+    tileshape = (16, 16)
+
+    def hdiff(array):
+        diff = array.copy()
+        diff[:, 1:] = (
+            array[:, 1:].astype(numpy.int16)
+            - array[:, :-1].astype(numpy.int16)
+        ).astype(numpy.uint8)
+        return diff
+
+    def tile(c, y, x):
+        if c == 0 and y == 16 and x == 16:
+            return payload
+        # Write all tiles padded to 16x16, including edge tiles.
+        array = numpy.zeros(tileshape, numpy.uint8)
+        rows = min(16, 23 - y)
+        cols = min(16, 26 - x)
+        for row in range(rows):
+            for col in range(cols):
+                array[row, col] = (
+                    c * 70 + y * 3 + x * 5 + row * 7 + col * 11
+                ) % 256
+        assert array.shape == tileshape
+        return zlib.compress(hdiff(array).tobytes())
+
+    tiles = [
+        tile(c, y, x)
+        for c in range(3)
+        for y in (0, 16)
+        for x in (0, 16)
+    ]
+    kwargs = {
+        'shape': shape,
+        'dtype': numpy.uint8,
+        'photometric': 'rgb',
+        'planarconfig': 'separate',
+        'tile': tileshape,
+        'compression': 8,
+        'predictor': 2,
+    }
+    with TiffWriter(filename) as tif:
+        tif.write(iter(tiles), **kwargs)
+        tif.write(iter(tiles), **kwargs)
+
+    with TiffFile(filename, mode='r+') as tif:
+        page0 = tif.pages[0]
+        page1 = tif.pages[1]
+        offsets0 = list(page0.dataoffsets)
+        offsets1 = list(page1.dataoffsets)
+        counts0 = list(page0.databytecounts)
+        counts1 = list(page1.databytecounts)
+        # page 0 red bottom-right references page 1's payload
+        offsets0[3] = offsets1[3]
+        counts0[3] = counts1[3]
+        page0.tags[324].overwrite(tuple(offsets0), dtype=4)
+        page0.tags[325].overwrite(tuple(counts0), dtype=4)
+        # page 0 blue bottom-right missing from directory
+        page0.tags[324].overwrite(tuple(offsets0[:11]), dtype=4)
+        page0.tags[325].overwrite(tuple(counts0[:11]), dtype=4)
+        # page 1 green bottom-right payload corrupted
+        fh = tif.filehandle
+        fh.seek(offsets1[7])
+        fh.write(b'\x00' * counts1[7])
+        fh.flush()
+
+
+def test_read_windows_shared_tile_and_masks() -> None:
+    """Read windows from pages with shared, partial, missing, bad tiles."""
+    windows = {
+        0: [(14, 23, 14, 26), (17, 22, 16, 24)],
+        1: [(14, 23, 14, 26), (17, 22, 16, 24)],
+    }
+    layouts = {
+        0: {3: 'compact'},
+        1: {3: {'shape': (16, 16), 'row_width': 16}},
+    }
+    with TempFileName('read_windows_shared') as filename:
+        _window_test_tiff(filename)
+        with TiffFile(filename) as tif:
+            batch = tif.read_windows(windows, layouts=layouts)
+            assert len(batch) == 4
+            assert len(batch.decoded) == 22
+            shared = [
+                item
+                for item in batch.decoded
+                if item.references > 1
+            ]
+            assert len(shared) == 1
+            assert shared[0].pages == (0, 1)
+            assert shared[0].reads == shared[0].decodes == 1
+
+            result = batch[(0, (14, 23, 14, 26))]
+            assert result.pixels.shape == (3, 9, 12)
+            assert result.mask[0].all()
+            # missing blue tile covers rows 16:23, columns 16:26
+            assert result.mask[2].sum() == 9 * 12 - 7 * 10
+            # true zero is available at row 16, column 17 on both pages
+            for page in (0, 1):
+                result = batch[(page, (14, 23, 14, 26))]
+                assert result.pixels[0, 2, 3] == 0
+                assert result.mask[0, 2, 3]
+            # row 17, column 16 differs: 1 on page 0, 9 on page 1
+            assert batch[(0, (14, 23, 14, 26))].pixels[0, 3, 2] == 1
+            assert batch[(1, (14, 23, 14, 26))].pixels[0, 3, 2] == 9
+            # page 1 red: four full tile rows, then six samples of fifth
+            result = batch[(1, (14, 23, 14, 26))]
+            assert result.mask[0, 2:6].all()
+            assert result.mask[0, 6, 2:8].all()
+            assert not result.mask[0, 6, 8:].any()
+            assert not result.mask[0, 7:, 2:].any()
+            # overlapping windows on the same page must agree
+            wide = batch[(0, (14, 23, 14, 26))]
+            small = batch[(0, (17, 22, 16, 24))]
+            assert array_equal(
+                wide.pixels[:, 3:8, 2:10], small.pixels
+            )
+            assert array_equal(wide.mask[:, 3:8, 2:10], small.mask)
+            kinds = {(a.page, a.channel, a.kind) for a in batch.anomalies}
+            assert (0, 2, 'missing') in kinds
+            assert (1, 1, 'decode_error') in kinds
+            assert (1, 0, 'partial') in kinds
+
+
+def test_read_windows_order_independent() -> None:
+    """Return identical results regardless of request order."""
+    with TempFileName('read_windows_order') as filename:
+        _window_test_tiff(filename)
+        windows = [(14, 23, 14, 26), (17, 22, 16, 24)]
+        layouts = {0: {3: 'compact'}, 1: {3: {'shape': (16, 16)}}}
+        with TiffFile(filename) as tif:
+            first = tif.read_windows({0: windows, 1: windows}, layouts=layouts)
+            second = tif.read_windows(
+                {1: windows[::-1], 0: windows[::-1]}, layouts=layouts
+            )
+            assert len(first) == len(second)
+            for a, b in zip(first, second, strict=True):
+                assert a.page == b.page
+                assert a.window == b.window
+                assert array_equal(a.pixels, b.pixels)
+                assert array_equal(a.mask, b.mask)
+
+
+def test_read_windows_preserves_asarray() -> None:
+    """Whole-page asarray behavior is unchanged."""
+    data = random_data(numpy.uint8, (3, 23, 26))
+    with TempFileName('read_windows_asarray') as filename:
+        imwrite(
+            filename,
+            data,
+            photometric='rgb',
+            planarconfig='separate',
+            tile=(16, 16),
+            compression=8,
+            predictor=2,
+        )
+        with TiffFile(filename) as tif:
+            page = tif.pages[0]
+            assert array_equal(page.asarray(), data)
+            assert array_equal(page.asarray(), data)
+
+
+def test_read_windows_layout_removed() -> None:
+    """Report undetermined layout without affecting other pages."""
+    windows = {
+        0: [(14, 23, 14, 26), (17, 22, 16, 24)],
+        1: [(14, 23, 14, 26), (17, 22, 16, 24)],
+    }
+    with TempFileName('read_windows_layout_removed') as filename:
+        _window_test_tiff(filename)
+        with TiffFile(filename) as tif:
+            batch = tif.read_windows(
+                windows, layouts={0: {3: 'compact'}}
+            )
+            page0 = batch[(0, (14, 23, 14, 26))]
+            assert page0.mask[0].all()
+            page1 = batch[(1, (14, 23, 14, 26))]
+            assert not page1.mask[0, 2:, 2:].any()
+            reasons = {
+                (anomaly.page, anomaly.channel, anomaly.kind)
+                for anomaly in batch.anomalies
+            }
+            assert (1, 0, 'layout_undetermined') in reasons
+
+
+def test_read_windows_channel_isolation_and_decode_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip unselected channels and decode shared payload only once."""
+    from tifffile import tifffile as module
+
+    calls: list[tuple[int, int]] = []
+    original = module._decode_payload
+
+    def decode_payload(page, encoded):
+        calls.append((len(encoded), id(encoded)))
+        return original(page, encoded)
+
+    monkeypatch.setattr(module, '_decode_payload', decode_payload)
+    windows = [(14, 23, 14, 26), (17, 22, 16, 24)]
+    with TempFileName('read_windows_channels') as filename:
+        _window_test_tiff(filename)
+        with TiffFile(filename) as tif:
+            batch = tif.read_windows(
+                {0: windows, 1: windows},
+                channels=(0,),
+                layouts={0: {3: 'compact'},
+                         1: {3: {'shape': (16, 16), 'row_width': 16}}},
+            )
+            # page 0 red tiles 0..3 and page 1 red tiles 0..3; tile 3
+            # payload is shared between pages
+            assert len(batch.decoded) == 7
+            assert len(calls) == 7
+            assert not any(
+                anomaly.channel not in {0, None}
+                for anomaly in batch.anomalies
+            )
+            # corrupted green and missing blue must not be touched
+            assert not any(
+                anomaly.channel in {1, 2} for anomaly in batch.anomalies
+            )
+            assert all(result.channels == (0,) for result in batch)
+
+
+def test_read_windows_ignores_bad_tiles_outside_window() -> None:
+    """Do not read or decode tiles outside requested windows."""
+    data = random_data(numpy.uint8, (3, 48, 48))
+    with TempFileName('read_windows_outside') as filename:
+        imwrite(
+            filename,
+            data,
+            photometric='rgb',
+            planarconfig='separate',
+            tile=(16, 16),
+            compression=8,
+            predictor=2,
+        )
+        with TiffFile(filename, mode='r+') as tif:
+            page = tif.pages[0]
+            # corrupt top-left green tile, outside the bottom-right window
+            tile = 9
+            offset = page.dataoffsets[tile]
+            bytecount = page.databytecounts[tile]
+            fh = tif.filehandle
+            fh.seek(offset)
+            fh.write(b'\x00' * bytecount)
+            fh.flush()
+        with TiffFile(filename) as tif:
+            batch = tif.read_windows(
+                {0: [(32, 48, 32, 48)]},
+                layouts={0: 'full'},
+            )
+            assert len(batch) == 1
+            result = batch[0]
+            assert result.mask.all()
+            assert array_equal(result.pixels, data[:, 32:, 32:])
+            assert not batch.anomalies
+            assert not any(
+                item.offset in {0} for item in batch.decoded
+            )
+
+
+def test_read_windows_ambiguous_length() -> None:
+    """Report same-length compact/prefix tile as undetermined."""
+    def hdiff(array):
+        diff = array.copy()
+        diff[:, 1:] = (
+            array[:, 1:].astype(numpy.int16)
+            - array[:, :-1].astype(numpy.int16)
+        ).astype(numpy.uint8)
+        return diff
+
+    compact = numpy.zeros((7, 10), numpy.uint8)
+    for row in range(7):
+        for col in range(10):
+            compact[row, col] = (row * 3 + col * 13 + 7) % 256
+    payload = zlib.compress(hdiff(compact).tobytes())
+    with TempFileName('read_windows_ambiguous') as filename:
+        tiles = []
+        for index in range(12):
+            if index == 3:
+                tiles.append(payload)
+            else:
+                array = numpy.zeros((16, 16), numpy.uint8)
+                tiles.append(zlib.compress(hdiff(array).tobytes()))
+        imwrite(
+            filename,
+            iter(tiles),
+            shape=(3, 23, 26),
+            dtype=numpy.uint8,
+            photometric='rgb',
+            planarconfig='separate',
+            tile=(16, 16),
+            compression=8,
+            predictor=2,
+        )
+        with TiffFile(filename) as tif:
+            batch = tif.read_windows({0: [(14, 23, 14, 26)]})
+            result = batch[0]
+            assert not result.mask[0, 2:, 2:].any()
+            assert any(
+                anomaly.kind == 'layout_undetermined'
+                and anomaly.channel == 0
+                and anomaly.tile == 3
+                for anomaly in batch.anomalies
+            )
