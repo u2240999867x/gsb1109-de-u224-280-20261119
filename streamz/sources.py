@@ -1,9 +1,14 @@
 import asyncio
 from glob import glob
+import json
 import queue
 import os
 import time
 from inspect import isawaitable
+
+from .delivery import (
+    DeliveryError, DeliveryNotification, DeliveryStore, IncompleteDeclaration,
+    PendingDelivery)
 
 from tornado import gen
 import weakref
@@ -183,13 +188,36 @@ class filenames(Source):
     start: bool (False)
         Whether to start running immediately; otherwise call stream.start()
         explicitly.
+    deliveries: bool, str, DeliveryStore or None
+        Enable delivery notifications.  Declaration files carry a delivery
+        identifier, the final content SHA-256 and a segment list.  Segments
+        may transmit new bytes or refer to an already sealed delivery.  When
+        this is ``None`` (the default) the source keeps its original behavior
+        and emits each file path once, de-duplicated by path.
+        A path string is used as the delivery store root; ``True`` uses a
+        ``.deliveries`` directory next to the watched path.  A
+        :class:`~streamz.delivery.DeliveryStore` instance may be supplied
+        directly.
+    declaration_suffix: str
+        Extension used to recognize declaration files (default ``.delivery``).
+    content_capacity: int, optional
+        Content-block capacity for an implicit store.  Temporary copies and
+        in-flight fragments count; manifest, digest and receipt metadata does
+        not.
+    delivery_notifications: bool (False)
+        Also emit a notification object for each newly ready delivery.  With
+        ``deliveries`` enabled the source otherwise emits the same objects as
+        the delivery stream.
 
     Examples
     --------
     >>> source = Stream.filenames('path/to/dir')  # doctest: +SKIP
     >>> source = Stream.filenames('path/to/*.csv', poll_interval=0.500)  # doctest: +SKIP
     """
-    def __init__(self, path, poll_interval=0.100, **kwargs):
+    def __init__(self, path, poll_interval=0.100, deliveries=None,
+                 declaration_suffix='.delivery', content_capacity=None,
+                 content_bytes=None, error_callback=None, delivery=None,
+                 delivery_store=None, declaration=None, **kwargs):
         if '*' not in path:
             if os.path.isdir(path):
                 if not path.endswith(os.path.sep):
@@ -198,15 +226,176 @@ class filenames(Source):
         self.path = path
         self.seen = set()
         self.poll_interval = poll_interval
+        self.declaration_suffix = declaration_suffix
+        if deliveries is None:
+            deliveries = delivery
+        if deliveries is None:
+            deliveries = delivery_store
+        if declaration is not None and deliveries is None:
+            deliveries = declaration
+        self.error_callback = error_callback
+        self.content_capacity = content_capacity
+        self.content_bytes = content_bytes
+        self.store = None
+        self.delivery_mode = deliveries is not None and deliveries is not False
+        self._emitted = set()
+        self._emitted_pending = set()
+        self._replayed = False
+        self.last_error = None
+        self.last_pending = None
+        if self.delivery_mode:
+            if isinstance(deliveries, DeliveryStore):
+                self.store = deliveries
+            elif deliveries is True:
+                root = os.path.join(self._search_root(), '.deliveries')
+                self.store = DeliveryStore(
+                    root, content_capacity=content_capacity,
+                    content_bytes=content_bytes)
+            else:
+                self.store = DeliveryStore(
+                    os.fspath(deliveries),
+                    content_capacity=content_capacity,
+                    content_bytes=content_bytes)
         super().__init__(**kwargs)
 
+    def _search_root(self):
+        path = self.path
+        wildcard = min([index for index in (path.find('*'), path.find('?'),
+                                            path.find('['))
+                        if index >= 0] or [len(path)])
+        root = path[:wildcard]
+        if not root:
+            root = '.'
+        if not os.path.isdir(root):
+            root = os.path.dirname(root) or '.'
+        return os.path.abspath(root)
+
+    @property
+    def deliveries(self):
+        return self.store
+
+    def _is_declaration(self, path):
+        if path.endswith(self.declaration_suffix):
+            return True
+        try:
+            with open(path, 'rb') as handle:
+                head = handle.read(4096)
+        except OSError:
+            return False
+        if not head.lstrip().startswith(b'{'):
+            return False
+        keys = (b'"delivery_id"', b'"delivery"', b'"segments"', b'"parts"',
+                b'"sha256"', b'"content_sha256"', b'"manifest"')
+        if not any(key in head for key in keys):
+            return False
+        try:
+            payload = json.loads(head.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            # A half-written declaration is still recognized as a declaration
+            # so the next poll retries it instead of treating it as content.
+            return True
+        return isinstance(payload, dict) and any(
+            key in payload for key in (
+                'delivery_id', 'delivery', 'segments', 'parts', 'sha256',
+                'content_sha256', 'manifest'))
+
     async def _run(self):
+        if self.delivery_mode:
+            await self._run_deliveries()
+            return
         filenames = set(glob(self.path))
         new = filenames - self.seen
         for fn in sorted(new):
             self.seen.add(fn)
             await asyncio.gather(*self._emit(fn))
         await asyncio.sleep(self.poll_interval)  # TODO: remove poll if delayed
+
+    async def _run_deliveries(self):
+        await self._replay_unacknowledged()
+        declarations = []
+        for fn in sorted(set(glob(self.path))):
+            if self._is_declaration(fn):
+                declarations.append(fn)
+            elif fn not in self.seen:
+                self.seen.add(fn)
+        for fn in declarations:
+            await self._poll_declaration(fn)
+        await self._poll_pending_fragments()
+        await asyncio.sleep(self.poll_interval)
+
+    async def _replay_unacknowledged(self):
+        if self._replayed:
+            return
+        self._replayed = True
+        for notification in self.store.redeliver():
+            key = (notification.delivery_id, notification.sha256)
+            if key not in self._emitted:
+                self._emitted.add(key)
+                await self._emit_delivery(notification)
+
+    async def _poll_declaration(self, fn):
+        try:
+            with open(fn, 'rb') as handle:
+                raw = handle.read()
+        except OSError:
+            return
+        try:
+            payload = json.loads(raw.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            # Half-written declarations receive no success notification; the
+            # same path is retried on the next poll.
+            return
+        if not isinstance(payload, dict):
+            return
+        if not any(payload.get(key) for key in ('path', 'filename', 'file')):
+            name = os.path.basename(fn)
+            if name.endswith(self.declaration_suffix):
+                name = name[:-len(self.declaration_suffix)]
+            payload['path'] = name
+        try:
+            result = self.store.declare(
+                payload, base_path=os.path.dirname(fn) or '.')
+        except IncompleteDeclaration:
+            return
+        except DeliveryError as exc:
+            self.last_error = (fn, exc)
+            if self.error_callback is not None:
+                callback = self.error_callback(fn, exc)
+                if isawaitable(callback):
+                    self.loop.add_callback(callback)
+            return
+        if isinstance(result, PendingDelivery):
+            self.last_pending = result
+            self._emitted_pending.add(result.delivery_id)
+            return
+        key = (result.delivery_id, result.sha256)
+        if key in self._emitted:
+            return
+        self._emitted.add(key)
+        await self._emit_delivery(result)
+
+    async def _poll_pending_fragments(self):
+        for pending in self.store.pending():
+            completed = self.store.complete_pending(pending.delivery_id)
+            if isinstance(completed, DeliveryNotification):
+                key = (completed.delivery_id, completed.sha256)
+                if key not in self._emitted:
+                    self._emitted.add(key)
+                    await self._emit_delivery(completed)
+
+    async def _emit_delivery(self, value):
+        if value is not None:
+            await asyncio.gather(*self._emit(value))
+
+    def emit_delivery(self, manifest, **kwargs):
+        """Declare a mapping directly and emit if it becomes ready."""
+        result = self.store.declare(manifest, **kwargs)
+        if isinstance(result, DeliveryNotification):
+            key = (result.delivery_id, result.sha256)
+            if key not in self._emitted:
+                self._emitted.add(key)
+                self.loop.add_callback(self._emit_delivery, result)
+        return result
 
 
 @Stream.register_api(staticmethod)

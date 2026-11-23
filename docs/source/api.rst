@@ -67,6 +67,14 @@ Sources
    from_tcp
    from_http_server
 
+.. currentmodule:: streamz.delivery
+
+.. autosummary::
+   DeliveryStore
+   DeliveryNotification
+   PendingDelivery
+   DeliveryReader
+
 DaskStream
 ----------
 
