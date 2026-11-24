@@ -32,6 +32,7 @@ See also: :ref:`public-api` and :ref:`api-stability`.
    api/weighted
    api/resample
    api/accessors
+   api/point-handoff
    api/tutorial
    api/testing
    api/backends
