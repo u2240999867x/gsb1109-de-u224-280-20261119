@@ -280,6 +280,42 @@ introduce artificial rate limits at 10ms.
 Operations like these (and more) allow us to shape the flow of data through our
 pipelines.
 
+Inspecting a buffer without consuming it
+----------------------------------------
+
+A ``buffer`` node exposes a read-only ``status`` snapshot for operational
+dashboards.  Snapshotting does not get from the queue, wait for a slow
+downstream write, retry a failed outlet, or release a blocked producer.  It
+can be read from another thread and is valid when nothing else in the buffer
+can change afterwards.
+
+.. code-block:: python
+
+   source = Stream()
+   buff = source.buffer(1)
+   buff.sink(write_a)
+   buff.sink(write_b)
+
+   status = buff.status
+   status['capacity']        # 1
+   status['queued']          # submissions currently in the queue
+   status['waiting']         # producers blocked waiting for queue space
+   status['current']         # delivery that left the queue and is unfinished
+   status['last_delivery']   # most recently finished delivery
+   status['consumer_state']  # "running" or "stalled" after an error
+
+All values in one snapshot are taken under the same lock, so capacity, queue
+occupancy, blocked producers and the in-flight delivery describe one moment.
+Every submission gets a monotonically increasing ``submission_id``.  The
+enqueue future carries the same ``submission_id`` (and receives a receipt
+record), so identical payloads can still be matched to their queue position,
+delivery outlet results and errors.  ``current['outlets']`` reports each
+connected outlet independently, including outlets that were never invoked and
+those whose asynchronous result failed later.  A failed delivery remains
+visible with its error while later submissions stay in ``queued`` or
+``waiting``; they are not reported as written.  ``consumer_state`` reports
+whether the original delivery coroutine can keep advancing, not a retry.
+
 
 Modifying and Cleaning up Streams
 ---------------------------------

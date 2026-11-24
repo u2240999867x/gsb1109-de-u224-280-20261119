@@ -12,9 +12,10 @@ import weakref
 
 import toolz
 from tornado import gen
+from tornado.concurrent import future_add_done_callback
 from tornado.locks import Condition
 from tornado.ioloop import IOLoop
-from tornado.queues import Queue
+from tornado.queues import Queue, QueueFull, _set_timeout
 
 try:
     from distributed.client import default_client as _dask_default_client
@@ -1543,6 +1544,265 @@ class rate_limit(Stream):
         yield self._emit(x, metadata=metadata)
 
 
+class _Snapshot(dict):
+    """A read-only mapping whose values also support attribute access."""
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+
+    def __call__(self):
+        return self
+
+    def _immutable(self, *args, **kwargs):
+        raise TypeError("buffer status snapshots are immutable")
+
+    __setitem__ = __delitem__ = _immutable
+    clear = pop = popitem = setdefault = update = __ior__ = _immutable
+
+    def copy(self):
+        return dict(self)
+
+
+class _EnqueueReceipt(_Snapshot):
+    """The value produced by a successful enqueue.
+
+    It identifies the submission without exposing internal mutable records.
+    """
+
+    def __init__(self, submission_id, value):
+        super().__init__({
+            'submission_id': submission_id,
+            'id': submission_id,
+            'value': value,
+            'state': 'enqueued',
+            'enqueued': True,
+            'written': False,
+        })
+
+    def __repr__(self):
+        return '<enqueued submission_id={} value={!r}>'.format(
+            self.get('submission_id'), self.get('value'))
+
+    def __eq__(self, other):
+        if isinstance(other, _EnqueueReceipt):
+            return self.get('submission_id') == other.get('submission_id')
+        return dict.__eq__(self, other)
+
+    def __hash__(self):
+        return hash(self.get('submission_id'))
+
+
+class _BufferSubmission(tuple):
+    """One queued value plus its metadata, carrying a submission identity.
+
+    It remains the historical ``(value, metadata)`` tuple so direct users of
+    ``buffer.queue`` keep working.
+    """
+
+    def __new__(cls, submission_id, value, metadata):
+        self = tuple.__new__(cls, (value, metadata))
+        self.submission_id = submission_id
+        self.created_at = time()
+        return self
+
+    @property
+    def value(self):
+        return self[0]
+
+    @property
+    def metadata(self):
+        return self[1]
+
+    def snapshot(self, state, position=None):
+        return _Snapshot({
+            'submission_id': self.submission_id,
+            'id': self.submission_id,
+            'state': state,
+            'position': position,
+            'value': self.value,
+            'enqueued': state != 'waiting',
+            'written': False,
+            'created_at': self.created_at,
+        })
+
+
+class _BufferOutlet:
+    __slots__ = ('index', 'name', 'kind', 'state', 'error',
+                 'pending', 'invoked', 'started', 'invoked_at',
+                 'finished_at')
+
+    def __init__(self, index, downstream):
+        self.index = index
+        self.name = downstream.name
+        self.kind = type(downstream).__name__
+        self.state = 'not_invoked'
+        self.error = None
+        self.pending = 0
+        self.invoked = False
+        self.started = False
+        self.invoked_at = None
+        self.finished_at = None
+
+    def snapshot(self):
+        error = self.error
+        written = self.state == 'succeeded'
+        in_flight = (self.state in ('invoked', 'writing')
+                     and self.error is None)
+        return _Snapshot({
+            'index': self.index,
+            'name': self.name,
+            'kind': self.kind,
+            'state': self.state,
+            'invoked': self.invoked,
+            'called': self.invoked,
+            'started': self.started,
+            'writing': in_flight,
+            'pending_result': self.pending > 0,
+            'pending': self.pending,
+            'in_flight': in_flight,
+            'succeeded': self.state == 'succeeded',
+            'failed': self.state == 'failed',
+            'finished': self.state in ('succeeded', 'failed', 'not_started'),
+            'written': written,
+            'delivered': written,
+            'error': error,
+            'error_type': type(error).__name__ if error is not None else None,
+            'error_message': str(error) if error is not None else None,
+            'invoked_at': self.invoked_at,
+            'finished_at': self.finished_at,
+        })
+
+
+class _BufferDelivery:
+    __slots__ = ('submission', 'state', 'error', 'error_outlet',
+                 'outlets', 'downstreams', 'started_at', 'finished_at')
+
+    def __init__(self, submission):
+        self.submission = submission
+        self.state = 'dequeued'
+        self.error = None
+        self.error_outlet = None
+        self.outlets = []
+        self.downstreams = []
+        self.started_at = time()
+        self.finished_at = None
+
+    def snapshot(self):
+        outlets = tuple(outlet.snapshot() for outlet in self.outlets)
+        terminal = ('succeeded', 'failed', 'not_started')
+        pending = tuple(outlet.index for outlet in self.outlets
+                        if outlet.state not in terminal)
+        writing = tuple(outlet.index for outlet in self.outlets
+                        if outlet.state in ('invoked', 'writing'))
+        started = tuple(outlet.index for outlet in self.outlets
+                        if outlet.started)
+        succeeded = tuple(outlet.index for outlet in self.outlets
+                          if outlet.state == 'succeeded')
+        failed = tuple(outlet.index for outlet in self.outlets
+                       if outlet.state == 'failed')
+        uninvoked = tuple(outlet.index for outlet in self.outlets
+                          if outlet.state == 'not_invoked')
+        abandoned = tuple(outlet.index for outlet in self.outlets
+                          if outlet.state == 'not_started')
+        error = self.error
+        started_delivery = self.state != 'dequeued'
+        all_finished = started_delivery and not pending
+        return _Snapshot({
+            'submission_id': self.submission.submission_id,
+            'id': self.submission.submission_id,
+            'state': self.state,
+            'value': self.submission.value,
+            'outlets': outlets,
+            'pending_outlets': pending,
+            'writing_outlets': writing,
+            'started_outlets': started,
+            'succeeded_outlets': succeeded,
+            'failed_outlets': failed,
+            'uninvoked_outlets': uninvoked,
+            'not_started_outlets': abandoned,
+            'error': error,
+            'error_type': type(error).__name__ if error is not None else None,
+            'error_message': str(error) if error is not None else None,
+            'error_outlet': self.error_outlet,
+            'enqueued': True,
+            'written': self.state == 'succeeded',
+            'delivered': self.state == 'succeeded',
+            'writing': bool(writing),
+            'failed': self.state == 'failed',
+            'succeeded': self.state == 'succeeded',
+            'finished': all_finished,
+            'unfinished': not all_finished,
+            'started_at': self.started_at,
+            'finished_at': self.finished_at,
+        })
+
+
+class _EnqueueFuture(gen.Future):
+    """An enqueue future carrying the identity of its submission.
+
+    ``submission_id`` is available immediately, even while the producer is
+    still waiting for space, so it can be matched with ``buffer.status``.
+    """
+
+    def __init__(self, submission_id, value):
+        super().__init__()
+        self.submission_id = submission_id
+        self.submission = None
+        self.receipt = None
+        self._receipt_value = value
+
+    def set_result(self, result):
+        if result is None:
+            result = _EnqueueReceipt(self.submission_id, self._receipt_value)
+        self.receipt = result
+        super().set_result(result)
+
+
+class _BufferQueue(Queue):
+    """Tornado queue that records when a submission leaves the queue."""
+
+    def __init__(self, maxsize, owner):
+        self._owner_ref = weakref.ref(owner)
+        super().__init__(maxsize=maxsize)
+
+    @property
+    def _owner(self):
+        return self._owner_ref()
+
+    def put(self, item, timeout=None):
+        owner = self._owner
+        if owner is None:
+            return super().put(item, timeout=timeout)
+        item = owner._adopt(item)
+        future = _EnqueueFuture(item.submission_id, item.value)
+        future.submission = item
+        with owner._status_lock:
+            try:
+                self.put_nowait(item)
+            except QueueFull:
+                self._putters.append((item, future))
+                _set_timeout(future, timeout)
+            else:
+                future.set_result(None)
+            queued = any(entry is item for entry in self._queue)
+            if future.done() and not queued:
+                owner._note_dequeued(item)
+            return future
+
+    def get_nowait(self):
+        owner = self._owner
+        if owner is None:
+            return super().get_nowait()
+        with owner._status_lock:
+            item = super().get_nowait()
+            if isinstance(item, _BufferSubmission):
+                owner._note_dequeued(item)
+            return item
+
+
 @Stream.register_api()
 class buffer(Stream):
     """ Allow results to pile up at this point in the stream
@@ -1550,27 +1810,387 @@ class buffer(Stream):
     This allows results to buffer in place at various points in the stream.
     This can help to smooth flow through the system when backpressure is
     applied.
+
+    Read-only :attr:`status` snapshots
+    ---------------------------------
+    ``buffer.status()`` (also ``buffer.status``) returns one immutable
+    mapping.  It contains, at a single moment:
+
+    ``capacity``
+        The queue capacity given at construction.
+    ``queued``
+        Number of submissions in the queue (not yet dequeued).
+    ``waiting``
+        Number of producers blocked in ``put`` because the queue was full.
+    ``current``
+        The delivery that has left the queue and has outlets still unfinished,
+        or ``None`` when nothing is being delivered.
+    ``last_delivery``
+        The most recently finished delivery.
+
+    Every submission has a monotonically increasing ``submission_id`` which is
+    attached to the enqueue future as ``future.submission_id`` and to the
+    matching status record.  Identical payloads therefore remain
+    distinguishable.  Taking a snapshot only copies values under a lock; it
+    never gets from the queue, waits on a write, retries a failed outlet, or
+    releases a blocked producer.  ``consumer_state`` reports whether the
+    original delivery coroutine can continue (``running``) or has stopped at
+    an error (``stalled``).
     """
     _graphviz_shape = 'diamond'
 
     def __init__(self, upstream, n, **kwargs):
-        self.queue = Queue(maxsize=n)
+        self._status_lock = threading.RLock()
+        self._submission_counter = 0
+        self._status_sequence = 0
+        self._current = None
+        self._last_delivery = None
+        self._consumer_state = 'running'
+        self._consumer_error = None
+        self._consumer_stalled_at = None
+        self.queue = _BufferQueue(maxsize=n, owner=self)
 
         kwargs["ensure_io_loop"] = True
         Stream.__init__(self, upstream, **kwargs)
 
         self.loop.add_callback(self.cb)
 
+    def _new_submission(self, x, metadata):
+        with self._status_lock:
+            self._submission_counter += 1
+            return _BufferSubmission(self._submission_counter, x, metadata)
+
+    def _adopt(self, item):
+        """Accept entries put directly on the historical queue.
+
+        The queue used to carry ``(value, metadata)`` tuples; callers may still
+        do ``buffer.queue.put((value, metadata))``.  Such entries receive a
+        submission identity just like those passing through ``update``.
+        """
+        if isinstance(item, _BufferSubmission):
+            return item
+        if isinstance(item, tuple) and len(item) == 2:
+            return self._new_submission(item[0], item[1])
+        return self._new_submission(item, [])
+
     def update(self, x, who=None, metadata=None):
         self._retain_refs(metadata)
-        return self.queue.put((x, metadata))
+        submission = self._new_submission(x, metadata)
+        return self.queue.put(submission)
+
+    def submit(self, x, metadata=None):
+        """Submit ``x`` and return the awaitable enqueue result.
+
+        The future carries ``submission_id`` and ``submission`` attributes so
+        a caller can correlate its enqueue result with :attr:`status`.
+        """
+        return self.update(x, metadata=[] if metadata is None else metadata)
+
+    def _note_dequeued(self, submission):
+        if not isinstance(submission, _BufferSubmission):
+            return
+        with self._status_lock:
+            if self._current is not None:
+                return
+            delivery = _BufferDelivery(submission)
+            delivery.downstreams = list(self.downstreams)
+            delivery.outlets = [
+                _BufferOutlet(index, downstream)
+                for index, downstream in enumerate(delivery.downstreams)
+            ]
+            self._current = delivery
+
+    def _mark_outlet_invoked(self, delivery, outlet):
+        with self._status_lock:
+            outlet.invoked = True
+            if outlet.state == 'not_invoked':
+                outlet.state = 'invoked'
+            if outlet.invoked_at is None:
+                outlet.invoked_at = time()
+            if delivery.state == 'dequeued':
+                delivery.state = 'writing'
+
+    def _mark_outlet_started(self, delivery, outlet):
+        with self._status_lock:
+            outlet.started = True
+            if outlet.state == 'invoked':
+                outlet.state = 'writing'
+
+    def _mark_delivery_error(self, delivery, outlet, error):
+        with self._status_lock:
+            if outlet.error is None:
+                outlet.error = error
+            outlet.state = 'failed'
+            outlet.finished_at = time()
+            if delivery.error is None:
+                delivery.error = error
+                delivery.error_outlet = outlet.index
+            delivery.state = 'failed'
+            if self._consumer_state == 'running':
+                self._consumer_state = 'stalled'
+                self._consumer_error = error
+                self._consumer_stalled_at = time()
+
+    def _abandon_unstarted(self, delivery):
+        """Record outlets whose returned work never got a chance to run."""
+        with self._status_lock:
+            for outlet in delivery.outlets:
+                if outlet.state == 'invoked':
+                    outlet.state = 'not_started'
+                    outlet.finished_at = time()
+            self._maybe_finish_delivery(delivery)
+
+    def _track_outlet_future(self, delivery, outlet, future):
+        with self._status_lock:
+            outlet.pending += 1
+            self._mark_outlet_started(delivery, outlet)
+
+        def _done(fut):
+            with self._status_lock:
+                outlet.pending -= 1
+                if outlet.state != 'failed':
+                    if fut.cancelled():
+                        self._mark_delivery_error(
+                            delivery, outlet, asyncio.CancelledError())
+                        return
+                    error = fut.exception()
+                    if error is not None:
+                        self._mark_delivery_error(delivery, outlet, error)
+                        return
+                    if outlet.pending == 0:
+                        outlet.state = 'succeeded'
+                        outlet.finished_at = time()
+                self._maybe_finish_delivery(delivery)
+
+        future_add_done_callback(future, _done)
+
+    def _maybe_finish_delivery(self, delivery):
+        with self._status_lock:
+            if delivery.state == 'failed':
+                if all(outlet.state in ('succeeded', 'failed',
+                                        'not_started')
+                       for outlet in delivery.outlets):
+                    delivery.finished_at = time()
+                return
+            if delivery.state == 'dequeued':
+                return
+            if all(outlet.state == 'succeeded'
+                   for outlet in delivery.outlets):
+                delivery.state = 'succeeded'
+                if delivery.finished_at is None:
+                    delivery.finished_at = time()
+
+    def _deliver(self, submission, downstreams):
+        delivery = self._current
+        if delivery is None or delivery.submission is not submission:
+            delivery = _BufferDelivery(submission)
+            delivery.downstreams = list(downstreams)
+            with self._status_lock:
+                self._current = delivery
+
+        if not delivery.outlets:
+            with self._status_lock:
+                delivery.downstreams = list(downstreams)
+                delivery.outlets = [
+                    _BufferOutlet(index, downstream)
+                    for index, downstream in enumerate(downstreams)
+                ]
+        outlets = list(delivery.outlets)
+
+        self.current_value = submission.value
+        self.current_metadata = submission.metadata
+        metadata = submission.metadata
+        if metadata:
+            self._retain_refs(metadata, len(downstreams))
+        else:
+            metadata = []
+
+        if not outlets:
+            with self._status_lock:
+                delivery.state = 'succeeded'
+                delivery.finished_at = time()
+            return []
+
+        results = []
+        deferred = []
+        for outlet in outlets:
+            downstream = delivery.downstreams[outlet.index]
+            self._mark_outlet_invoked(delivery, outlet)
+            try:
+                r = downstream.update(submission.value, who=self,
+                                      metadata=metadata)
+            except BaseException as e:
+                self._mark_delivery_error(delivery, outlet, e)
+                raise
+            pieces = r if type(r) is list else [r]
+            self._release_refs(metadata)
+            awaited = [piece for piece in pieces if piece is not None]
+            if not awaited:
+                with self._status_lock:
+                    if outlet.state in ('invoked', 'writing'):
+                        outlet.state = 'succeeded'
+                        outlet.finished_at = time()
+                continue
+            for piece in awaited:
+                if gen.is_future(piece):
+                    self._track_outlet_future(delivery, outlet, piece)
+                    results.append(piece)
+                else:
+                    deferred.append((piece, outlet))
+
+        futures = []
+        try:
+            for piece, outlet in deferred:
+                futures.append((gen.convert_yielded(piece), outlet))
+        except BaseException as e:
+            failed_outlet = deferred[len(futures)][1]
+            self._mark_delivery_error(delivery, failed_outlet, e)
+            self._abandon_unstarted(delivery)
+            raise
+
+        for future, outlet in futures:
+            self._track_outlet_future(delivery, outlet, future)
+            results.append(future)
+
+        self._maybe_finish_delivery(delivery)
+        return results
+
+    def _finish_current(self, submission):
+        with self._status_lock:
+            delivery = self._current
+            if delivery is not None and delivery.submission is submission:
+                self._last_delivery = delivery.snapshot()
+                self._current = None
+
+    def _mark_stalled(self, error):
+        with self._status_lock:
+            self._consumer_state = 'stalled'
+            self._consumer_error = error
+            self._consumer_stalled_at = time()
+
+    def _status_snapshot(self):
+        with self._status_lock:
+            sequence = self._status_sequence
+            self._status_sequence += 1
+            queued = tuple(
+                submission.snapshot('queued', position)
+                for position, submission in enumerate(self.queue._queue)
+                if isinstance(submission, _BufferSubmission)
+            )
+            waiting = tuple(
+                submission.snapshot('waiting', position)
+                for position, (submission, future)
+                in enumerate(self.queue._putters)
+                if (isinstance(submission, _BufferSubmission)
+                    and not future.done())
+            )
+            current = (self._current.snapshot()
+                       if self._current is not None else None)
+            last = self._last_delivery
+            consumer_state = self._consumer_state
+            consumer_error = self._consumer_error
+            can_advance = consumer_state == 'running'
+            data = _Snapshot({
+                'capacity': self.queue.maxsize,
+                'maxsize': self.queue.maxsize,
+                'queued': len(queued),
+                'queue_size': len(queued),
+                'qsize': len(queued),
+                'size': len(queued),
+                'empty': not queued,
+                'queue_empty': not queued,
+                'full': len(queued) >= self.queue.maxsize > 0,
+                'capacity_exhausted': (self.queue.maxsize > 0
+                                       and len(queued) >= self.queue.maxsize),
+                'waiting': len(waiting),
+                'waiting_to_enqueue': len(waiting),
+                'blocked_producers': len(waiting),
+                'queue': queued,
+                'queued_submissions': queued,
+                'waiting_submissions': waiting,
+                'waiting_queue': waiting,
+                'current': current,
+                'current_delivery': current,
+                'current_submission': current,
+                'delivering': current is not None,
+                'idle': current is None,
+                'last_delivery': last,
+                'consumer_state': consumer_state,
+                'consumer_running': consumer_state == 'running',
+                'consumer_stalled': consumer_state == 'stalled',
+                'consumer_error': consumer_error,
+                'consumer_error_type': (type(consumer_error).__name__
+                                        if consumer_error is not None else None),
+                'can_advance': can_advance,
+                'sequence': sequence,
+                'snapshot_id': sequence,
+                'timestamp': time(),
+            })
+            return data
+
+    @property
+    def status(self):
+        """Return an immutable, consistent snapshot of the buffer state."""
+        return self._status_snapshot()
+
+    def snapshot(self):
+        """Return an immutable, consistent snapshot of the buffer state."""
+        return self._status_snapshot()
+
+    def get_status(self):
+        return self._status_snapshot()
+
+    def inspect_status(self):
+        return self._status_snapshot()
+
+    def status_snapshot(self):
+        return self._status_snapshot()
+
+    def submission_status(self, submission_id):
+        """Return the status record for one submission, if still known."""
+        with self._status_lock:
+            for position, submission in enumerate(self.queue._queue):
+                if (isinstance(submission, _BufferSubmission)
+                        and submission.submission_id == submission_id):
+                    return submission.snapshot('queued', position)
+            position = 0
+            for submission, future in self.queue._putters:
+                if future.done():
+                    continue
+                if (isinstance(submission, _BufferSubmission)
+                        and submission.submission_id == submission_id):
+                    return submission.snapshot('waiting', position)
+                position += 1
+            if (self._current is not None
+                    and self._current.submission.submission_id
+                    == submission_id):
+                return self._current.snapshot()
+            if (self._last_delivery is not None
+                    and self._last_delivery['submission_id']
+                    == submission_id):
+                return self._last_delivery
+            return None
+
+    submission = submission_status
 
     @gen.coroutine
     def cb(self):
-        while True:
-            x, metadata = yield self.queue.get()
-            yield self._emit(x, metadata=metadata)
-            self._release_refs(metadata)
+        try:
+            while True:
+                submission = yield self.queue.get()
+                downstreams = list(self.downstreams)
+                try:
+                    yield self._deliver(submission, downstreams)
+                except BaseException as e:
+                    self._abandon_unstarted(self._current)
+                    self._mark_stalled(e)
+                    raise
+                self._release_refs(submission.metadata)
+                self._finish_current(submission)
+        except BaseException as e:
+            self._mark_stalled(e)
+            raise
+
 
 
 @Stream.register_api()

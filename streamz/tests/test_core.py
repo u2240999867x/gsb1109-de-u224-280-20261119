@@ -8,6 +8,7 @@ from operator import add
 import os
 from time import sleep
 import sys
+import threading
 
 import pytest
 
@@ -1850,6 +1851,607 @@ def test_buffer_after_partition():
 
 def test_buffer_after_timed_window():
     Stream().timed_window(1).buffer(1)
+
+
+def test_buffer_after_sliding_window():
+    Stream().sliding_window(1).buffer(1)
+
+
+async def _wait_for_status(buffer, predicate, timeout=5):
+    deadline = time() + timeout
+    while True:
+        status = buffer.status()
+        if predicate(status):
+            return status
+        if time() > deadline:
+            raise AssertionError("status condition not reached: %r" % (status,))
+        await asyncio.sleep(0)
+
+
+class _Gate:
+    def __init__(self):
+        self.started = []
+        self.release = {}
+
+    def outlet(self, name):
+        async def write(x):
+            self.started.append((name, x))
+            event = asyncio.Event()
+            self.release[(name, x)] = event
+            await event.wait()
+            self.started.append((name, 'done', x))
+        return write
+
+    def open(self, name, x):
+        self.release[(name, x)].set()
+
+
+async def _three_submissions(buffer_source):
+    source, buffer = buffer_source
+    tasks = [asyncio.ensure_future(source.emit(value)) for value in (1, 2, 3)]
+    await asyncio.sleep(0)
+    return tasks
+
+
+@gen_test(timeout=15)
+def test_buffer_status_identity_for_equal_payloads():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    gate = _Gate()
+
+    async def write(x):
+        gate.started.append(x)
+        await asyncio.sleep(0.05)
+
+    buff.sink(write)
+
+    # identical business payloads
+    first = yield buff.submit('same', metadata=[])
+    second_future = buff.submit('same', metadata=[])
+    third_future = buff.submit('same', metadata=[])
+
+    yield asyncio.sleep(0)
+    status = buff.status()
+    ids = [status['current']['submission_id'],
+           status['queue'][0]['submission_id'],
+           status['waiting_submissions'][0]['submission_id']]
+    assert len(set(ids)) == 3
+    assert first['submission_id'] == ids[0]
+    assert second_future.submission_id == ids[1]
+    assert third_future.submission_id == ids[2]
+    assert status['current']['value'] == 'same'
+    assert status['queue'][0]['value'] == 'same'
+    assert status['waiting_submissions'][0]['value'] == 'same'
+
+    yield second_future
+    yield third_future
+    yield gen.sleep(0.2)
+    status = buff.status()
+    assert status['current'] is None
+    assert status['last_delivery']['submission_id'] == ids[2]
+    assert status['last_delivery']['written'] is True
+    assert buff.submission_status(ids[2])['state'] == 'succeeded'
+    assert buff.submission_status(9999) is None
+
+
+@gen_test(timeout=15)
+def test_buffer_status_submission_path():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    seen = []
+
+    async def write(x):
+        seen.append(x)
+        await asyncio.sleep(0.02)
+
+    buff.sink(write)
+    future = buff.submit('payload')
+    submission_id = future.submission_id
+    assert buff.submission_status(submission_id)['state'] == 'queued'
+
+    receipt = yield future
+    assert receipt['submission_id'] == submission_id
+    assert receipt['enqueued'] is True
+    assert receipt['written'] is False
+
+    record = yield _wait_for_status(
+        buff, lambda s: s['last_delivery'] is not None)
+    assert record['last_delivery']['submission_id'] == submission_id
+    assert record['last_delivery']['state'] == 'succeeded'
+    assert buff.submission_status(submission_id)['state'] == 'succeeded'
+    assert seen == ['payload']
+
+
+@gen_test(timeout=15)
+def test_buffer_status_failure_after_successful_enqueue():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    gate = _Gate()
+
+    async def fail(x):
+        gate.started.append(('fail', x))
+        raise RuntimeError('write failed')
+
+    buff.sink(fail)
+
+    receipts = []
+    tasks = []
+    for value in ('a', 'b', 'c'):
+        future = asyncio.ensure_future(source.emit(value))
+        tasks.append(future)
+        receipts.append(future)
+
+    yield asyncio.sleep(0)
+    status = yield _wait_for_status(
+        buff, lambda s: s['current'] is not None
+        and s['current']['state'] == 'failed')
+    current = status['current']
+    assert current['error'] is not None
+    assert current['error_type'] == 'RuntimeError'
+    # The first delivery failed, but the records that were merely enqueued
+    # must not be reported as written.
+    assert status['queued'] == 1
+    assert status['waiting'] == 1
+    assert status['queued_submissions'][0]['written'] is False
+    assert status['waiting_submissions'][0]['written'] is False
+    assert status['current']['written'] is False
+    assert status['last_delivery'] is None
+    assert status['consumer_stalled'] is True
+    # Each later record still shows its own position and identity.
+    assert status['current']['submission_id'] != (
+        status['queued_submissions'][0]['submission_id'])
+    assert status['queued_submissions'][0]['state'] == 'queued'
+    assert status['queued_submissions'][0]['position'] == 0
+    assert status['waiting_submissions'][0]['state'] == 'waiting'
+    assert status['waiting_submissions'][0]['position'] == 0
+
+    for task in tasks:
+        task.cancel()
+    yield gen.sleep(0.05)
+
+
+@gen_test(timeout=15)
+def test_buffer_status_source_stops_advancing_after_failure():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    gate = _Gate()
+
+    async def slow_then_fail(x):
+        gate.started.append(x)
+        await asyncio.sleep(0.01)
+        raise ValueError('boom')
+
+    buff.sink(slow_then_fail)
+
+    tasks = [asyncio.ensure_future(source.emit(value)) for value in (1, 2)]
+    yield asyncio.sleep(0)
+    status = yield _wait_for_status(
+        buff, lambda s: s['current'] is not None
+        and s['current']['state'] == 'failed')
+    assert status['queued'] == 1
+    assert status['waiting'] == 0
+    # Only the original error propagates.  The queue is not drained by
+    # observation and the producer is not released.
+    yield gen.sleep(0.05)
+    after = buff.status()
+    assert after['queued'] == 1
+    assert after['current']['submission_id'] == status['current']['submission_id']
+    assert after['current']['error_type'] == 'ValueError'
+    assert after['consumer_state'] == 'stalled'
+    assert after['can_advance'] is False
+
+    for task in tasks:
+        task.cancel()
+    yield gen.sleep(0.05)
+
+
+@gen_test(timeout=15)
+def test_buffer_status_capacity_snapshot():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    gate = _Gate()
+    buff.sink(gate.outlet('left'))
+    buff.sink(gate.outlet('right'))
+
+    tasks = yield _three_submissions((source, buff))
+
+    status = yield _wait_for_status(
+        buff, lambda s: s['queued'] == 1 and s['waiting'] == 1)
+    assert status['capacity'] == 1
+    assert status['queued'] == 1
+    assert status['waiting'] == 1
+    assert status['current']['value'] == 1
+    assert status['queue'][0]['value'] == 2
+    assert status['waiting_submissions'][0]['value'] == 3
+    assert status['current']['state'] == 'writing'
+    assert status['current']['outlets'][0]['state'] in ('pending', 'writing')
+    assert status['current']['outlets'][1]['state'] in ('pending', 'writing')
+    # every submission has an identity, even with equal payloads
+    assert status['current']['submission_id'] != status['queue'][0]['submission_id']
+    assert status['queue'][0]['submission_id'] != status['waiting_submissions'][0]['submission_id']
+    assert status['queue'][0]['enqueued'] is True
+    assert status['waiting_submissions'][0]['enqueued'] is False
+    # a submission that was accepted into the queue is not "written" yet
+    assert status['queue'][0]['written'] is False
+    assert status['current']['written'] is False
+
+    gate.open('left', 1)
+    gate.open('right', 1)
+    yield asyncio.gather(*tasks)
+
+    # Enqueueing all three does not mean all three were written.  Release each
+    # delivery as the consumer advances to it.
+    yield _wait_for_status(buff, lambda s: s['current'] is not None
+                           and s['current']['value'] == 2)
+    gate.open('left', 2)
+    gate.open('right', 2)
+    yield _wait_for_status(buff, lambda s: s['current'] is not None
+                           and s['current']['value'] == 3)
+    gate.open('left', 3)
+    gate.open('right', 3)
+    yield _wait_for_status(buff, lambda s: s['current'] is None
+                           and s['last_delivery']['value'] == 3)
+
+    final = buff.status()
+    assert final['queued'] == 0
+    assert final['waiting'] == 0
+    assert final['current'] is None
+    assert final['last_delivery']['value'] == 3
+    assert final['last_delivery']['state'] == 'succeeded'
+
+
+@gen_test(timeout=15)
+def test_buffer_status_empty_queue_but_writing():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(2)
+    gate = _Gate()
+    buff.sink(gate.outlet('only'))
+
+    yield source.emit(1)
+    yield _wait_for_status(buff, lambda s: s['queued'] == 0
+                           and s['current'] is not None)
+    status = buff.status()
+    assert status['queued'] == 0
+    assert status['waiting'] == 0
+    assert status['current']['value'] == 1
+    assert status['current']['state'] == 'writing'
+    assert status['current']['outlets'][0]['state'] == 'writing'
+    assert status['current']['outlets'][0]['invoked'] is True
+
+    gate.open('only', 1)
+    yield _wait_for_status(buff, lambda s: s['current'] is None)
+    status = buff.status()
+    assert status['current'] is None
+    assert status['last_delivery']['value'] == 1
+    assert status['last_delivery']['state'] == 'succeeded'
+    assert status['last_delivery']['written'] is True
+
+
+@gen_test(timeout=15)
+def test_buffer_status_last_submission_only_writing():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    gate = _Gate()
+    buff.sink(gate.outlet('left'))
+
+    tasks = [asyncio.ensure_future(source.emit(value)) for value in (1, 2, 3)]
+    yield asyncio.sleep(0)
+    status = yield _wait_for_status(
+        buff, lambda s: s['queued'] == 1 and s['waiting'] == 1)
+    gate.open('left', 1)
+    yield _wait_for_status(
+        buff, lambda s: s['current'] is not None
+        and s['current']['value'] == 2)
+    gate.open('left', 2)
+    status = yield _wait_for_status(
+        buff, lambda s: s['current'] is not None
+        and s['current']['value'] == 3)
+    assert status['queued'] == 0
+    assert status['waiting'] == 0
+    assert status['current']['state'] == 'writing'
+    assert status['last_delivery']['value'] == 2
+    assert status['last_delivery']['state'] == 'succeeded'
+    assert status['idle'] is False
+
+    gate.open('left', 3)
+    status = yield _wait_for_status(buff, lambda s: s['current'] is None)
+    assert status['queued'] == 0
+    assert status['waiting'] == 0
+    assert status['current'] is None
+    assert status['idle'] is True
+    assert status['last_delivery']['value'] == 3
+    assert status['last_delivery']['state'] == 'succeeded'
+    yield asyncio.gather(*tasks)
+
+
+def test_buffer_status_snapshot_is_stable():
+    source = Stream()
+    buff = source.buffer(1)
+    buff.sink(lambda x: x)
+    source.emit(1)
+    status = buff.status
+    assert status['capacity'] == 1
+    assert status.capacity == 1
+    assert status() == status
+    assert buff.snapshot()['capacity'] == 1
+    snapshot = status.copy()
+    with pytest.raises(TypeError):
+        status['capacity'] = 10
+    wait_for(lambda: buff.status['queued'] == 0, 1)
+    assert status == snapshot
+    assert status['sequence'] == snapshot['sequence']
+
+
+@gen_test(timeout=15)
+def test_buffer_status_direct_raise_vs_async_failure():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    gate = _Gate()
+
+    async def async_failure(x):
+        gate.started.append(('async', x))
+        await asyncio.sleep(0)
+        raise ValueError('async boom')
+
+    def direct_failure(x):
+        gate.started.append(('direct', x))
+        raise RuntimeError('direct boom')
+
+    buff.sink(direct_failure)
+    buff.sink(async_failure)
+    buff.sink(gate.outlet('slow'))
+
+    tasks = [asyncio.ensure_future(source.emit(value)) for value in (1, 2, 3)]
+    yield asyncio.sleep(0)
+
+    status = yield _wait_for_status(
+        buff, lambda s: s['current'] is not None
+        and s['current']['state'] == 'failed')
+    current = status['current']
+    assert current['submission_id']
+    assert current['error'] is not None
+    assert current['error_type'] in ('RuntimeError', 'ValueError')
+    if current['error_type'] == 'RuntimeError':
+        # a synchronous raise stops before later outlets are called
+        assert current['outlets'][2]['state'] == 'not_invoked'
+        assert current['outlets'][2]['invoked'] is False
+    assert status['queued'] == 1
+    assert status['waiting'] == 1
+    assert status['consumer_stalled'] is True
+    assert status['can_advance'] is False
+    # observing repeatedly does not make the stalled coroutine advance
+    for _ in range(20):
+        assert buff.status()['queued'] == 1
+        yield asyncio.sleep(0)
+    assert buff.status()['current']['submission_id'] == (
+        current['submission_id'])
+    assert buff.status()['current']['error_type'] in (
+        'RuntimeError', 'ValueError')
+
+    for task in tasks:
+        task.cancel()
+    yield gen.sleep(0.05)
+
+
+@gen_test(timeout=15)
+def test_buffer_status_async_failure_keeps_sibling_writing():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    gate = _Gate()
+
+    async def failing_starts_later(x):
+        gate.started.append(('failing', x))
+        await asyncio.sleep(0.01)
+        raise ValueError('later boom')
+
+    buff.sink(gate.outlet('slow'))
+    buff.sink(failing_starts_later)
+
+    tasks = [asyncio.ensure_future(source.emit(value)) for value in (1, 2, 3)]
+    yield asyncio.sleep(0)
+    status = yield _wait_for_status(
+        buff, lambda s: s['current'] is not None
+        and s['current']['state'] == 'failed')
+    current = status['current']
+    assert current['error_type'] == 'ValueError'
+    assert current['failed_outlets'] == (1,)
+    assert current['outlets'][0]['state'] in ('pending', 'writing')
+    assert current['outlets'][0]['invoked'] is True
+    assert current['outlets'][0]['succeeded'] is False
+    assert current['outlets'][1]['state'] == 'failed'
+    assert status['queued'] == 1
+    assert status['waiting'] == 1
+    assert status['consumer_stalled'] is True
+    assert status['can_advance'] is False
+
+    gate.open('slow', 1)
+    yield _wait_for_status(buff, lambda s: s['current'] is not None
+                           and s['current']['outlets'][0]['state']
+                           == 'succeeded')
+    current = buff.status()['current']
+    assert current['outlets'][0]['state'] == 'succeeded'
+    assert current['outlets'][1]['state'] == 'failed'
+    assert current['state'] == 'failed'
+
+    for task in tasks:
+        task.cancel()
+    yield gen.sleep(0.05)
+
+
+@gen_test(timeout=15)
+def test_buffer_status_late_completion_does_not_erase_failure():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(2)
+
+    async def slow_failure(x):
+        raise ValueError('slow boom')
+
+    async def slow_success(x):
+        await asyncio.sleep(0.02)
+
+    buff.sink(slow_success)
+    buff.sink(slow_failure)
+
+    yield source.emit(1)
+    yield _wait_for_status(buff, lambda s: s['current'] is not None
+                           and s['current']['state'] == 'failed')
+    current = buff.status()['current']
+    assert current['outlets'][1]['state'] == 'failed'
+    assert current['outlets'][0]['state'] in ('invoked', 'writing')
+    yield _wait_for_status(buff, lambda s: s['current'] is not None
+                           and s['current']['outlets'][0]['state']
+                           == 'succeeded')
+    current = buff.status()['current']
+    assert current['state'] == 'failed'
+    assert current['outlets'][0]['state'] == 'succeeded'
+    assert current['outlets'][1]['state'] == 'failed'
+    assert current['error_type'] == 'ValueError'
+    # A later success of a sibling does not clear the recorded failure.
+    yield gen.sleep(0.05)
+    current = buff.status()['current']
+    assert current is not None
+    assert current['state'] == 'failed'
+    assert current['error_message'] == 'slow boom'
+    assert current['succeeded_outlets'] == (0,)
+    assert current['failed_outlets'] == (1,)
+
+
+@gen_test(timeout=30)
+def test_buffer_status_swapped_connection_order():
+    @gen.coroutine
+    def run(order, direct):
+        source = Stream(asynchronous=True)
+        buff = source.buffer(1)
+        gate = _Gate()
+
+        def fail_direct(x):
+            gate.started.append(('fail', x))
+            raise RuntimeError('direct boom')
+
+        async def fail_later(x):
+            gate.started.append(('fail', x))
+            await asyncio.sleep(0.005)
+            raise ValueError('later boom')
+
+        async def slow(x):
+            gate.started.append(('slow', x))
+            await asyncio.sleep(0.1)
+
+        outlets = {'slow': slow,
+                   'fail': fail_direct if direct else fail_later}
+        nodes = [buff.sink(outlets[name]) for name in order]  # noqa: F841
+
+        tasks = [asyncio.ensure_future(source.emit(v)) for v in (1, 2, 3)]
+        yield asyncio.sleep(0)
+        status = yield _wait_for_status(
+            buff, lambda s: s['current'] is not None
+            and s['current']['state'] == 'failed')
+        current = status['current']
+        fail_index = order.index('fail')
+        slow_index = order.index('slow')
+        expected = 'RuntimeError' if direct else 'ValueError'
+        assert current['error_type'] == expected
+        assert current['error_outlet'] == fail_index
+        assert current['failed_outlets'] == (fail_index,)
+        assert current['outlets'][fail_index]['failed'] is True
+        if direct:
+            if slow_index < fail_index:
+                # The slow outlet was called and returned a coroutine, but the
+                # direct raise prevented it from ever starting.
+                assert current['outlets'][slow_index]['invoked'] is True
+                assert current['outlets'][slow_index]['state'] == 'not_started'
+                assert current['outlets'][slow_index]['succeeded'] is False
+                assert current['outlets'][slow_index]['writing'] is False
+            else:
+                # Called in order after the raise, so never invoked.
+                assert current['outlets'][slow_index]['invoked'] is False
+                assert current['outlets'][slow_index]['state'] == 'not_invoked'
+        else:
+            # The other outlet was called and is still unfinished.
+            assert current['outlets'][slow_index]['invoked'] is True
+            assert current['outlets'][slow_index]['state'] in (
+                'invoked', 'writing')
+            assert current['outlets'][slow_index]['in_flight'] is True
+        assert status['queued'] == 1
+        assert status['waiting'] == 1
+        assert status['consumer_stalled'] is True
+        assert status['can_advance'] is False
+        # The records behind the failed delivery keep their own identities.
+        assert status['queued_submissions'][0]['submission_id'] != (
+            current['submission_id'])
+        assert status['waiting_submissions'][0]['submission_id'] != (
+            status['queued_submissions'][0]['submission_id'])
+        for task in tasks:
+            task.cancel()
+        yield gen.sleep(0.02)
+
+    for direct in (True, False):
+        for order in (('slow', 'fail'), ('fail', 'slow')):
+            yield run(order, direct)
+
+
+def test_buffer_status_sync_snapshot_without_blocking():
+    source = Stream()
+    buff = source.buffer(1)
+    started = threading.Event()
+    release = threading.Event()
+    observed = []
+
+    def slow_write(x):
+        started.set()
+        release.wait(5)
+
+    buff.sink(slow_write)
+
+    def emit():
+        source.emit(1)
+
+    emitter = threading.Thread(target=emit)
+    emitter.start()
+    assert started.wait(5)
+    status = buff.status()
+    assert status['capacity'] == 1
+    assert status['queued'] == 0
+    assert status['current']['value'] == 1
+    assert status['current']['state'] == 'writing'
+    assert status['current']['outlets'][0]['state'] in ('invoked', 'writing')
+    assert status['current']['outlets'][0]['invoked'] is True
+    assert status['current']['outlets'][0]['pending'] or (
+        status['current']['outlets'][0]['in_flight'])
+    observed.append(status)
+    release.set()
+    emitter.join(5)
+    assert not emitter.is_alive()
+    wait_for(lambda: buff.status()['current'] is None, 1)
+    assert buff.status()['last_delivery']['state'] == 'succeeded'
+    # A snapshot taken earlier does not change afterwards
+    assert observed[0]['current']['state'] == 'writing'
+
+
+@gen_test(timeout=15)
+def test_buffer_status_does_not_advance_producers():
+    source = Stream(asynchronous=True)
+    buff = source.buffer(1)
+    gate = _Gate()
+
+    async def write(x):
+        gate.started.append(x)
+        await asyncio.sleep(0.1)
+
+    buff.sink(write)
+    tasks = [asyncio.ensure_future(source.emit(value)) for value in (1, 2, 3)]
+    yield asyncio.sleep(0)
+    before = buff.status()
+    for _ in range(10):
+        buff.status()
+        yield asyncio.sleep(0)
+    after = buff.status()
+    assert before['queued'] == after['queued'] == 1
+    assert before['waiting'] == after['waiting'] == 1
+    assert after['current']['value'] == 1
+    assert after['queued_submissions'][0]['value'] == 2
+    assert after['waiting_submissions'][0]['value'] == 3
+    yield asyncio.gather(*tasks)
 
 
 def test_buffer_after_sliding_window():
