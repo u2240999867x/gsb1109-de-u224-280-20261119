@@ -56,6 +56,7 @@ from xarray.structure.alignment import AlignmentError, align, broadcast
 from xarray.structure.chunks import unify_chunks
 from xarray.structure.combine import combine_by_coords, combine_nested
 from xarray.structure.concat import concat
+from xarray.structure.delivery import DeliveryOptions
 from xarray.structure.merge import Context, MergeError, merge
 from xarray.util.print_versions import show_versions
 
@@ -127,6 +128,7 @@ __all__ = (  # noqa: RUF022
     "DataArray",
     "DataTree",
     "Dataset",
+    "DeliveryOptions",
     "Index",
     "IndexSelResult",
     "IndexVariable",

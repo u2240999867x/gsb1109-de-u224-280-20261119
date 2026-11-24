@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         DataVars,
         JoinOptions,
     )
+    from xarray.structure.delivery import DeliveryOptions
 
     DimsLike = Union[Hashable, Sequence[Hashable]]
     ArrayLike = Any
@@ -859,6 +860,7 @@ def merge(
     join: JoinOptions | CombineKwargDefault = ...,
     fill_value: object = ...,
     combine_attrs: CombineAttrsOptions = ...,
+    delivery: DeliveryOptions | None = ...,
 ) -> DataTree: ...
 
 
@@ -869,6 +871,7 @@ def merge(
     join: JoinOptions | CombineKwargDefault = ...,
     fill_value: object = ...,
     combine_attrs: CombineAttrsOptions = ...,
+    delivery: DeliveryOptions | None = ...,
 ) -> Dataset: ...
 
 
@@ -878,6 +881,7 @@ def merge(
     join: JoinOptions | CombineKwargDefault = _JOIN_DEFAULT,
     fill_value: object = dtypes.NA,
     combine_attrs: CombineAttrsOptions = "override",
+    delivery: DeliveryOptions | None = None,
 ) -> DataTree | Dataset:
     """Merge any number of xarray objects into a single Dataset as variables.
 
@@ -935,6 +939,21 @@ def merge(
 
         If a callable, it must expect a sequence of ``attrs`` dicts and a context object
         as its only parameters.
+
+    delivery : DeliveryOptions, optional
+        Explicit delivery options. When provided, the merged instrument
+        datasets are treated as candidate readings for an ordered delivery
+        manifest and the returned :py:class:`~xarray.Dataset` is indexed by
+        the unique delivery record id. Each row exposes the delivered
+        temperature, the instrument that actually supplied it, its license,
+        processing specification version and calibration date, plus a
+        ``delivery_status`` column distinguishing quality-flagged rows from
+        rows that could not be assigned a reading. Readings are selected to
+        maximize the number of delivered, unflagged rows under per-batch
+        license lists, per-batch single processing specification and
+        per-instrument read quotas, breaking ties by manifest order and the
+        explicit instrument priority. Without this option the existing
+        alignment, conflict and attribute rules apply unchanged.
 
     Returns
     -------
@@ -1107,6 +1126,11 @@ def merge(
     objects = list(objects)
 
     if any(isinstance(obj, DataTree) for obj in objects):
+        if delivery is not None:
+            raise TypeError(
+                "delivery options are not supported when merging DataTree "
+                f"objects: {objects}"
+            )
         if not all(isinstance(obj, DataTree) for obj in objects):
             raise TypeError(
                 "merge does not support mixed type arguments when one argument "
@@ -1134,6 +1158,11 @@ def merge(
         elif isinstance(obj, Coordinates):
             obj = obj.to_dataset()
         dict_like_objects.append(obj)
+
+    if delivery is not None:
+        from xarray.structure.delivery import apply_delivery
+
+        return apply_delivery(dict_like_objects, delivery)
 
     merge_result = merge_core(
         dict_like_objects,

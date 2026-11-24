@@ -35,6 +35,7 @@ Combining Data
    broadcast
    concat
    merge
+   DeliveryOptions
    combine_by_coords
    combine_nested
 

@@ -13,6 +13,18 @@ v2026.09.1 (unreleased)
 
 New Features
 ~~~~~~~~~~~~
+- :py:func:`merge` accepts an explicit ``delivery`` option
+  (:py:class:`~xarray.DeliveryOptions`) for selecting deliverable instrument
+  readings against an ordered delivery manifest. The returned
+  :py:class:`~xarray.Dataset` is indexed by the unique delivery record id and
+  carries the delivered temperature plus the actual instrument, license,
+  processing specification, calibration date and a delivery status that
+  distinguishes quality-flagged rows from unassignable rows. Selection
+  maximizes the number of delivered, unflagged rows under per-batch license
+  lists, per-batch single processing specifications and per-instrument read
+  quotas shared across batches, breaking ties by manifest order and the
+  explicit instrument priority. Without the option, merge behavior is
+  unchanged.
 - :py:func:`apply_ufunc` accepts dimension names for ``vectorize``, e.g.
   ``vectorize=["time"]``, to only loop over these broadcast dimensions and pass
   all other broadcast dimensions to ``func`` in bulk. This is much faster than
